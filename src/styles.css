@@ -797,9 +797,47 @@ button {
 
 .browser-program {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+}
+
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  margin: -16px -16px 0;
+  padding: 5px 10px;
+  border-bottom: 1px solid #e1e7f1;
+  background: #f2f6fb;
+}
+
+.browser-tab {
+  display: block;
+  max-width: 150px;
+  min-height: 24px;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid #d8e1ef;
+  border-radius: 7px;
+  color: #50617a;
+  background: #fff;
+  text-align: left;
+  font-size: 12px;
+}
+
+.browser-tab span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-tab.active {
+  color: #174caa;
+  border-color: #8eb2f5;
+  background: #eaf2ff;
 }
 
 .browser-bar {
@@ -807,7 +845,7 @@ button {
   align-items: center;
   gap: 8px;
   height: 38px;
-  margin: -16px -16px 14px;
+  margin: 0 -16px 0;
   padding: 0 12px;
   border-bottom: 1px solid #e1e7f1;
   background: #f7f9fc;
@@ -827,12 +865,41 @@ button {
 
 .browser-status {
   min-height: 24px;
-  margin: -14px -16px 0;
+  margin: 0 -16px;
   padding: 5px 12px;
   border-bottom: 1px solid #edf1f7;
   color: #65738a;
   background: #fbfdff;
   font-size: 12px;
+}
+
+.browser-quick-links {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 6px;
+  min-height: 30px;
+  margin: 0 -16px;
+  padding: 5px 12px;
+  border-bottom: 1px solid #edf1f7;
+  background: #fbfdff;
+  color: #65738a;
+  font-size: 12px;
+}
+
+.browser-quick-links button {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  color: #2d6cdf;
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-quick-links em {
+  color: #9aa6b8;
+  font-style: normal;
 }
 
 .browser-status[data-status="error"] {
@@ -1042,6 +1109,41 @@ button {
   background: #fff;
 }
 
+.task-plan-item.editable {
+  align-items: flex-start;
+}
+
+.task-plan-edit-grid {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.task-plan-edit-grid label,
+.task-plan-description {
+  display: grid;
+  gap: 5px;
+  color: #58667d;
+  font-size: 12px;
+}
+
+.task-plan-description {
+  margin-top: 9px;
+}
+
+.task-plan-description textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.task-plan-item-actions,
+.task-plan-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 9px;
+}
+
 .task-plan-index {
   display: grid;
   width: 28px;
@@ -1173,8 +1275,83 @@ button {
 
 .message-row-actions {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   margin-top: 10px;
+}
+
+.delivery-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.delivery-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid #e3eaf4;
+  border-radius: 7px;
+  background: #f8fbff;
+  color: #4b5b73;
+  font-size: 12px;
+}
+
+.delivery-row.sent {
+  border-color: #b9dfd2;
+  background: #f1fbf7;
+}
+
+.delivery-row.failed {
+  border-color: #efb4ba;
+  background: #fff1f2;
+}
+
+.delivery-row.canceled {
+  background: #f3f5f8;
+}
+
+.delivery-row em {
+  grid-column: 1 / -1;
+  color: #a62834;
+  font-style: normal;
+}
+
+.delivery-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.terminal-output-ref-modal {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.terminal-ref-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.terminal-ref-row {
+  padding: 10px;
+  border: 1px solid #e1e8f2;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.terminal-ref-row pre {
+  max-height: 240px;
+  margin: 8px 0 0;
+  overflow: auto;
+  color: #d8deea;
+  background: #11131a;
+  border-radius: 7px;
+  padding: 10px;
+  white-space: pre-wrap;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
 }
 
 .checkbox-line {
@@ -1222,6 +1399,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .file-path-input {
@@ -1293,6 +1471,16 @@ button {
 .file-list-item.active {
   color: #174caa;
   background: #eaf2ff;
+}
+
+.file-list-item.folder {
+  color: #344a67;
+  font-weight: 700;
+}
+
+.secondary-button.danger {
+  color: #a62834;
+  border-color: #f0c4c8;
 }
 
 .file-list-empty {

@@ -17,7 +17,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.5.2";
+    return "0.5.3";
   }
 })();
 const terminalSessions = new Map();
@@ -1090,6 +1090,159 @@ function getClaudeCodeStatus() {
   };
 }
 
+function findDeepStringValue(value, keys, depth = 0) {
+  if (!value || depth > 5) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findDeepStringValue(item, keys, depth + 1);
+      if (found) {
+        return found;
+      }
+    }
+    return "";
+  }
+  if (typeof value !== "object") {
+    return "";
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (keys.has(String(key).toLowerCase()) && typeof item === "string" && item.trim().length >= 8) {
+      return item.trim();
+    }
+  }
+
+  for (const item of Object.values(value)) {
+    const found = findDeepStringValue(item, keys, depth + 1);
+    if (found) {
+      return found;
+    }
+  }
+  return "";
+}
+
+function getCodexLoginCredential() {
+  const envKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || process.env.COSS_AGENT_LOGIN_TEST_API_KEY || "";
+  if (envKey) {
+    return { token: envKey, source: "env" };
+  }
+
+  const authResult = readJsonFileSafe(getCodexAuthPath());
+  const token = findDeepStringValue(authResult.data, new Set(["access_token", "api_key", "apikey", "token"]));
+  return token ? { token, source: "config" } : { token: "", source: "" };
+}
+
+function getClaudeLoginCredential() {
+  const envKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || process.env.COSS_AGENT_LOGIN_TEST_API_KEY || "";
+  if (envKey) {
+    return { token: envKey, source: "env" };
+  }
+
+  const authResult = readJsonFileSafe(getClaudeConfigPath());
+  const token = findDeepStringValue(authResult.data, new Set(["api_key", "apikey", "anthropic_api_key", "token"]));
+  return token ? { token, source: "config" } : { token: "", source: "" };
+}
+
+function joinApiUrl(baseUrl, endpoint) {
+  const base = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const suffix = String(endpoint || "").replace(/^\/+/, "");
+  return `${base}/${suffix}`;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function testAgentRemoteLogin(_event, provider) {
+  const normalizedProvider = provider === "claude" ? "claude" : "codex";
+  const startedAt = Date.now();
+  const baseUrl = (
+    normalizedProvider === "claude"
+      ? process.env.COSS_CLAUDE_LOGIN_TEST_BASE_URL
+      : process.env.COSS_CODEX_LOGIN_TEST_BASE_URL
+  ) || process.env.COSS_AGENT_LOGIN_TEST_BASE_URL || (
+    normalizedProvider === "claude" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"
+  );
+  const credential = normalizedProvider === "claude" ? getClaudeLoginCredential() : getCodexLoginCredential();
+
+  if (!credential.token) {
+    const result = {
+      ok: false,
+      skipped: true,
+      provider: normalizedProvider,
+      baseUrl,
+      status: 0,
+      latencyMs: Date.now() - startedAt,
+      source: "",
+      checkedAt: new Date().toISOString(),
+      message: normalizedProvider === "claude"
+        ? "未找到 Anthropic/Claude API key，无法执行远程登录态校验。"
+        : "未找到 OpenAI/Codex API key 或可用访问令牌，无法执行远程登录态校验。"
+    };
+    appendLogEvent("agent.login-test.skipped", result, "warn");
+    return result;
+  }
+
+  const url = joinApiUrl(baseUrl, "models");
+  const headers = normalizedProvider === "claude"
+    ? {
+        "x-api-key": credential.token,
+        "anthropic-version": "2023-06-01"
+      }
+    : {
+        Authorization: `Bearer ${credential.token}`
+      };
+
+  try {
+    const response = await fetchWithTimeout(url, { method: "GET", headers }, 10000);
+    const text = await response.text();
+    const result = {
+      ok: response.ok,
+      skipped: false,
+      provider: normalizedProvider,
+      baseUrl,
+      endpoint: "/models",
+      status: response.status,
+      latencyMs: Date.now() - startedAt,
+      source: credential.source,
+      checkedAt: new Date().toISOString(),
+      message: response.ok ? "远程登录态校验通过。" : `远程登录态校验失败，HTTP ${response.status}。`,
+      detail: sanitizeLogText(text, 500)
+    };
+    appendLogEvent(response.ok ? "agent.login-test.succeeded" : "agent.login-test.failed", {
+      ...result,
+      detail: sanitizeLogText(text, 220)
+    }, response.ok ? "info" : "warn");
+    return result;
+  } catch (error) {
+    const result = {
+      ok: false,
+      skipped: false,
+      provider: normalizedProvider,
+      baseUrl,
+      endpoint: "/models",
+      status: 0,
+      latencyMs: Date.now() - startedAt,
+      source: credential.source,
+      checkedAt: new Date().toISOString(),
+      message: `远程登录态校验异常：${error.message}`,
+      error: serializeError(error)
+    };
+    appendLogEvent("agent.login-test.failed", result, "error");
+    return result;
+  }
+}
+
 function powerShellQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
@@ -2062,6 +2215,15 @@ function listProjectFiles(_event, projectPath) {
         const relativePath = path.relative(root, absolutePath);
         if (entry.isDirectory()) {
           if (!skippedDirectories.has(entry.name)) {
+            files.push({
+              name: entry.name,
+              path: relativePath,
+              type: "directory",
+              size: 0,
+              modifiedAt: fs.statSync(absolutePath).mtime.toISOString()
+            });
+          }
+          if (!skippedDirectories.has(entry.name)) {
             visit(absolutePath, depth + 1);
           }
           return;
@@ -2076,6 +2238,7 @@ function listProjectFiles(_event, projectPath) {
         files.push({
           name: entry.name,
           path: relativePath,
+          type: "file",
           size: stat.size,
           modifiedAt: stat.mtime.toISOString()
         });
@@ -2141,6 +2304,75 @@ function writeProjectFile(_event, request = {}) {
     };
   } catch (error) {
     appendLogEvent("file.save.failed", {
+      projectPath: request.projectPath,
+      path: request.filePath,
+      error: serializeError(error)
+    }, "error");
+    return { ok: false, error: error.message };
+  }
+}
+
+function createProjectFolder(_event, request = {}) {
+  try {
+    const { root, target, relativePath } = getProjectFileTarget(request.projectPath, request.folderPath);
+    fs.mkdirSync(target, { recursive: true });
+    const stat = fs.statSync(target);
+    if (!stat.isDirectory()) {
+      throw new Error("目标路径不是文件夹。");
+    }
+    appendLogEvent("file.folder.created", { projectPath: root, path: relativePath });
+    return { ok: true, path: relativePath, absolutePath: target };
+  } catch (error) {
+    appendLogEvent("file.folder.create.failed", {
+      projectPath: request.projectPath,
+      path: request.folderPath,
+      error: serializeError(error)
+    }, "error");
+    return { ok: false, error: error.message };
+  }
+}
+
+function renameProjectFile(_event, request = {}) {
+  try {
+    const from = getProjectFileTarget(request.projectPath, request.fromPath);
+    const to = getProjectFileTarget(request.projectPath, request.toPath);
+    if (!fs.existsSync(from.target)) {
+      throw new Error("源路径不存在。");
+    }
+    if (fs.existsSync(to.target)) {
+      throw new Error("目标路径已存在。");
+    }
+    fs.mkdirSync(path.dirname(to.target), { recursive: true });
+    fs.renameSync(from.target, to.target);
+    appendLogEvent("file.renamed", { projectPath: from.root, from: from.relativePath, to: to.relativePath });
+    return { ok: true, fromPath: from.relativePath, path: to.relativePath, absolutePath: to.target };
+  } catch (error) {
+    appendLogEvent("file.rename.failed", {
+      projectPath: request.projectPath,
+      from: request.fromPath,
+      to: request.toPath,
+      error: serializeError(error)
+    }, "error");
+    return { ok: false, error: error.message };
+  }
+}
+
+function deleteProjectFile(_event, request = {}) {
+  try {
+    const { root, target, relativePath } = getProjectFileTarget(request.projectPath, request.filePath);
+    if (!fs.existsSync(target)) {
+      throw new Error("目标路径不存在。");
+    }
+    const stat = fs.statSync(target);
+    if (stat.isDirectory()) {
+      fs.rmSync(target, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(target);
+    }
+    appendLogEvent("file.deleted", { projectPath: root, path: relativePath, type: stat.isDirectory() ? "directory" : "file" });
+    return { ok: true, path: relativePath };
+  } catch (error) {
+    appendLogEvent("file.delete.failed", {
       projectPath: request.projectPath,
       path: request.filePath,
       error: serializeError(error)
@@ -2362,6 +2594,9 @@ app.whenReady().then(() => {
   ipcMain.handle("files:list", listProjectFiles);
   ipcMain.handle("files:read", readProjectFile);
   ipcMain.handle("files:write", writeProjectFile);
+  ipcMain.handle("files:create-folder", createProjectFolder);
+  ipcMain.handle("files:rename", renameProjectFile);
+  ipcMain.handle("files:delete", deleteProjectFile);
   ipcMain.handle("window:new", () => {
     appendLogEvent("window.new");
     createMainWindow();
@@ -2399,6 +2634,7 @@ app.whenReady().then(() => {
     }, status.runnable ? "info" : "warn");
     return status;
   });
+  ipcMain.handle("agent:login-test", testAgentRemoteLogin);
   ipcMain.handle("terminal:create", createTerminalSession);
   ipcMain.handle("terminal:input", (_event, id, data) => {
     const session = terminalSessions.get(id);
