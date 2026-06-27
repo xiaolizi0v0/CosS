@@ -164,13 +164,14 @@ const defaultState = {
       "子任务：{{subtaskTitle}}\n" +
       "子任务说明：{{subtaskDescription}}\n\n" +
       "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。\n" +
-      "你可以和其他角色协作；完成或阻塞任务时，请在终端输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。",
+      "你可以和其他角色协作；完成或阻塞任务时，请在终端输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。\n" +
+      "需要把协作消息写回 CosS 时，可输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"给其他角色的协作消息\",\"toRoleIds\":[\"product-manager\"]}。",
     modelProvider: "system",
     modelConfigs: createDefaultModelConfigs()
   }
 };
 
-const APP_VERSION = "v0.5.0";
+const APP_VERSION = "v0.5.1";
 
 let state = structuredClone(defaultState);
 let bootingProjectId = null;
@@ -199,6 +200,7 @@ let openAppMenuId = null;
 let isWindowMaximized = false;
 let pendingTaskPlanDraft = null;
 let messageComposerDefaults = {};
+let messageTimelineFilters = { taskId: "", query: "" };
 let taskViewOpen = false;
 
 const SUBTASK_STATUS_DEFS = {
@@ -513,6 +515,27 @@ function ensureMessageShape(message) {
   };
 }
 
+function ensureAgentEventShape(event) {
+  const roleId = getRole(event.roleId || event.fromRoleId).id;
+  const fromRoleId = getRole(event.fromRoleId || roleId).id;
+  return {
+    id: event.id || uid("agent-event"),
+    type: String(event.type || "status").trim().slice(0, 40) || "status",
+    structured: Boolean(event.structured),
+    windowId: event.windowId || "",
+    roleId,
+    fromRoleId,
+    toRoleIds: uniqueRoleIds(event.toRoleIds || []).filter((item) => item !== fromRoleId),
+    provider: String(event.provider || "").trim(),
+    sessionId: String(event.sessionId || "").trim(),
+    taskId: event.taskId || "",
+    subtaskId: event.subtaskId || "",
+    status: normalizeAgentEventStatus(event.status) || String(event.status || "").trim(),
+    message: String(event.message || "").trim().slice(0, 500),
+    receivedAt: event.receivedAt || new Date().toISOString()
+  };
+}
+
 function ensureProjectShape(project) {
   project.windows ||= [];
   project.tasks ||= [];
@@ -524,6 +547,10 @@ function ensureProjectShape(project) {
   project.messages = project.messages
     .map(ensureMessageShape)
     .filter((message) => message.content && message.toRoleIds.length > 0);
+  project.agentEvents = project.agentEvents
+    .map(ensureAgentEventShape)
+    .filter((event) => event.message || event.status || event.sessionId)
+    .slice(-240);
   project.windows.forEach((win) => {
     win.desktopId ||= getActiveDesktopId(project);
     win.minimized = Boolean(win.minimized);
@@ -936,6 +963,18 @@ function createMessage(fromRoleId, toRoleIds, content, taskId = null, options = 
     readBy: options.readBy,
     createdAt: options.createdAt || new Date().toISOString()
   });
+}
+
+function appendProjectMessage(project, message) {
+  if (!project || !message?.content) {
+    return null;
+  }
+  project.messages ||= [];
+  project.messages.push(ensureMessageShape(message));
+  if (project.messages.length > 500) {
+    project.messages.splice(0, project.messages.length - 500);
+  }
+  return project.messages[project.messages.length - 1];
 }
 
 function setActiveProject(projectId) {
@@ -1668,20 +1707,44 @@ function applyAgentEventToState(event) {
 
   project.agentEvents ||= [];
   const status = normalizeAgentEventStatus(event.status);
-  const storedEvent = {
+  const fromRoleId = getRole(event.fromRoleId || event.roleId || win.roleId).id;
+  const storedEvent = ensureAgentEventShape({
     id: uid("agent-event"),
+    type: event.type || "status",
+    structured: Boolean(event.structured),
     windowId: win.id,
     roleId: event.roleId || win.roleId,
+    fromRoleId,
+    toRoleIds: event.toRoleIds || [],
     provider: event.provider || win.agentProvider || "",
     sessionId: event.sessionId || win.agentSession?.sessionId || "",
     taskId: event.taskId || win.agentSession?.taskId || "",
     subtaskId: event.subtaskId || win.agentSession?.subtaskId || "",
     status: status || event.status || "",
-    message: String(event.message || "").slice(0, 240),
+    message: String(event.message || "").slice(0, 500),
     receivedAt: event.receivedAt || new Date().toISOString()
-  };
+  });
   project.agentEvents.push(storedEvent);
   project.agentEvents = project.agentEvents.slice(-120);
+
+  let createdMessage = null;
+  if (storedEvent.structured && storedEvent.message) {
+    let toRoleIds = uniqueRoleIds(storedEvent.toRoleIds).filter((roleId) => roleId !== fromRoleId);
+    if (toRoleIds.length === 0) {
+      toRoleIds = uniqueRoleIds(["product-manager", "tech-lead"]).filter((roleId) => roleId !== fromRoleId);
+    }
+    if (toRoleIds.length > 0) {
+      createdMessage = appendProjectMessage(
+        project,
+        createMessage(fromRoleId, toRoleIds, storedEvent.message, storedEvent.taskId || null, {
+          source: "agent-event",
+          channelType: storedEvent.taskId ? "task" : "direct",
+          createdAt: storedEvent.receivedAt,
+          readBy: [fromRoleId]
+        })
+      );
+    }
+  }
 
   if (status) {
     win.status = SUBTASK_STATUS_DEFS[status]?.windowStatus || (status === "failed" ? "blocked" : "working");
@@ -1709,8 +1772,21 @@ function applyAgentEventToState(event) {
     sessionId: storedEvent.sessionId,
     taskId: task?.id || "",
     subtaskId: subtask?.id || "",
-    status: storedEvent.status
+    status: storedEvent.status,
+    type: storedEvent.type,
+    structured: storedEvent.structured,
+    messageId: createdMessage?.id || ""
   });
+  if (createdMessage) {
+    recordAppLog("role.message.agent-created", {
+      projectId: project.id,
+      taskId: createdMessage.taskId || "",
+      messageId: createdMessage.id,
+      fromRoleId: createdMessage.fromRoleId,
+      toRoleIds: createdMessage.toRoleIds,
+      source: createdMessage.source
+    });
+  }
   saveState();
   render();
   return true;
@@ -1860,19 +1936,90 @@ function getDefaultMessageRoles(defaults = {}) {
   return { fromRoleId, toRoleId };
 }
 
+function getProjectTimelineEvents(project) {
+  ensureProjectShape(project);
+  const messageItems = (project.messages || []).map((message) => ({
+    kind: "message",
+    id: message.id,
+    taskId: message.taskId || "",
+    time: message.createdAt,
+    message
+  }));
+  const agentItems = (project.agentEvents || []).map((event) => ({
+    kind: "agent-event",
+    id: event.id,
+    taskId: event.taskId || "",
+    time: event.receivedAt,
+    event
+  }));
+  const query = String(messageTimelineFilters.query || "").trim().toLowerCase();
+  const taskId = messageTimelineFilters.taskId || "";
+
+  return [...messageItems, ...agentItems]
+    .filter((item) => !taskId || item.taskId === taskId)
+    .filter((item) => {
+      if (!query) {
+        return true;
+      }
+      if (item.kind === "message") {
+        const message = item.message;
+        return [
+          getRole(message.fromRoleId).name,
+          ...message.toRoleIds.map((roleId) => getRole(roleId).name),
+          message.content,
+          message.source,
+          getMessageTaskLabel(message.taskId)
+        ].join(" ").toLowerCase().includes(query);
+      }
+      const event = item.event;
+      return [
+        getRole(event.roleId).name,
+        event.provider,
+        event.status,
+        event.type,
+        event.message,
+        getMessageTaskLabel(event.taskId)
+      ].join(" ").toLowerCase().includes(query);
+    })
+    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+    .slice(0, 120);
+}
+
 function renderMessageRows(project) {
-  const messages = ensureProjectShape(project).messages.slice(-80).reverse();
-  if (messages.length === 0) {
-    return `<div class="message-empty">暂无角色消息。发送一条私聊，或创建任务后查看任务群聊。</div>`;
+  const timeline = getProjectTimelineEvents(project);
+  if (timeline.length === 0) {
+    return `<div class="message-empty">暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。</div>`;
   }
 
-  return messages
-    .map((message) => {
+  return timeline
+    .map((item) => {
+      if (item.kind === "agent-event") {
+        const event = item.event;
+        const toNames = event.toRoleIds.length > 0
+          ? ` → ${event.toRoleIds.map((roleId) => getRole(roleId).name).join("、")}`
+          : "";
+        return `
+          <div class="message-row timeline-row agent-timeline-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}" data-agent-event-id="${escapeHtml(event.id)}">
+            <div class="message-row-head">
+              <strong>Agent 事件 · ${escapeHtml(getRole(event.roleId).name)}${escapeHtml(toNames)}</strong>
+              <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
+            </div>
+            <div class="message-meta">
+              <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : "会话事件")}</span>
+              <span>${escapeHtml(event.status || "event")}</span>
+              <span>${escapeHtml(event.structured ? "structured-event" : event.type || "status")}</span>
+            </div>
+            <p>${escapeHtml(event.message || event.sessionId || "Agent 输出了状态事件。")}</p>
+          </div>
+        `;
+      }
+
+      const message = item.message;
       const fromRole = getRole(message.fromRoleId);
       const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
       const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
       return `
-        <div class="message-row" data-message-id="${escapeHtml(message.id)}">
+        <div class="message-row timeline-row" data-message-id="${escapeHtml(message.id)}">
           <div class="message-row-head">
             <strong>${escapeHtml(fromRole.name)} → ${escapeHtml(toNames)}</strong>
             <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
@@ -1886,6 +2033,14 @@ function renderMessageRows(project) {
       `;
     })
     .join("");
+}
+
+function refreshMessageTimelineList() {
+  const list = document.querySelector("[data-message-timeline-list]");
+  const project = getProject();
+  if (list && project) {
+    list.innerHTML = renderMessageRows(project);
+  }
 }
 
 function showMessageCenterModal(defaults = {}) {
@@ -1905,17 +2060,24 @@ function showMessageCenterModal(defaults = {}) {
   }
 
   messageComposerDefaults = { ...messageComposerDefaults, ...defaults };
+  if (Object.prototype.hasOwnProperty.call(defaults, "filterTaskId")) {
+    messageTimelineFilters = { ...messageTimelineFilters, taskId: defaults.filterTaskId || "" };
+  }
   ensureProjectShape(project);
   const { fromRoleId, toRoleId } = getDefaultMessageRoles(messageComposerDefaults);
   const selectedTaskId = messageComposerDefaults.taskId || "";
+  const selectedFilterTaskId = messageTimelineFilters.taskId || "";
   const taskOptions = project.tasks
     .map((task) => `<option value="${escapeHtml(task.id)}" ${task.id === selectedTaskId ? "selected" : ""}>${escapeHtml(task.title)}</option>`)
+    .join("");
+  const filterTaskOptions = project.tasks
+    .map((task) => `<option value="${escapeHtml(task.id)}" ${task.id === selectedFilterTaskId ? "selected" : ""}>${escapeHtml(task.title)}</option>`)
     .join("");
 
   renderModal(`
     <div class="modal message-center-modal">
-      <h2>v0.4 角色消息中心</h2>
-      <p>消息会保存在当前项目中，用于驱动协作角标、任务群聊和角色私聊。</p>
+      <h2>v0.5.1 协作时间线</h2>
+      <p>消息和 Agent 结构化事件会保存在当前项目中，用于驱动协作角标、任务群聊和角色私聊。</p>
       <div class="message-composer">
         <div class="field">
           <label for="messageFromRole">发送角色</label>
@@ -1942,7 +2104,20 @@ function showMessageCenterModal(defaults = {}) {
         <button class="secondary-button" data-action="close-modal">关闭</button>
         <button class="primary-button" data-action="send-role-message">发送消息</button>
       </div>
-      <div class="message-list">
+      <div class="message-filterbar">
+        <label>
+          <span>搜索</span>
+          <input id="messageTimelineSearch" value="${escapeHtml(messageTimelineFilters.query || "")}" placeholder="搜索角色、消息、状态">
+        </label>
+        <label>
+          <span>任务筛选</span>
+          <select id="messageTimelineTaskFilter">
+            <option value="">全部</option>
+            ${filterTaskOptions}
+          </select>
+        </label>
+      </div>
+      <div class="message-list" data-message-timeline-list>
         ${renderMessageRows(project)}
       </div>
     </div>
@@ -1978,10 +2153,7 @@ function sendRoleMessageFromModal() {
     source: "manual",
     channelType: taskId ? "task" : "direct"
   });
-  project.messages.push(message);
-  if (project.messages.length > 500) {
-    project.messages.splice(0, project.messages.length - 500);
-  }
+  appendProjectMessage(project, message);
 
   messageComposerDefaults = { fromRoleId, toRoleId, taskId: taskId || "" };
   saveState();
@@ -1997,6 +2169,113 @@ function sendRoleMessageFromModal() {
   render();
   showMessageCenterModal(messageComposerDefaults);
   setMessageStatus("消息已发送。", "ready");
+}
+
+function getTaskAndSubtask(taskId, subtaskId) {
+  const project = getProject();
+  const task = project?.tasks.find((item) => item.id === taskId);
+  const subtask = task?.subtasks.find((item) => item.id === subtaskId);
+  return { project, task, subtask };
+}
+
+function buildSubtaskInstructionContent(task, subtask) {
+  return [
+    `任务：${task.title}`,
+    `子任务：${subtask.title}`,
+    `目标角色：${getRole(subtask.roleId).name}`,
+    `执行说明：${subtask.description}`,
+    "",
+    "请基于以上上下文开始处理，并在遇到阻塞时同步给相关角色。"
+  ].join("\n");
+}
+
+function showSubtaskInstructionModal(taskId, subtaskId) {
+  closeMenus();
+  const { project, task, subtask } = getTaskAndSubtask(taskId, subtaskId);
+  if (!project || !task || !subtask) {
+    return;
+  }
+
+  const toRoleId = getRole(subtask.roleId).id;
+  const defaultFromRoleId = toRoleId === "product-manager" ? "tech-lead" : "product-manager";
+  renderModal(`
+    <div class="modal subtask-instruction-modal">
+      <h2>发送给角色</h2>
+      <p>把当前子任务上下文写入协作消息，角色终端可据此继续处理。</p>
+      <div class="message-composer">
+        <div class="field">
+          <label for="instructionFromRole">发送角色</label>
+          <select id="instructionFromRole">${renderRoleSelectOptions(defaultFromRoleId, toRoleId)}</select>
+        </div>
+        <div class="field">
+          <label for="instructionToRole">接收角色</label>
+          <select id="instructionToRole">${renderRoleSelectOptions(toRoleId, defaultFromRoleId)}</select>
+        </div>
+        <div class="field">
+          <label>任务频道</label>
+          <input value="${escapeHtml(task.title)}" disabled>
+        </div>
+        <div class="field message-content-field">
+          <label for="instructionContent">指令内容</label>
+          <textarea id="instructionContent">${escapeHtml(buildSubtaskInstructionContent(task, subtask))}</textarea>
+          <div id="instructionStatus" class="form-status muted">发送后会写入当前任务的协作时间线。</div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="primary-button" data-action="send-subtask-instruction" data-task-id="${escapeHtml(task.id)}" data-subtask-id="${escapeHtml(subtask.id)}">发送指令</button>
+      </div>
+    </div>
+  `);
+}
+
+function setInstructionStatus(message, type = "error") {
+  const status = document.getElementById("instructionStatus");
+  if (!status) {
+    return;
+  }
+  status.className = `form-status ${type}`;
+  status.textContent = message;
+}
+
+function sendSubtaskInstructionFromModal(taskId, subtaskId) {
+  const { project, task, subtask } = getTaskAndSubtask(taskId, subtaskId);
+  const fromRoleId = document.getElementById("instructionFromRole")?.value;
+  const toRoleId = document.getElementById("instructionToRole")?.value;
+  const content = document.getElementById("instructionContent")?.value.trim();
+
+  if (!project || !task || !subtask || !fromRoleId || !toRoleId || !content) {
+    setInstructionStatus("请完整填写发送角色、接收角色和指令内容。");
+    return;
+  }
+  if (fromRoleId === toRoleId) {
+    setInstructionStatus("发送角色和接收角色不能相同。");
+    return;
+  }
+
+  const message = appendProjectMessage(
+    project,
+    createMessage(fromRoleId, [toRoleId], content, task.id, {
+      source: "task-instruction",
+      channelType: "task"
+    })
+  );
+  task.updatedAt = message.createdAt;
+  messageComposerDefaults = { fromRoleId, toRoleId, taskId: task.id };
+  messageTimelineFilters = { taskId: task.id, query: "" };
+  saveState();
+  recordAppLog("task.instruction.sent", {
+    projectId: project.id,
+    taskId: task.id,
+    subtaskId: subtask.id,
+    messageId: message.id,
+    fromRoleId,
+    toRoleIds: message.toRoleIds,
+    source: message.source
+  });
+  render();
+  showMessageCenterModal({ ...messageComposerDefaults, filterTaskId: task.id });
+  setMessageStatus("任务指令已发送。", "ready");
 }
 
 async function showAboutModal() {
@@ -3309,13 +3588,14 @@ function renderSubtaskActions(taskId, subtask) {
   const button = (label, nextStatus, kind = "secondary") => (
     `<button class="${kind}-button compact" data-action="set-subtask-status" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(label)}</button>`
   );
+  const instructionButton = `<button class="secondary-button compact" data-action="show-subtask-instruction" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">发送给角色</button>`;
   const actions = {
     pending: [button("开始执行", "running", "primary")],
     running: [button("标记完成", "done", "primary"), button("标记阻塞", "blocked")],
     blocked: [button("继续执行", "running", "primary"), button("标记完成", "done")],
     done: [button("重新打开", "pending")]
   }[status] || [];
-  return `<div class="task-actions">${actions.join("")}</div>`;
+  return `<div class="task-actions">${[...actions, instructionButton].join("")}</div>`;
 }
 
 function renderCollabPopover(win, collaborators, status) {
@@ -4451,6 +4731,16 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "show-subtask-instruction") {
+    showSubtaskInstructionModal(target.dataset.taskId, target.dataset.subtaskId);
+    return;
+  }
+
+  if (action === "send-subtask-instruction") {
+    sendSubtaskInstructionFromModal(target.dataset.taskId, target.dataset.subtaskId);
+    return;
+  }
+
   if (action === "confirm-task-plan") {
     confirmTaskPlan();
     return;
@@ -4521,6 +4811,16 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  const inputTarget = event.target instanceof Element ? event.target : null;
+  if (inputTarget?.id === "messageTimelineSearch") {
+    messageTimelineFilters = {
+      ...messageTimelineFilters,
+      query: inputTarget.value
+    };
+    refreshMessageTimelineList();
+    return;
+  }
+
   const agentPromptTemplate = event.target instanceof Element ? event.target.closest("[data-agent-prompt-template]") : null;
   if (agentPromptTemplate) {
     state.settings.agentPromptTemplate = agentPromptTemplate.value;
@@ -4569,6 +4869,14 @@ document.addEventListener("change", (event) => {
       toRoleId: ""
     };
     showMessageCenterModal(messageComposerDefaults);
+  }
+
+  if (target.id === "messageTimelineTaskFilter") {
+    messageTimelineFilters = {
+      ...messageTimelineFilters,
+      taskId: target.value
+    };
+    refreshMessageTimelineList();
   }
 });
 

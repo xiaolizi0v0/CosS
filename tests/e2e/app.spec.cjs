@@ -76,7 +76,7 @@ test("boots into the workspace shell", async () => {
 
   try {
     await expect(page.locator(".brand")).toContainText("CosS");
-    await expect(page.locator(".brand-version")).toHaveText("v0.5.0");
+    await expect(page.locator(".brand-version")).toHaveText("v0.5.1");
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".workspace-title")).toHaveText("E2E Project");
   } finally {
@@ -103,7 +103,7 @@ test("creates a project from the project modal", async () => {
   }
 });
 
-test("renders v0.5.0 custom title bar menus and exposes log directory info", async () => {
+test("renders v0.5.1 custom title bar menus and exposes log directory info", async () => {
   const { app, page, userDataDir } = await launchApp();
 
   try {
@@ -132,7 +132,7 @@ test("renders v0.5.0 custom title bar menus and exposes log directory info", asy
     await expect(page.locator(".app-menu-dropdown")).toContainText("关于 CosS");
 
     const info = await page.evaluate(() => window.cossAPI.getAppInfo());
-    expect(info.version).toBe("0.5.0");
+    expect(info.version).toBe("0.5.1");
     expect(info.logDirectory).toBe(path.join(userDataDir, "logs"));
   } finally {
     await app.close();
@@ -544,7 +544,7 @@ test("sends a v0.4 role message from the message center", async () => {
   try {
     await page.locator('.workspace-actions [data-action="show-message-center"]').click();
     await expect(page.locator(".message-center-modal")).toBeVisible();
-    await expect(page.locator(".message-center-modal")).toContainText("v0.4 角色消息中心");
+    await expect(page.locator(".message-center-modal")).toContainText("v0.5.1 协作时间线");
 
     await page.locator("#messageFromRole").selectOption("product-manager");
     await page.locator("#messageToRole").selectOption("frontend-engineer");
@@ -612,6 +612,70 @@ test("stores confirmed task plan collaboration messages in the v0.4 message bus"
 
     const logText = await waitForLogEvent(userDataDir, "role.messages.created");
     expect(logText).toContain('"source":"task-plan"');
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.1 sends subtask instructions into the collaboration timeline", async () => {
+  const mockPlan = {
+    summary: "登录任务需要产品、前端、后端和测试协同。",
+    subtasks: [
+      {
+        roleId: "frontend-engineer",
+        title: "实现登录页",
+        description: "实现登录表单、字段校验和错误提示。"
+      },
+      {
+        roleId: "backend-engineer",
+        title: "接入登录接口",
+        description: "确认接口字段、状态码和会话返回结构。"
+      },
+      {
+        roleId: "qa-engineer",
+        title: "验证登录流程",
+        description: "覆盖成功、失败、空表单和网络异常。"
+      }
+    ],
+    messages: [
+      {
+        fromRoleId: "product-manager",
+        toRoleIds: ["frontend-engineer"],
+        content: "请先围绕登录页字段同步验收标准。"
+      }
+    ]
+  };
+  const { app, page, userDataDir } = await launchApp(
+    {},
+    {
+      COSS_LLM_FORCE_ERROR: "0",
+      COSS_LLM_MOCK_RESPONSE: JSON.stringify(mockPlan)
+    }
+  );
+
+  try {
+    await page.locator('.workspace-actions [data-action="show-create-task"]').click();
+    await page.locator("#taskGoal").fill("实现用户登录页面，并接入后端登录接口。");
+    await page.locator('[data-action="create-task"]').click();
+    await expect(page.locator(".task-plan-modal")).toBeVisible();
+    await page.locator('[data-action="confirm-task-plan"]').click();
+
+    await expect(page.locator(".task-card")).toHaveCount(3);
+    await page.locator('[data-action="show-subtask-instruction"]').first().evaluate((node) => node.click());
+    await expect(page.locator(".subtask-instruction-modal")).toBeVisible();
+    await page.locator("#instructionContent").fill("请前端工程师实现登录页，并把接口阻塞点同步到任务频道。");
+    await page.locator('[data-action="send-subtask-instruction"]').click();
+
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    await expect(page.locator(".message-row").first()).toContainText("请前端工程师实现登录页");
+    await expect(page.locator(".message-row").first()).toContainText("task-instruction");
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const messages = savedState.projects[0].messages || [];
+    expect(messages.some((message) => message.source === "task-instruction" && message.content.includes("接口阻塞点"))).toBe(true);
+
+    const logText = await waitForLogEvent(userDataDir, "task.instruction.sent");
+    expect(logText).toContain("task-instruction");
   } finally {
     await app.close();
   }
@@ -1159,7 +1223,7 @@ test("v0.4.2 task view layout presets arrange current desktop windows", async ()
   }
 });
 
-test("v0.5.0 stores Agent prompt templates and shows Codex auth state on demand", async () => {
+test("v0.5.1 stores Agent prompt templates and shows Codex auth state on demand", async () => {
   const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-codex-auth-"));
   const codexAuthPath = path.join(authDir, "auth.json");
   fs.writeFileSync(
@@ -1197,7 +1261,7 @@ test("v0.5.0 stores Agent prompt templates and shows Codex auth state on demand"
   }
 });
 
-test("v0.5.0 syncs Codex Agent terminal status markers back to task state", async () => {
+test("v0.5.1 syncs Codex Agent terminal events back to task state and timeline", async () => {
   const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codex-"));
   const fakeCodexPath = path.join(fakeCliDir, "codex.cmd");
   fs.writeFileSync(
@@ -1205,10 +1269,11 @@ test("v0.5.0 syncs Codex Agent terminal status markers back to task state", asyn
     [
       "@echo off",
       "if \"%~1\"==\"--version\" (",
-      "  echo codex-cli 0.5.0-e2e",
+      "  echo codex-cli 0.5.1-e2e",
       "  exit /b 0",
       ")",
       "echo COSS_AGENT_STATUS:done",
+      "echo COSS_AGENT_EVENT:{\"status\":\"done\",\"message\":\"Frontend done from structured event\",\"toRoleIds\":[\"product-manager\",\"qa-engineer\"]}",
       "echo fake codex completed",
       ""
     ].join("\r\n"),
@@ -1268,13 +1333,15 @@ test("v0.5.0 syncs Codex Agent terminal status markers back to task state", asyn
     await page.waitForFunction(async () => {
       const state = await window.cossAPI.loadState();
       const project = state.projects[0];
-      return Boolean(project.agentEvents?.some((event) => event.status === "done"));
+      return Boolean(project.agentEvents?.some((event) => event.structured && event.message?.includes("structured event")));
     }, null, { timeout: 12000 });
 
     const savedState = await page.evaluate(() => window.cossAPI.loadState());
     const project = savedState.projects[0];
     const task = project.tasks[0];
     expect(project.agentEvents.some((event) => event.provider === "codex" && event.status === "done")).toBe(true);
+    expect(project.agentEvents.some((event) => event.structured && event.message.includes("Frontend done from structured event"))).toBe(true);
+    expect(project.messages.some((message) => message.source === "agent-event" && message.content.includes("structured event"))).toBe(true);
     expect(task.subtasks.some((subtask) => subtask.roleId === "frontend-engineer" && subtask.status === "done")).toBe(true);
     expect(project.windows.some((win) => win.type === "terminal" && win.terminalMode === "agent" && win.agentSession?.taskId === task.id)).toBe(true);
 
@@ -1282,6 +1349,12 @@ test("v0.5.0 syncs Codex Agent terminal status markers back to task state", asyn
     expect(eventPanelText).toContain("Agent 会话事件");
     const logText = await waitForLogEvent(userDataDir, "agent.output.event");
     expect(logText).toContain('"provider":"codex"');
+    const messageLogText = await waitForLogEvent(userDataDir, "role.message.agent-created");
+    expect(messageLogText).toContain("agent-event");
+
+    await page.locator('.workspace-actions [data-action="show-message-center"]').click();
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    await expect(page.locator(".agent-timeline-row", { hasText: "Frontend done from structured event" }).first()).toBeVisible();
   } finally {
     try {
       await page.evaluate(async () => {
