@@ -1096,6 +1096,36 @@ button {
   margin-top: 14px;
 }
 
+.message-filterbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.message-filterbar label {
+  display: grid;
+  gap: 5px;
+  color: #58667d;
+  font-size: 12px;
+}
+
+.agent-timeline-row {
+  border-color: #c9d8ef;
+  background: #f8fbff;
+}
+
+.agent-timeline-row.done {
+  border-color: #b9dfd2;
+  background: #f1fbf7;
+}
+
+.agent-timeline-row.blocked,
+.agent-timeline-row.failed {
+  border-color: #efb4ba;
+  background: #fff1f2;
+}
+
 .message-row,
 .message-empty {
   padding: 11px;
@@ -1143,6 +1173,10 @@ button {
 
 @media (max-width: 680px) {
   .message-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .message-filterbar {
     grid-template-columns: 1fr;
   }
 }

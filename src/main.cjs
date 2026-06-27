@@ -17,7 +17,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.5.0";
+    return "0.5.1";
   }
 })();
 const terminalSessions = new Map();
@@ -1159,6 +1159,69 @@ function normalizeAgentStatus(value) {
   return "";
 }
 
+function normalizeAgentEventRoleIds(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return Array.from(new Set(values
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, 8)));
+}
+
+function parseStructuredAgentEvents(text) {
+  const events = [];
+  const prefixRegex = /COSS_AGENT_EVENT\s*:/gi;
+  let match = prefixRegex.exec(text);
+  while (match) {
+    const afterPrefix = text.slice(match.index + match[0].length);
+    const objectStart = afterPrefix.indexOf("{");
+    if (objectStart === -1) {
+      match = prefixRegex.exec(text);
+      continue;
+    }
+
+    const candidateSource = afterPrefix.slice(objectStart);
+    const jsonText = findBalancedJsonObject(candidateSource);
+    if (!jsonText) {
+      match = prefixRegex.exec(text);
+      continue;
+    }
+
+    try {
+      const payload = JSON.parse(jsonText);
+      const status = normalizeAgentStatus(payload.status || payload.state || payload.result);
+      const message = sanitizeLogText(payload.message || payload.summary || payload.detail || "", 500);
+      if (status || message) {
+        events.push({
+          type: String(payload.type || "structured").trim().slice(0, 40) || "structured",
+          structured: true,
+          status,
+          message: message || `COSS_AGENT_EVENT:${jsonText}`,
+          roleId: String(payload.roleId || payload.fromRoleId || "").trim(),
+          fromRoleId: String(payload.fromRoleId || payload.roleId || "").trim(),
+          toRoleIds: normalizeAgentEventRoleIds(payload.toRoleIds || payload.toRoleId),
+          taskId: String(payload.taskId || "").trim(),
+          subtaskId: String(payload.subtaskId || "").trim(),
+          payload: {
+            title: sanitizeLogText(payload.title || "", 160),
+            reason: sanitizeLogText(payload.reason || "", 240)
+          }
+        });
+      }
+    } catch (error) {
+      events.push({
+        type: "structured-parse-error",
+        structured: true,
+        status: "failed",
+        message: `COSS_AGENT_EVENT JSON 解析失败：${error.message}`
+      });
+    }
+
+    prefixRegex.lastIndex = match.index + match[0].length + objectStart + jsonText.length;
+    match = prefixRegex.exec(text);
+  }
+  return events;
+}
+
 function parseAgentOutputEvents(data, launch = {}) {
   const activeMode = launch.activeMode || "";
   if (!["claude", "codex"].includes(activeMode)) {
@@ -1166,7 +1229,7 @@ function parseAgentOutputEvents(data, launch = {}) {
   }
 
   const text = stripAnsi(data);
-  const events = [];
+  const events = parseStructuredAgentEvents(text);
   const statusRegex = /COSS_AGENT_STATUS\s*:\s*([a-zA-Z_-]+)/gi;
   let match = statusRegex.exec(text);
   while (match) {
@@ -1187,18 +1250,22 @@ function parseAgentOutputEvents(data, launch = {}) {
     events.push({ type: "status", status: markerStatus[1], message: markerStatus[0].source });
   }
 
+  const launchTaskId = launch.taskContext?.taskId || launch.agentSession?.taskId || "";
+  const launchSubtaskId = launch.taskContext?.subtaskId || launch.agentSession?.subtaskId || "";
   return events.map((event) => ({
     ...event,
     provider: activeMode === "codex" ? "codex" : "claude",
     activeMode,
-    roleId: launch.roleId || "",
+    roleId: event.roleId || event.fromRoleId || launch.roleId || "",
+    fromRoleId: event.fromRoleId || event.roleId || launch.roleId || "",
+    toRoleIds: event.toRoleIds || [],
     roleName: launch.roleName || "",
     projectId: launch.projectId || launch.agentSession?.projectId || "",
     projectName: launch.projectName || launch.agentSession?.projectName || "",
     sessionId: launch.agentSession?.sessionId || "",
     sessionName: launch.agentSession?.sessionName || "",
-    taskId: launch.taskContext?.taskId || launch.agentSession?.taskId || "",
-    subtaskId: launch.taskContext?.subtaskId || launch.agentSession?.subtaskId || "",
+    taskId: event.taskId || launchTaskId,
+    subtaskId: event.subtaskId || launchSubtaskId,
     receivedAt: new Date().toISOString()
   }));
 }
@@ -1209,7 +1276,8 @@ function shouldEmitAgentOutputEvent(id, event) {
     event.taskId || "",
     event.subtaskId || "",
     event.status || "",
-    event.type || ""
+    event.type || "",
+    event.message || ""
   ].join("|");
   let keys = agentOutputEventKeys.get(id);
   if (!keys) {
@@ -1237,7 +1305,10 @@ function emitAgentOutputEvents(webContents, id, data, launch = {}) {
       sessionId: payload.sessionId,
       taskId: payload.taskId,
       subtaskId: payload.subtaskId,
-      status: payload.status
+      status: payload.status,
+      type: payload.type,
+      structured: Boolean(payload.structured),
+      message: payload.message
     });
     if (!webContents.isDestroyed()) {
       webContents.send("terminal:agent-event", payload);
@@ -1259,7 +1330,8 @@ function getDefaultAgentPromptTemplate() {
     "子任务说明：{{subtaskDescription}}",
     "",
     "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。",
-    "你可以和其他角色协作；完成或阻塞任务时，请在终端输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked，便于 CosS 同步任务状态。"
+    "你可以和其他角色协作；完成或阻塞任务时，请在终端输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked，便于 CosS 同步任务状态。",
+    "需要把协作消息写回 CosS 时，可输出一行 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"给其他角色的协作消息\",\"toRoleIds\":[\"product-manager\"]}。"
   ].join("\n");
 }
 
