@@ -171,7 +171,7 @@ const defaultState = {
   }
 };
 
-const APP_VERSION = "v0.5.1";
+const APP_VERSION = "v0.5.2";
 
 let state = structuredClone(defaultState);
 let bootingProjectId = null;
@@ -485,6 +485,12 @@ function uniqueRoleIds(roleIds = []) {
   return Array.from(new Set((Array.isArray(roleIds) ? roleIds : [roleIds]).filter((roleId) => allowedRoles.has(roleId))));
 }
 
+function uniqueStrings(values = []) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)));
+}
+
 function getMessageChannelId(fromRoleId, toRoleIds, taskId = null) {
   if (taskId) {
     return `task:${taskId}`;
@@ -511,6 +517,8 @@ function ensureMessageShape(message) {
     source: message.source || (taskId ? "task-plan" : "manual"),
     status: message.status || "sent",
     readBy: uniqueRoleIds(message.readBy || [fromRoleId]),
+    injectedWindowIds: uniqueStrings(message.injectedWindowIds || []),
+    injectedAt: message.injectedAt || "",
     createdAt: message.createdAt || new Date().toISOString()
   };
 }
@@ -1936,6 +1944,121 @@ function getDefaultMessageRoles(defaults = {}) {
   return { fromRoleId, toRoleId };
 }
 
+function getRunningAgentWindowsForRole(project, roleId, taskId = "") {
+  return (project?.windows || [])
+    .filter((win) => win.type === "terminal")
+    .filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
+    .filter((win) => win.roleId === roleId)
+    .filter((win) => terminalBackendIds.has(win.id))
+    .sort((a, b) => {
+      const aMatchesTask = taskId && (a.agentSession?.taskId === taskId || getTaskContextForWindow(a, project).taskId === taskId);
+      const bMatchesTask = taskId && (b.agentSession?.taskId === taskId || getTaskContextForWindow(b, project).taskId === taskId);
+      if (aMatchesTask !== bMatchesTask) {
+        return aMatchesTask ? -1 : 1;
+      }
+      return normalizeZIndex(b.z) - normalizeZIndex(a.z);
+    });
+}
+
+function getInjectableWindowsForMessage(project, message) {
+  return uniqueRoleIds(message?.toRoleIds || [])
+    .flatMap((roleId) => getRunningAgentWindowsForRole(project, roleId, message?.taskId || ""));
+}
+
+function stripTerminalControlChars(value) {
+  return String(value || "")
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .trim();
+}
+
+function buildTerminalInstructionPayload(message, targetWindow) {
+  const project = getProject();
+  const fromRole = getRole(message.fromRoleId);
+  const toRole = getRole(targetWindow.roleId);
+  const taskLabel = message.taskId ? getMessageTaskLabel(message.taskId) : "私聊";
+  const provider = targetWindow.agentProvider === "codex" ? "Codex" : "Claude Code";
+  return stripTerminalControlChars([
+    "请处理来自 CosS 协作时间线的指令。",
+    `目标角色：${toRole.name}`,
+    `发送角色：${fromRole.name}`,
+    `Agent 后端：${provider}`,
+    `频道：${taskLabel}`,
+    `消息来源：${message.source || "manual"}`,
+    "",
+    message.content,
+    "",
+    "请基于当前项目上下文继续处理；需要同步进度时输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"你的进度或阻塞说明\",\"toRoleIds\":[\"product-manager\"]}。",
+    "完成或阻塞时输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。"
+  ].join("\n"));
+}
+
+function sendPastedTerminalInstruction(windowId, content) {
+  const sanitized = stripTerminalControlChars(content);
+  if (!sanitized || !window.cossAPI?.sendTerminalInput) {
+    return Promise.resolve(false);
+  }
+  return window.cossAPI.sendTerminalInput(windowId, `\x1b[200~${sanitized}\x1b[201~\r`);
+}
+
+async function injectMessageIntoAgentTerminals(messageId, options = {}) {
+  const project = getProject();
+  const message = project?.messages?.find((item) => item.id === messageId);
+  if (!project || !message) {
+    return { ok: false, injectedCount: 0, reason: "message-not-found" };
+  }
+
+  const targets = getInjectableWindowsForMessage(project, message).slice(0, options.limit || 4);
+  if (targets.length === 0) {
+    recordAppLog("agent.instruction.inject.skipped", {
+      projectId: project.id,
+      messageId: message.id,
+      taskId: message.taskId || "",
+      toRoleIds: message.toRoleIds,
+      reason: "no-running-agent-terminal"
+    }, "warn");
+    return { ok: false, injectedCount: 0, reason: "no-running-agent-terminal" };
+  }
+
+  const injectedWindowIds = [];
+  for (const targetWindow of targets) {
+    const payload = buildTerminalInstructionPayload(message, targetWindow);
+    const ok = await sendPastedTerminalInstruction(targetWindow.id, payload);
+    if (ok) {
+      injectedWindowIds.push(targetWindow.id);
+      targetWindow.status = "working";
+      targetWindow.agentSession = ensureAgentSessionShape(targetWindow, project);
+      targetWindow.agentSession.lastEventAt = new Date().toISOString();
+    }
+  }
+
+  if (injectedWindowIds.length > 0) {
+    const injectedAt = new Date().toISOString();
+    message.injectedWindowIds = uniqueStrings([...(message.injectedWindowIds || []), ...injectedWindowIds]);
+    message.injectedAt = injectedAt;
+    recordAppLog("agent.instruction.injected", {
+      projectId: project.id,
+      messageId: message.id,
+      taskId: message.taskId || "",
+      source: message.source,
+      fromRoleId: message.fromRoleId,
+      toRoleIds: message.toRoleIds,
+      windowIds: injectedWindowIds,
+      injectedCount: injectedWindowIds.length,
+      contentLength: message.content.length
+    });
+    saveState();
+    render();
+  }
+
+  return {
+    ok: injectedWindowIds.length > 0,
+    injectedCount: injectedWindowIds.length,
+    windowIds: injectedWindowIds,
+    reason: injectedWindowIds.length > 0 ? "" : "terminal-write-failed"
+  };
+}
+
 function getProjectTimelineEvents(project) {
   ensureProjectShape(project);
   const messageItems = (project.messages || []).map((message) => ({
@@ -2018,6 +2141,10 @@ function renderMessageRows(project) {
       const fromRole = getRole(message.fromRoleId);
       const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
       const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
+      const injectableWindows = getInjectableWindowsForMessage(project, message);
+      const injectedLabel = message.injectedWindowIds?.length
+        ? `<span>已注入 ${message.injectedWindowIds.length} 个终端</span>`
+        : "";
       return `
         <div class="message-row timeline-row" data-message-id="${escapeHtml(message.id)}">
           <div class="message-row-head">
@@ -2027,8 +2154,14 @@ function renderMessageRows(project) {
           <div class="message-meta">
             <span>${escapeHtml(channelLabel)}</span>
             <span>${escapeHtml(message.source || "manual")}</span>
+            ${injectedLabel}
           </div>
           <p>${escapeHtml(message.content)}</p>
+          ${injectableWindows.length > 0 ? `
+            <div class="message-row-actions">
+              <button class="secondary-button compact" data-action="inject-message-terminal" data-message-id="${escapeHtml(message.id)}">注入终端</button>
+            </div>
+          ` : ""}
         </div>
       `;
     })
@@ -2076,7 +2209,7 @@ function showMessageCenterModal(defaults = {}) {
 
   renderModal(`
     <div class="modal message-center-modal">
-      <h2>v0.5.1 协作时间线</h2>
+      <h2>v0.5.2 协作时间线</h2>
       <p>消息和 Agent 结构化事件会保存在当前项目中，用于驱动协作角标、任务群聊和角色私聊。</p>
       <div class="message-composer">
         <div class="field">
@@ -2198,6 +2331,7 @@ function showSubtaskInstructionModal(taskId, subtaskId) {
 
   const toRoleId = getRole(subtask.roleId).id;
   const defaultFromRoleId = toRoleId === "product-manager" ? "tech-lead" : "product-manager";
+  const injectableWindows = getRunningAgentWindowsForRole(project, toRoleId, task.id);
   renderModal(`
     <div class="modal subtask-instruction-modal">
       <h2>发送给角色</h2>
@@ -2218,6 +2352,10 @@ function showSubtaskInstructionModal(taskId, subtaskId) {
         <div class="field message-content-field">
           <label for="instructionContent">指令内容</label>
           <textarea id="instructionContent">${escapeHtml(buildSubtaskInstructionContent(task, subtask))}</textarea>
+          <label class="checkbox-line">
+            <input id="instructionInjectTerminal" type="checkbox" ${injectableWindows.length > 0 ? "checked" : "disabled"}>
+            <span>${injectableWindows.length > 0 ? `同时注入 ${getRole(toRoleId).name} 的运行中 Agent 终端` : `未找到 ${getRole(toRoleId).name} 的运行中 Agent 终端`}</span>
+          </label>
           <div id="instructionStatus" class="form-status muted">发送后会写入当前任务的协作时间线。</div>
         </div>
       </div>
@@ -2238,11 +2376,12 @@ function setInstructionStatus(message, type = "error") {
   status.textContent = message;
 }
 
-function sendSubtaskInstructionFromModal(taskId, subtaskId) {
+async function sendSubtaskInstructionFromModal(taskId, subtaskId) {
   const { project, task, subtask } = getTaskAndSubtask(taskId, subtaskId);
   const fromRoleId = document.getElementById("instructionFromRole")?.value;
   const toRoleId = document.getElementById("instructionToRole")?.value;
   const content = document.getElementById("instructionContent")?.value.trim();
+  const injectTerminal = document.getElementById("instructionInjectTerminal")?.checked;
 
   if (!project || !task || !subtask || !fromRoleId || !toRoleId || !content) {
     setInstructionStatus("请完整填写发送角色、接收角色和指令内容。");
@@ -2273,9 +2412,16 @@ function sendSubtaskInstructionFromModal(taskId, subtaskId) {
     toRoleIds: message.toRoleIds,
     source: message.source
   });
+  let injectResult = { ok: false, injectedCount: 0, reason: "not-requested" };
+  if (injectTerminal) {
+    injectResult = await injectMessageIntoAgentTerminals(message.id, { limit: 1 });
+  }
   render();
   showMessageCenterModal({ ...messageComposerDefaults, filterTaskId: task.id });
-  setMessageStatus("任务指令已发送。", "ready");
+  const injectSuffix = injectTerminal
+    ? (injectResult.ok ? `并已注入 ${injectResult.injectedCount} 个终端。` : "但未找到可注入的运行中 Agent 终端。")
+    : "";
+  setMessageStatus(`任务指令已发送。${injectSuffix}`, injectTerminal && !injectResult.ok ? "warn" : "ready");
 }
 
 async function showAboutModal() {
@@ -4738,6 +4884,17 @@ document.addEventListener("click", (event) => {
 
   if (action === "send-subtask-instruction") {
     sendSubtaskInstructionFromModal(target.dataset.taskId, target.dataset.subtaskId);
+    return;
+  }
+
+  if (action === "inject-message-terminal") {
+    injectMessageIntoAgentTerminals(target.dataset.messageId).then((result) => {
+      showMessageCenterModal(messageComposerDefaults);
+      setMessageStatus(
+        result.ok ? `已注入 ${result.injectedCount} 个 Agent 终端。` : "未找到可注入的运行中 Agent 终端。",
+        result.ok ? "ready" : "warn"
+      );
+    });
     return;
   }
 

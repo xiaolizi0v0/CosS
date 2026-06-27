@@ -1,6 +1,6 @@
 {
   "name": "coss-desktop",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "CosS Windows desktop AI collaboration workspace MVP.",
   "main": "src/main.cjs",
   "private": true,

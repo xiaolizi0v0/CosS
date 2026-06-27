@@ -17,7 +17,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.5.1";
+    return "0.5.2";
   }
 })();
 const terminalSessions = new Map();
