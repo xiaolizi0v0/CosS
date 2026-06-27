@@ -4560,6 +4560,40 @@ function openBrowserUrlInWindow(windowId, url, newTab = false) {
   navigateBrowserWindow(windowId, url);
 }
 
+function openPopupUrlInsideCosSBrowser(url, sourceWindowId = "") {
+  const project = getProject();
+  if (!project || !url) {
+    return;
+  }
+
+  const sourceWindow = sourceWindowId ? project.windows.find((win) => win.id === sourceWindowId) : null;
+  const focusedBrowser = project.windows.find((win) => win.id === focusedWindowId && win.type === "browser");
+  const visibleBrowser = getVisibleWindows(project)
+    .filter((win) => win.type === "browser")
+    .sort((a, b) => normalizeZIndex(b.z) - normalizeZIndex(a.z))[0];
+  let targetWindow = sourceWindow?.type === "browser" ? sourceWindow : focusedBrowser || visibleBrowser;
+
+  if (!targetWindow) {
+    targetWindow = createProgram("browser", "product-manager", {
+      browserUrl: url,
+      desktopId: getActiveDesktopId(project)
+    });
+  }
+
+  if (!targetWindow) {
+    return;
+  }
+
+  focusWindow(targetWindow.id, { render: false });
+  navigateBrowserWindow(targetWindow.id, url);
+  recordAppLog("browser.popup.redirected", {
+    projectId: project.id,
+    windowId: targetWindow.id,
+    sourceWindowId,
+    url
+  });
+}
+
 function hydrateBrowserViews() {
   document.querySelectorAll("webview[data-browser-webview]").forEach((webview) => {
     const windowId = webview.dataset.browserWebview;
@@ -4571,6 +4605,12 @@ function hydrateBrowserViews() {
     hydratedBrowserViews.add(hydrationKey);
     webview.addEventListener("did-start-loading", () => {
       setBrowserStatus(windowId, "正在加载页面...", "loading");
+    });
+    webview.addEventListener("new-window", (event) => {
+      event.preventDefault?.();
+      if (event.url) {
+        openPopupUrlInsideCosSBrowser(event.url, windowId);
+      }
     });
     webview.addEventListener("did-stop-loading", () => {
       const url = webview.getURL?.() || webview.getAttribute("src") || "";
@@ -6180,6 +6220,9 @@ window.cossAPI?.onAppMenuAction?.(handleAppMenuAction);
 window.cossAPI?.onWindowMaximized?.((maximized) => {
   isWindowMaximized = Boolean(maximized);
   render();
+});
+window.cossAPI?.onBrowserOpenUrl?.((payload) => {
+  openPopupUrlInsideCosSBrowser(payload?.url || "");
 });
 window.cossAPI?.onAgentEvent?.((event) => {
   applyAgentEventToState(event);

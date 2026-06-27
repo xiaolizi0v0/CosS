@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld("cossAPI", {
     ipcRenderer.on("window:maximized", listener);
     return () => ipcRenderer.removeListener("window:maximized", listener);
   },
+  onBrowserOpenUrl: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("browser:open-url", listener);
+    return () => ipcRenderer.removeListener("browser:open-url", listener);
+  },
   getClaudeStatus: () => ipcRenderer.invoke("claude:status"),
   getCodexStatus: () => ipcRenderer.invoke("codex:status"),
   testAgentLogin: (provider) => ipcRenderer.invoke("agent:login-test", provider),

@@ -838,6 +838,44 @@ test("opens a v0.4.1 real browser program and navigates with webview", async () 
   }
 });
 
+test("keeps browser popup links inside the CosS browser window", async () => {
+  const { app, page, userDataDir } = await launchApp();
+  const html = [
+    "<title>Popup Source</title>",
+    "<button id=\"openPopup\" onclick=\"window.open('data:text/html;charset=utf-8,Popup%20Target','_blank')\">open</button>"
+  ].join("");
+  const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+
+  try {
+    await page.locator('.dock [data-action="show-role-picker"][data-type="browser"]').click();
+    await page.locator('.modal [data-action="select-role"][data-type="browser"]').first().click();
+    await page.locator(".browser-address").fill(dataUrl);
+    await page.locator('[data-action="browser-go"]').click();
+    await page.waitForFunction(() => document.querySelector(".browser-webview")?.getURL?.().startsWith("data:text/html"));
+
+    const getVisibleBrowserWindowCount = () => app.evaluate(({ BrowserWindow }) => (
+      BrowserWindow.getAllWindows().filter((win) => win.isVisible()).length
+    ));
+    const beforeWindowCount = await getVisibleBrowserWindowCount();
+    await page.evaluate(async () => {
+      const webview = document.querySelector(".browser-webview");
+      await webview.executeJavaScript("document.getElementById('openPopup').click()");
+    });
+
+    await page.waitForFunction(() => {
+      const webview = document.querySelector(".browser-webview");
+      return webview?.getURL?.().includes("Popup%20Target") || webview?.getURL?.().includes("Popup Target");
+    });
+    await expect.poll(getVisibleBrowserWindowCount).toBe(beforeWindowCount);
+    await expect(page.locator(".browser-address")).toHaveValue(/Popup/);
+
+    const logText = await waitForLogEvent(userDataDir, "browser.webview.window-open.redirected");
+    expect(logText).toContain("Popup");
+  } finally {
+    await app.close();
+  }
+});
+
 test("opens edits and saves a v0.4.1 project file", async () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-file-e2e-"));
   const filePath = path.join(projectDir, "notes.md");
