@@ -76,7 +76,7 @@ test("boots into the workspace shell", async () => {
 
   try {
     await expect(page.locator(".brand")).toContainText("CosS");
-    await expect(page.locator(".brand-version")).toHaveText("v0.5.2");
+    await expect(page.locator(".brand-version")).toHaveText("v0.5.3");
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".workspace-title")).toHaveText("E2E Project");
   } finally {
@@ -103,7 +103,7 @@ test("creates a project from the project modal", async () => {
   }
 });
 
-test("renders v0.5.2 custom title bar menus and exposes log directory info", async () => {
+test("renders v0.5.3 custom title bar menus and exposes log directory info", async () => {
   const { app, page, userDataDir } = await launchApp();
 
   try {
@@ -132,7 +132,7 @@ test("renders v0.5.2 custom title bar menus and exposes log directory info", asy
     await expect(page.locator(".app-menu-dropdown")).toContainText("关于 CosS");
 
     const info = await page.evaluate(() => window.cossAPI.getAppInfo());
-    expect(info.version).toBe("0.5.2");
+    expect(info.version).toBe("0.5.3");
     expect(info.logDirectory).toBe(path.join(userDataDir, "logs"));
   } finally {
     await app.close();
@@ -544,7 +544,7 @@ test("sends a v0.4 role message from the message center", async () => {
   try {
     await page.locator('.workspace-actions [data-action="show-message-center"]').click();
     await expect(page.locator(".message-center-modal")).toBeVisible();
-    await expect(page.locator(".message-center-modal")).toContainText("v0.5.2 协作时间线");
+    await expect(page.locator(".message-center-modal")).toContainText("v0.5.3 协作时间线");
 
     await page.locator("#messageFromRole").selectOption("product-manager");
     await page.locator("#messageToRole").selectOption("frontend-engineer");
@@ -617,7 +617,7 @@ test("stores confirmed task plan collaboration messages in the v0.4 message bus"
   }
 });
 
-test("v0.5.2 sends subtask instructions into the collaboration timeline", async () => {
+test("v0.5.3 sends subtask instructions into the collaboration timeline", async () => {
   const mockPlan = {
     summary: "登录任务需要产品、前端、后端和测试协同。",
     subtasks: [
@@ -681,7 +681,7 @@ test("v0.5.2 sends subtask instructions into the collaboration timeline", async 
   }
 });
 
-test("v0.5.2 injects timeline messages into a running Agent terminal", async () => {
+test("v0.5.3 queues timeline messages for a running Agent terminal", async () => {
   const createdAt = "2026-01-01T00:00:00.000Z";
   const { app, page, userDataDir } = await launchApp(
     {
@@ -792,14 +792,20 @@ test("v0.5.2 injects timeline messages into a running Agent terminal", async () 
     await page.locator('[data-action="inject-message-terminal"]').click();
 
     await expect(page.locator(".message-center-modal")).toBeVisible();
-    await expect(page.locator(".message-row").first()).toContainText("已注入 1 个终端");
+    await expect(page.locator('[data-action="confirm-agent-delivery"]')).toBeVisible();
+    await page.locator('[data-action="confirm-agent-delivery"]').click();
+    await expect(page.locator(".message-row").first()).toContainText("1/1");
+    await expect(page.locator('[data-action="show-terminal-output-refs"]')).toBeVisible({ timeout: 5000 });
 
     const savedState = await page.evaluate(() => window.cossAPI.loadState());
-    const message = savedState.projects[0].messages.find((item) => item.id === "message-inject-e2e");
+    const project = savedState.projects[0];
+    const message = project.messages.find((item) => item.id === "message-inject-e2e");
     expect(message.injectedWindowIds).toContain("agent-inject-terminal");
     expect(message.injectedAt).toBeTruthy();
+    expect(project.agentDeliveries.some((item) => item.messageId === "message-inject-e2e" && item.status === "sent")).toBe(true);
+    expect(project.terminalOutputRefs.some((item) => item.messageId === "message-inject-e2e" && item.windowId === "agent-inject-terminal")).toBe(true);
 
-    const logText = await waitForLogEvent(userDataDir, "agent.instruction.injected");
+    const logText = await waitForLogEvent(userDataDir, "agent.delivery.confirmed");
     expect(logText).toContain("message-inject-e2e");
     expect(logText).toContain("agent-inject-terminal");
   } finally {
@@ -1350,7 +1356,7 @@ test("v0.4.2 task view layout presets arrange current desktop windows", async ()
   }
 });
 
-test("v0.5.2 stores Agent prompt templates and shows Codex auth state on demand", async () => {
+test("v0.5.3 stores Agent prompt templates and shows Codex auth state on demand", async () => {
   const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-codex-auth-"));
   const codexAuthPath = path.join(authDir, "auth.json");
   fs.writeFileSync(
@@ -1388,7 +1394,7 @@ test("v0.5.2 stores Agent prompt templates and shows Codex auth state on demand"
   }
 });
 
-test("v0.5.2 syncs Codex Agent terminal events back to task state and timeline", async () => {
+test("v0.5.3 syncs Codex Agent terminal events back to task state and timeline", async () => {
   const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codex-"));
   const fakeCodexPath = path.join(fakeCliDir, "codex.cmd");
   fs.writeFileSync(
@@ -1396,7 +1402,7 @@ test("v0.5.2 syncs Codex Agent terminal events back to task state and timeline",
     [
       "@echo off",
       "if \"%~1\"==\"--version\" (",
-      "  echo codex-cli 0.5.2-e2e",
+      "  echo codex-cli 0.5.3-e2e",
       "  exit /b 0",
       ")",
       "echo COSS_AGENT_STATUS:done",
@@ -1496,5 +1502,233 @@ test("v0.5.2 syncs Codex Agent terminal events back to task state and timeline",
       // The app may already be closing after a timeout; best-effort cleanup only.
     }
     await app.close();
+  }
+});
+
+test("v0.5.3 edits task plans before confirming assignment", async () => {
+  const mockPlan = {
+    summary: "Editable plan.",
+    subtasks: [
+      { roleId: "product-manager", title: "Confirm scope", description: "Confirm login scope." },
+      { roleId: "frontend-engineer", title: "Build UI", description: "Build login UI." },
+      { roleId: "backend-engineer", title: "Build API", description: "Build login API." }
+    ],
+    messages: [
+      {
+        fromRoleId: "product-manager",
+        toRoleIds: ["frontend-engineer", "backend-engineer"],
+        content: "Please align edited plan."
+      }
+    ]
+  };
+  const { app, page, userDataDir } = await launchApp(
+    {},
+    {
+      COSS_LLM_FORCE_ERROR: "0",
+      COSS_LLM_MOCK_RESPONSE: JSON.stringify(mockPlan)
+    }
+  );
+
+  try {
+    await page.locator('.workspace-actions [data-action="show-create-task"]').click();
+    await page.locator("#taskGoal").fill("Edit generated login plan");
+    await page.locator('[data-action="create-task"]').click();
+    await expect(page.locator(".task-plan-modal")).toBeVisible();
+    await expect(page.locator(".task-plan-item")).toHaveCount(3);
+
+    await page.locator('[data-plan-field="title"][data-plan-index="0"]').fill("Edited QA acceptance");
+    await page.locator('[data-plan-field="roleId"][data-plan-index="0"]').selectOption("qa-engineer");
+    await page.locator('[data-action="add-task-plan-subtask"]').click();
+    await expect(page.locator(".task-plan-item")).toHaveCount(4);
+    await page.locator('[data-plan-field="title"][data-plan-index="3"]').fill("Edited security review");
+    await page.locator('[data-plan-field="description"][data-plan-index="3"]').fill("Review auth edge cases before release.");
+    await page.locator('[data-action="delete-task-plan-subtask"][data-plan-index="1"]').click();
+    await expect(page.locator(".task-plan-item")).toHaveCount(3);
+    await page.locator('[data-action="confirm-task-plan"]').click();
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const subtasks = savedState.projects[0].tasks[0].subtasks;
+    expect(subtasks.some((item) => item.roleId === "qa-engineer" && item.title === "Edited QA acceptance")).toBe(true);
+    expect(subtasks.some((item) => item.title === "Edited security review")).toBe(true);
+    expect(subtasks.some((item) => item.title === "Build UI")).toBe(false);
+
+    const logText = await waitForLogEvent(userDataDir, "task.plan.subtask.added");
+    expect(logText).toContain("task.plan.edited");
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.3 supports file tree folder create rename delete and save as", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-file-crud-e2e-"));
+  fs.writeFileSync(path.join(projectDir, "notes.md"), "# Initial\n", "utf8");
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page, userDataDir } = await launchApp({
+    path: projectDir,
+    desktops: [{ id: "desktop-main", name: "主桌面", createdAt }],
+    activeDesktopId: "desktop-main",
+    windows: [
+      {
+        id: "file-crud-window",
+        type: "file",
+        roleId: "product-manager",
+        title: "产品经理文件",
+        x: 260,
+        y: 100,
+        width: 680,
+        height: 430,
+        z: 100,
+        status: "idle",
+        minimized: false,
+        maximized: false,
+        restoreBounds: null,
+        desktopId: "desktop-main"
+      }
+    ]
+  });
+
+  try {
+    await expect(page.locator('.program-window[data-window-id="file-crud-window"]')).toBeVisible();
+    await page.locator('[data-action="file-refresh-list"]').click();
+    await expect(page.locator(".file-list-item", { hasText: "notes.md" })).toBeVisible();
+
+    await page.locator('[data-action="file-create-folder"]').click();
+    await expect(page.locator(".file-operation-modal")).toBeVisible();
+    await page.locator("#fileOperationPath").fill("docs");
+    await page.locator('[data-action="confirm-file-operation"]').click();
+    await expect.poll(() => fs.existsSync(path.join(projectDir, "docs"))).toBe(true);
+    await page.locator('[data-action="file-refresh-list"]').click();
+    await expect(page.locator(".file-list-item", { hasText: "docs" })).toBeVisible();
+
+    await page.locator(".file-editor-textarea").fill("# Saved as copy\n");
+    await page.locator('[data-action="file-save-as"]').click();
+    await expect(page.locator(".file-operation-modal")).toBeVisible();
+    await page.locator("#fileOperationPath").fill("docs/copy.md");
+    await page.locator('[data-action="confirm-file-operation"]').click();
+    expect(fs.readFileSync(path.join(projectDir, "docs", "copy.md"), "utf8")).toContain("Saved as copy");
+
+    await page.locator('[data-action="file-rename"]').click();
+    await expect(page.locator(".file-operation-modal")).toBeVisible();
+    await page.locator("#fileOperationPath").fill("docs/renamed.md");
+    await page.locator('[data-action="confirm-file-operation"]').click();
+    expect(fs.existsSync(path.join(projectDir, "docs", "renamed.md"))).toBe(true);
+    expect(fs.existsSync(path.join(projectDir, "docs", "copy.md"))).toBe(false);
+
+    await page.locator('[data-action="file-delete"]').click();
+    await expect(page.locator(".file-operation-modal")).toBeVisible();
+    await page.locator('[data-action="confirm-file-operation"]').click();
+    expect(fs.existsSync(path.join(projectDir, "docs", "renamed.md"))).toBe(false);
+
+    const logText = await waitForLogEvent(userDataDir, "file.deleted");
+    expect(logText).toContain("docs");
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.3 manages browser tabs bookmarks history and opens task URLs", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const taskUrl = "https://example.com/coss-task-url";
+  const { app, page, userDataDir } = await launchApp({
+    desktops: [{ id: "desktop-main", name: "主桌面", createdAt }],
+    activeDesktopId: "desktop-main",
+    tasks: [
+      {
+        id: "task-browser-e2e",
+        title: "Browser task",
+        goal: `Verify ${taskUrl}`,
+        status: "running",
+        desktopId: "desktop-main",
+        createdAt,
+        updatedAt: createdAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "mock", summary: "Browser URL test", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: [
+          {
+            id: "subtask-browser-e2e",
+            roleId: "qa-engineer",
+            title: "Open test URL",
+            description: `Open ${taskUrl} and verify page.`,
+            status: "running",
+            createdAt,
+            updatedAt: createdAt
+          }
+        ]
+      }
+    ],
+    windows: [
+      {
+        id: "task-url-window",
+        type: "task",
+        roleId: "qa-engineer",
+        title: "测试工程师任务",
+        x: 220,
+        y: 90,
+        width: 560,
+        height: 420,
+        z: 100,
+        status: "working",
+        minimized: false,
+        maximized: false,
+        restoreBounds: null,
+        desktopId: "desktop-main"
+      }
+    ]
+  });
+
+  try {
+    await expect(page.locator('[data-action="open-task-url"]')).toBeVisible();
+    await page.locator('[data-action="open-task-url"]').click();
+    await expect(page.locator(".program-window.browser")).toBeVisible();
+    await expect(page.locator(".browser-address")).toHaveValue(taskUrl);
+
+    await page.locator('[data-action="browser-new-tab"]').click();
+    await expect(page.locator(".browser-tab")).toHaveCount(2);
+    await page.locator(".browser-address").fill("https://example.com/second-tab");
+    await page.locator('[data-action="browser-go"]').click();
+    await page.locator('[data-action="browser-bookmark"]').click();
+    await expect(page.locator(".browser-quick-links")).toContainText("https://example.com/second-tab");
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const browserWindow = savedState.projects[0].windows.find((win) => win.type === "browser");
+    expect(browserWindow.browserTabs.length).toBe(2);
+    expect(browserWindow.browserBookmarks).toContain("https://example.com/second-tab");
+    expect(browserWindow.browserHistory.some((item) => item.url === taskUrl)).toBe(true);
+
+    const logText = await waitForLogEvent(userDataDir, "browser.task-url.opened");
+    expect(logText).toContain(taskUrl);
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.3 runs manual Agent remote login tests", async () => {
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: [{ id: "gpt-test" }], path: request.url }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const { app, page, userDataDir } = await launchApp(
+    {},
+    {
+      OPENAI_API_KEY: "test-key",
+      COSS_AGENT_LOGIN_TEST_BASE_URL: baseUrl
+    }
+  );
+
+  try {
+    await page.locator('.sidebar-footer [data-action="show-settings"]').click();
+    await page.locator('.settings-nav [data-action="set-settings-section"][data-section="agent"]').click();
+    await expect(page.locator('[data-agent-login-status="codex"]')).toContainText("尚未测试");
+    await page.locator('[data-action="test-agent-login"][data-provider="codex"]').click();
+    await expect(page.locator('[data-agent-login-status="codex"]')).toContainText("远程登录态可用", { timeout: 5000 });
+
+    const logText = await waitForLogEvent(userDataDir, "agent.login-test.succeeded");
+    expect(logText).toContain(baseUrl);
+  } finally {
+    await app.close();
+    await new Promise((resolve) => server.close(resolve));
   }
 });

@@ -171,7 +171,7 @@ const defaultState = {
   }
 };
 
-const APP_VERSION = "v0.5.2";
+const APP_VERSION = "v0.5.3";
 
 let state = structuredClone(defaultState);
 let bootingProjectId = null;
@@ -196,12 +196,14 @@ let latestCodexStatus = null;
 let modelEditorProvider = "system";
 let activeSettingsSection = "system";
 const modelConnectivityStatuses = {};
+const agentLoginTestStatuses = {};
 let openAppMenuId = null;
 let isWindowMaximized = false;
 let pendingTaskPlanDraft = null;
 let messageComposerDefaults = {};
 let messageTimelineFilters = { taskId: "", query: "" };
 let taskViewOpen = false;
+let pendingFileOperation = null;
 
 const SUBTASK_STATUS_DEFS = {
   pending: { label: "待执行", windowStatus: "waiting" },
@@ -544,12 +546,86 @@ function ensureAgentEventShape(event) {
   };
 }
 
+function normalizeDeliveryStatus(value) {
+  return ["pending", "sent", "failed", "canceled"].includes(value) ? value : "pending";
+}
+
+function ensureAgentDeliveryShape(delivery) {
+  return {
+    id: delivery.id || uid("delivery"),
+    messageId: delivery.messageId || "",
+    windowId: delivery.windowId || "",
+    roleId: getRole(delivery.roleId).id,
+    taskId: delivery.taskId || "",
+    status: normalizeDeliveryStatus(delivery.status),
+    attempts: Number.isFinite(Number(delivery.attempts)) ? Number(delivery.attempts) : 0,
+    createdAt: delivery.createdAt || new Date().toISOString(),
+    updatedAt: delivery.updatedAt || delivery.createdAt || new Date().toISOString(),
+    sentAt: delivery.sentAt || "",
+    canceledAt: delivery.canceledAt || "",
+    lastError: String(delivery.lastError || "").slice(0, 300)
+  };
+}
+
+function ensureTerminalOutputRefShape(ref) {
+  return {
+    id: ref.id || uid("termref"),
+    messageId: ref.messageId || "",
+    deliveryId: ref.deliveryId || "",
+    windowId: ref.windowId || "",
+    roleId: getRole(ref.roleId).id,
+    taskId: ref.taskId || "",
+    excerpt: String(ref.excerpt || "").slice(0, 1200),
+    createdAt: ref.createdAt || new Date().toISOString(),
+    updatedAt: ref.updatedAt || ref.createdAt || new Date().toISOString()
+  };
+}
+
+function ensureBrowserWindowShape(win) {
+  const legacyUrl = normalizeBrowserUrl(win.browserUrl || DEFAULT_BROWSER_URL);
+  if (!Array.isArray(win.browserTabs) || win.browserTabs.length === 0) {
+    win.browserTabs = [{
+      id: uid("tab"),
+      url: legacyUrl,
+      title: win.browserTitle || legacyUrl,
+      status: win.browserStatus || "ready",
+      createdAt: new Date().toISOString()
+    }];
+  }
+  win.browserTabs = win.browserTabs.map((tab, index) => ({
+    id: tab.id || uid("tab"),
+    url: normalizeBrowserUrl(tab.url || (index === 0 ? legacyUrl : DEFAULT_BROWSER_URL)),
+    title: tab.title || "",
+    status: tab.status || "ready",
+    createdAt: tab.createdAt || new Date().toISOString()
+  })).slice(0, 8);
+  if (!win.browserTabs.some((tab) => tab.id === win.activeBrowserTabId)) {
+    win.activeBrowserTabId = win.browserTabs[0].id;
+  }
+  const activeTab = getActiveBrowserTab(win);
+  win.browserUrl = activeTab?.url || legacyUrl;
+  win.browserStatus ||= activeTab?.status || "ready";
+  win.browserTitle ||= activeTab?.title || "";
+  win.browserBookmarks = uniqueStrings(win.browserBookmarks || []).slice(-40);
+  win.browserHistory = (Array.isArray(win.browserHistory) ? win.browserHistory : [])
+    .map((item) => ({
+      url: normalizeBrowserUrl(item.url || item),
+      title: String(item.title || "").slice(0, 120),
+      visitedAt: item.visitedAt || new Date().toISOString()
+    }))
+    .filter((item) => item.url)
+    .slice(-80);
+  return win;
+}
+
 function ensureProjectShape(project) {
   project.windows ||= [];
   project.tasks ||= [];
   project.messages ||= [];
   project.commandLogs ||= [];
   project.agentEvents ||= [];
+  project.agentDeliveries ||= [];
+  project.terminalOutputRefs ||= [];
   ensureProjectDesktops(project);
   project.tasks.forEach(ensureTaskShape);
   project.messages = project.messages
@@ -559,6 +635,15 @@ function ensureProjectShape(project) {
     .map(ensureAgentEventShape)
     .filter((event) => event.message || event.status || event.sessionId)
     .slice(-240);
+  const messageIds = new Set(project.messages.map((message) => message.id));
+  project.agentDeliveries = project.agentDeliveries
+    .map(ensureAgentDeliveryShape)
+    .filter((delivery) => messageIds.has(delivery.messageId))
+    .slice(-300);
+  project.terminalOutputRefs = project.terminalOutputRefs
+    .map(ensureTerminalOutputRefShape)
+    .filter((ref) => messageIds.has(ref.messageId))
+    .slice(-300);
   project.windows.forEach((win) => {
     win.desktopId ||= getActiveDesktopId(project);
     win.minimized = Boolean(win.minimized);
@@ -581,9 +666,7 @@ function ensureProjectShape(project) {
   });
   project.windows.forEach((win) => {
     if (win.type === "browser") {
-      win.browserUrl ||= DEFAULT_BROWSER_URL;
-      win.browserStatus ||= "ready";
-      win.browserTitle ||= "";
+      ensureBrowserWindowShape(win);
     }
     if (win.type === "file") {
       win.filePath ||= "";
@@ -825,7 +908,9 @@ function createProjectState(name, projectPath) {
     tasks: [],
     messages: [],
     commandLogs: [],
-    agentEvents: []
+    agentEvents: [],
+    agentDeliveries: [],
+    terminalOutputRefs: []
   };
 }
 
@@ -871,6 +956,16 @@ function createWindowState(type, roleId, x = 260, y = 108, options = {}) {
     win.browserUrl = options.browserUrl || DEFAULT_BROWSER_URL;
     win.browserStatus = "ready";
     win.browserTitle = "";
+    win.browserTabs = [{
+      id: uid("tab"),
+      url: normalizeBrowserUrl(win.browserUrl),
+      title: "",
+      status: "ready",
+      createdAt: new Date().toISOString()
+    }];
+    win.activeBrowserTabId = win.browserTabs[0].id;
+    win.browserBookmarks = [];
+    win.browserHistory = [];
   }
   if (type === "file") {
     win.filePath = options.filePath || "";
@@ -955,6 +1050,47 @@ function normalizeBrowserUrl(value) {
     return `http://${raw}`;
   }
   return `https://${raw}`;
+}
+
+function getActiveBrowserTab(win) {
+  return win?.browserTabs?.find((tab) => tab.id === win.activeBrowserTabId) || win?.browserTabs?.[0] || null;
+}
+
+function setActiveBrowserTabState(win, patch) {
+  const tab = getActiveBrowserTab(win);
+  if (!tab) {
+    return null;
+  }
+  Object.assign(tab, patch);
+  win.browserUrl = tab.url;
+  win.browserTitle = tab.title || win.browserTitle || "";
+  win.browserStatus = tab.status || win.browserStatus || "ready";
+  return tab;
+}
+
+function pushBrowserHistory(win, url, title = "") {
+  const normalizedUrl = normalizeBrowserUrl(url);
+  if (!normalizedUrl || normalizedUrl === "about:blank") {
+    return;
+  }
+  win.browserHistory ||= [];
+  const last = win.browserHistory[win.browserHistory.length - 1];
+  if (last?.url !== normalizedUrl) {
+    win.browserHistory.push({
+      url: normalizedUrl,
+      title: title || normalizedUrl,
+      visitedAt: new Date().toISOString()
+    });
+  } else {
+    last.title = title || last.title;
+    last.visitedAt = new Date().toISOString();
+  }
+  win.browserHistory = win.browserHistory.slice(-80);
+}
+
+function extractFirstUrl(value) {
+  const match = String(value || "").match(/https?:\/\/[^\s"'<>]+/i);
+  return match ? match[0].replace(/[),.;]+$/, "") : "";
 }
 
 function createMessage(fromRoleId, toRoleIds, content, taskId = null, options = {}) {
@@ -1106,6 +1242,7 @@ function createProgram(type, roleId, options = {}) {
     desktopId: win.desktopId
   });
   render();
+  return win;
 }
 
 function closeWindow(windowId) {
@@ -1123,7 +1260,11 @@ function closeWindow(windowId) {
     cleanupTerminalView(windowId, true);
   }
   if (win?.type === "browser") {
-    hydratedBrowserViews.delete(windowId);
+    for (const key of Array.from(hydratedBrowserViews)) {
+      if (key.startsWith(`${windowId}:`)) {
+        hydratedBrowserViews.delete(key);
+      }
+    }
   }
 
   project.windows = project.windows.filter((win) => win.id !== windowId);
@@ -1500,8 +1641,11 @@ function buildTaskFromDraft(draft) {
   const taskId = uid("task");
   const { goal, activeModel, llmResult, taskPlan } = draft;
   const createdAt = new Date().toISOString();
-  const subtasks = taskPlan.subtasks.map((subtask) => ({
+  const subtasks = taskPlan.subtasks.map((subtask, index) => ({
     ...subtask,
+    roleId: getRole(subtask.roleId).id,
+    title: String(subtask.title || `子任务 ${index + 1}`).trim() || `子任务 ${index + 1}`,
+    description: String(subtask.description || "请根据任务目标补充执行步骤。").trim() || "请根据任务目标补充执行步骤。",
     status: "pending",
     createdAt,
     updatedAt: createdAt
@@ -1902,15 +2046,34 @@ function renderTaskPlanPreviewModal(draft) {
       </div>
       <div class="task-plan-list">
         ${plan.subtasks.map((subtask, index) => `
-          <div class="task-plan-item">
+          <div class="task-plan-item editable" data-plan-index="${index}">
             <div class="task-plan-index">${index + 1}</div>
             <div>
-              <strong>${escapeHtml(subtask.title)}</strong>
-              <span>${escapeHtml(getRole(subtask.roleId).name)} · 待执行</span>
-              <p>${escapeHtml(subtask.description)}</p>
+              <div class="task-plan-edit-grid">
+                <label>
+                  <span>角色</span>
+                  <select data-plan-field="roleId" data-plan-index="${index}">
+                    ${ROLE_TEMPLATES.map((role) => `<option value="${escapeHtml(role.id)}" ${role.id === subtask.roleId ? "selected" : ""}>${escapeHtml(role.name)}</option>`).join("")}
+                  </select>
+                </label>
+                <label>
+                  <span>子任务标题</span>
+                  <input value="${escapeHtml(subtask.title)}" data-plan-field="title" data-plan-index="${index}" />
+                </label>
+              </div>
+              <label class="task-plan-description">
+                <span>子任务描述</span>
+                <textarea data-plan-field="description" data-plan-index="${index}">${escapeHtml(subtask.description)}</textarea>
+              </label>
+              <div class="task-plan-item-actions">
+                <button class="secondary-button compact" data-action="delete-task-plan-subtask" data-plan-index="${index}" ${plan.subtasks.length <= 1 ? "disabled" : ""}>删除子任务</button>
+              </div>
             </div>
           </div>
         `).join("")}
+      </div>
+      <div class="task-plan-edit-actions">
+        <button class="secondary-button" data-action="add-task-plan-subtask">新增子任务</button>
       </div>
       <div class="modal-actions">
         <button class="secondary-button" data-action="show-create-task">返回修改</button>
@@ -1918,6 +2081,56 @@ function renderTaskPlanPreviewModal(draft) {
       </div>
     </div>
   `);
+}
+
+function updatePendingTaskPlanField(index, field, value) {
+  if (!pendingTaskPlanDraft?.taskPlan?.subtasks?.[index] || !["roleId", "title", "description"].includes(field)) {
+    return;
+  }
+  const subtask = pendingTaskPlanDraft.taskPlan.subtasks[index];
+  if (field === "roleId") {
+    subtask.roleId = getRole(value).id;
+  } else {
+    subtask[field] = String(value || "").trimStart().slice(0, field === "title" ? 80 : 260);
+  }
+  recordAppLog("task.plan.edited", {
+    projectId: pendingTaskPlanDraft.projectId,
+    draftId: pendingTaskPlanDraft.id,
+    index,
+    field
+  });
+}
+
+function addPendingTaskPlanSubtask() {
+  if (!pendingTaskPlanDraft?.taskPlan) {
+    return;
+  }
+  const roleId = ROLE_TEMPLATES.find((role) => role.id !== "product-manager")?.id || "frontend-engineer";
+  pendingTaskPlanDraft.taskPlan.subtasks.push({
+    roleId,
+    title: "新子任务",
+    description: "请补充该子任务的执行说明。"
+  });
+  recordAppLog("task.plan.subtask.added", {
+    projectId: pendingTaskPlanDraft.projectId,
+    draftId: pendingTaskPlanDraft.id,
+    count: pendingTaskPlanDraft.taskPlan.subtasks.length
+  });
+  renderTaskPlanPreviewModal(pendingTaskPlanDraft);
+}
+
+function deletePendingTaskPlanSubtask(index) {
+  if (!pendingTaskPlanDraft?.taskPlan || pendingTaskPlanDraft.taskPlan.subtasks.length <= 1) {
+    return;
+  }
+  pendingTaskPlanDraft.taskPlan.subtasks.splice(index, 1);
+  recordAppLog("task.plan.subtask.deleted", {
+    projectId: pendingTaskPlanDraft.projectId,
+    draftId: pendingTaskPlanDraft.id,
+    index,
+    count: pendingTaskPlanDraft.taskPlan.subtasks.length
+  });
+  renderTaskPlanPreviewModal(pendingTaskPlanDraft);
 }
 
 function getMessageTaskLabel(taskId) {
@@ -2001,62 +2214,243 @@ function sendPastedTerminalInstruction(windowId, content) {
   return window.cossAPI.sendTerminalInput(windowId, `\x1b[200~${sanitized}\x1b[201~\r`);
 }
 
-async function injectMessageIntoAgentTerminals(messageId, options = {}) {
+function getDeliveriesForMessage(project, messageId) {
+  return (project?.agentDeliveries || []).filter((delivery) => delivery.messageId === messageId);
+}
+
+function getOutputRefsForMessage(project, messageId) {
+  return (project?.terminalOutputRefs || []).filter((ref) => ref.messageId === messageId);
+}
+
+function queueAgentDeliveriesForMessage(messageId, options = {}) {
   const project = getProject();
   const message = project?.messages?.find((item) => item.id === messageId);
   if (!project || !message) {
-    return { ok: false, injectedCount: 0, reason: "message-not-found" };
+    return { ok: false, queuedCount: 0, reason: "message-not-found" };
   }
 
+  project.agentDeliveries ||= [];
   const targets = getInjectableWindowsForMessage(project, message).slice(0, options.limit || 4);
   if (targets.length === 0) {
-    recordAppLog("agent.instruction.inject.skipped", {
+    recordAppLog("agent.delivery.queue.skipped", {
       projectId: project.id,
       messageId: message.id,
       taskId: message.taskId || "",
       toRoleIds: message.toRoleIds,
       reason: "no-running-agent-terminal"
     }, "warn");
-    return { ok: false, injectedCount: 0, reason: "no-running-agent-terminal" };
+    return { ok: false, queuedCount: 0, reason: "no-running-agent-terminal" };
   }
 
-  const injectedWindowIds = [];
+  const now = new Date().toISOString();
+  const queued = [];
   for (const targetWindow of targets) {
-    const payload = buildTerminalInstructionPayload(message, targetWindow);
-    const ok = await sendPastedTerminalInstruction(targetWindow.id, payload);
-    if (ok) {
-      injectedWindowIds.push(targetWindow.id);
-      targetWindow.status = "working";
-      targetWindow.agentSession = ensureAgentSessionShape(targetWindow, project);
-      targetWindow.agentSession.lastEventAt = new Date().toISOString();
+    const existing = project.agentDeliveries.find((delivery) => (
+      delivery.messageId === message.id
+      && delivery.windowId === targetWindow.id
+      && ["pending", "sent"].includes(delivery.status)
+    ));
+    if (existing) {
+      queued.push(existing);
+      continue;
     }
+    const delivery = ensureAgentDeliveryShape({
+      id: uid("delivery"),
+      messageId: message.id,
+      windowId: targetWindow.id,
+      roleId: targetWindow.roleId,
+      taskId: message.taskId || "",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    });
+    project.agentDeliveries.push(delivery);
+    queued.push(delivery);
   }
 
-  if (injectedWindowIds.length > 0) {
-    const injectedAt = new Date().toISOString();
-    message.injectedWindowIds = uniqueStrings([...(message.injectedWindowIds || []), ...injectedWindowIds]);
-    message.injectedAt = injectedAt;
-    recordAppLog("agent.instruction.injected", {
+  if (queued.length > 0) {
+    recordAppLog("agent.delivery.queued", {
       projectId: project.id,
       messageId: message.id,
       taskId: message.taskId || "",
       source: message.source,
       fromRoleId: message.fromRoleId,
       toRoleIds: message.toRoleIds,
-      windowIds: injectedWindowIds,
-      injectedCount: injectedWindowIds.length,
-      contentLength: message.content.length
+      deliveryIds: queued.map((delivery) => delivery.id),
+      windowIds: queued.map((delivery) => delivery.windowId),
+      queuedCount: queued.length
     });
     saveState();
     render();
   }
 
   return {
-    ok: injectedWindowIds.length > 0,
-    injectedCount: injectedWindowIds.length,
-    windowIds: injectedWindowIds,
-    reason: injectedWindowIds.length > 0 ? "" : "terminal-write-failed"
+    ok: queued.length > 0,
+    queuedCount: queued.length,
+    deliveryIds: queued.map((delivery) => delivery.id),
+    reason: queued.length > 0 ? "" : "terminal-write-failed"
   };
+}
+
+function injectMessageIntoAgentTerminals(messageId, options = {}) {
+  return Promise.resolve(queueAgentDeliveriesForMessage(messageId, options));
+}
+
+async function confirmAgentDelivery(deliveryId) {
+  const project = getProject();
+  const delivery = project?.agentDeliveries?.find((item) => item.id === deliveryId);
+  const message = project?.messages?.find((item) => item.id === delivery?.messageId);
+  const targetWindow = project?.windows?.find((win) => win.id === delivery?.windowId);
+  if (!project || !delivery || !message || !targetWindow) {
+    return { ok: false, reason: "delivery-not-found" };
+  }
+  if (delivery.status !== "pending") {
+    return { ok: false, reason: `delivery-${delivery.status}` };
+  }
+
+  const payload = buildTerminalInstructionPayload(message, targetWindow);
+  const ok = await sendPastedTerminalInstruction(targetWindow.id, payload);
+  const now = new Date().toISOString();
+  delivery.attempts += 1;
+  delivery.updatedAt = now;
+  if (!ok) {
+    delivery.status = "failed";
+    delivery.lastError = "terminal-write-failed";
+    recordAppLog("agent.delivery.failed", {
+      projectId: project.id,
+      deliveryId: delivery.id,
+      messageId: message.id,
+      windowId: targetWindow.id,
+      reason: delivery.lastError
+    }, "error");
+    saveState();
+    render();
+    return { ok: false, reason: delivery.lastError };
+  }
+
+  delivery.status = "sent";
+  delivery.sentAt = now;
+  delivery.lastError = "";
+  message.injectedWindowIds = uniqueStrings([...(message.injectedWindowIds || []), targetWindow.id]);
+  message.injectedAt = now;
+  targetWindow.status = "working";
+  targetWindow.lastInjectedMessageId = message.id;
+  targetWindow.lastAgentDeliveryId = delivery.id;
+  targetWindow.agentSession = ensureAgentSessionShape(targetWindow, project);
+  targetWindow.agentSession.lastEventAt = now;
+  project.terminalOutputRefs ||= [];
+  if (!project.terminalOutputRefs.some((ref) => ref.deliveryId === delivery.id && ref.windowId === targetWindow.id)) {
+    project.terminalOutputRefs.push(ensureTerminalOutputRefShape({
+      id: uid("termref"),
+      messageId: message.id,
+      deliveryId: delivery.id,
+      windowId: targetWindow.id,
+      roleId: targetWindow.roleId,
+      taskId: message.taskId || "",
+      excerpt: "CosS 已确认投递，等待终端输出。",
+      createdAt: now,
+      updatedAt: now
+    }));
+  }
+  recordAppLog("agent.delivery.confirmed", {
+    projectId: project.id,
+    deliveryId: delivery.id,
+    messageId: message.id,
+    taskId: message.taskId || "",
+    windowId: targetWindow.id,
+    roleId: targetWindow.roleId,
+    contentLength: message.content.length
+  });
+  saveState();
+  render();
+  return { ok: true, deliveryId: delivery.id, windowId: targetWindow.id };
+}
+
+function cancelAgentDelivery(deliveryId) {
+  const project = getProject();
+  const delivery = project?.agentDeliveries?.find((item) => item.id === deliveryId);
+  if (!project || !delivery || delivery.status !== "pending") {
+    return false;
+  }
+  delivery.status = "canceled";
+  delivery.canceledAt = new Date().toISOString();
+  delivery.updatedAt = delivery.canceledAt;
+  recordAppLog("agent.delivery.canceled", {
+    projectId: project.id,
+    deliveryId,
+    messageId: delivery.messageId,
+    windowId: delivery.windowId
+  });
+  saveState();
+  render();
+  return true;
+}
+
+function retryAgentDelivery(deliveryId) {
+  const project = getProject();
+  const delivery = project?.agentDeliveries?.find((item) => item.id === deliveryId);
+  if (!project || !delivery || !["failed", "canceled"].includes(delivery.status)) {
+    return false;
+  }
+  delivery.status = "pending";
+  delivery.lastError = "";
+  delivery.updatedAt = new Date().toISOString();
+  recordAppLog("agent.delivery.retried", {
+    projectId: project.id,
+    deliveryId,
+    messageId: delivery.messageId,
+    windowId: delivery.windowId
+  });
+  saveState();
+  render();
+  return true;
+}
+
+function recordTerminalOutputReference(windowId, data) {
+  const project = getProject();
+  const win = project?.windows?.find((item) => item.id === windowId);
+  if (!project || !win?.lastInjectedMessageId || !win?.lastAgentDeliveryId) {
+    return;
+  }
+  const excerpt = stripTerminalControlChars(data).slice(0, 600);
+  if (!excerpt || excerpt.length < 2) {
+    return;
+  }
+  const delivery = project.agentDeliveries?.find((item) => item.id === win.lastAgentDeliveryId);
+  if (!delivery || delivery.status !== "sent") {
+    return;
+  }
+
+  project.terminalOutputRefs ||= [];
+  const now = new Date().toISOString();
+  let ref = project.terminalOutputRefs.find((item) => item.deliveryId === delivery.id && item.windowId === windowId);
+  if (ref) {
+    ref.excerpt = `${ref.excerpt}\n${excerpt}`.trim().slice(-1200);
+    ref.updatedAt = now;
+  } else {
+    ref = ensureTerminalOutputRefShape({
+      id: uid("termref"),
+      messageId: delivery.messageId,
+      deliveryId: delivery.id,
+      windowId,
+      roleId: win.roleId,
+      taskId: delivery.taskId || "",
+      excerpt,
+      createdAt: now,
+      updatedAt: now
+    });
+    project.terminalOutputRefs.push(ref);
+  }
+  project.terminalOutputRefs = project.terminalOutputRefs.slice(-300);
+  recordAppLog("agent.delivery.output-referenced", {
+    projectId: project.id,
+    deliveryId: delivery.id,
+    messageId: delivery.messageId,
+    windowId,
+    excerptLength: excerpt.length
+  });
+  saveState();
+  refreshMessageTimelineList();
 }
 
 function getProjectTimelineEvents(project) {
@@ -2142,9 +2536,34 @@ function renderMessageRows(project) {
       const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
       const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
       const injectableWindows = getInjectableWindowsForMessage(project, message);
+      const deliveries = getDeliveriesForMessage(project, message.id);
+      const refs = getOutputRefsForMessage(project, message.id);
       const injectedLabel = message.injectedWindowIds?.length
         ? `<span>已注入 ${message.injectedWindowIds.length} 个终端</span>`
         : "";
+      const deliverySummary = deliveries.length
+        ? `<span>投递 ${deliveries.filter((item) => item.status === "sent").length}/${deliveries.length}</span>`
+        : "";
+      const deliveryRows = deliveries.length ? `
+        <div class="delivery-list">
+          ${deliveries.map((delivery) => `
+            <div class="delivery-row ${escapeHtml(delivery.status)}">
+              <span>${escapeHtml(getRole(delivery.roleId).name)} · ${escapeHtml(delivery.status)}</span>
+              <span>${escapeHtml(formatDateTime(delivery.updatedAt))}</span>
+              <div class="delivery-actions">
+                ${delivery.status === "pending" ? `
+                  <button class="secondary-button compact" data-action="confirm-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">确认投递</button>
+                  <button class="secondary-button compact" data-action="cancel-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">取消</button>
+                ` : ""}
+                ${["failed", "canceled"].includes(delivery.status) ? `
+                  <button class="secondary-button compact" data-action="retry-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">重试</button>
+                ` : ""}
+              </div>
+              ${delivery.lastError ? `<em>${escapeHtml(delivery.lastError)}</em>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      ` : "";
       return `
         <div class="message-row timeline-row" data-message-id="${escapeHtml(message.id)}">
           <div class="message-row-head">
@@ -2155,13 +2574,15 @@ function renderMessageRows(project) {
             <span>${escapeHtml(channelLabel)}</span>
             <span>${escapeHtml(message.source || "manual")}</span>
             ${injectedLabel}
+            ${deliverySummary}
+            ${refs.length ? `<span>${refs.length} 条输出引用</span>` : ""}
           </div>
           <p>${escapeHtml(message.content)}</p>
-          ${injectableWindows.length > 0 ? `
-            <div class="message-row-actions">
-              <button class="secondary-button compact" data-action="inject-message-terminal" data-message-id="${escapeHtml(message.id)}">注入终端</button>
-            </div>
-          ` : ""}
+          ${deliveryRows}
+          <div class="message-row-actions">
+            ${injectableWindows.length > 0 ? `<button class="secondary-button compact" data-action="inject-message-terminal" data-message-id="${escapeHtml(message.id)}">加入投递队列</button>` : ""}
+            ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">查看输出</button>` : ""}
+          </div>
         </div>
       `;
     })
@@ -2209,7 +2630,7 @@ function showMessageCenterModal(defaults = {}) {
 
   renderModal(`
     <div class="modal message-center-modal">
-      <h2>v0.5.2 协作时间线</h2>
+      <h2>v0.5.3 协作时间线</h2>
       <p>消息和 Agent 结构化事件会保存在当前项目中，用于驱动协作角标、任务群聊和角色私聊。</p>
       <div class="message-composer">
         <div class="field">
@@ -2264,6 +2685,41 @@ function setMessageStatus(message, type = "error") {
   }
   status.className = `form-status ${type}`;
   status.textContent = message;
+}
+
+function showTerminalOutputRefsModal(messageId) {
+  const project = getProject();
+  const message = project?.messages?.find((item) => item.id === messageId);
+  const refs = getOutputRefsForMessage(project, messageId);
+  if (!project || !message) {
+    return;
+  }
+
+  renderModal(`
+    <div class="modal terminal-output-ref-modal">
+      <h2>终端输出引用</h2>
+      <p>这些输出来自已确认投递的 Agent 终端，点击对应窗口可回到角色程序继续查看。</p>
+      <div class="task-plan-summary">
+        <strong>${escapeHtml(getRole(message.fromRoleId).name)} → ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</strong>
+        <span>${escapeHtml(message.content)}</span>
+      </div>
+      <div class="terminal-ref-list">
+        ${refs.length ? refs.map((ref) => `
+          <div class="terminal-ref-row">
+            <div class="message-row-head">
+              <strong>${escapeHtml(getRole(ref.roleId).name)} · ${escapeHtml(formatDateTime(ref.updatedAt))}</strong>
+              <button class="secondary-button compact" data-action="focus-terminal-ref-window" data-window-id="${escapeHtml(ref.windowId)}">定位窗口</button>
+            </div>
+            <pre>${escapeHtml(ref.excerpt)}</pre>
+          </div>
+        `).join("") : `<div class="message-empty">暂无终端输出引用。</div>`}
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="show-message-center">返回时间线</button>
+        <button class="primary-button" data-action="close-modal">关闭</button>
+      </div>
+    </div>
+  `);
 }
 
 function sendRoleMessageFromModal() {
@@ -2412,14 +2868,14 @@ async function sendSubtaskInstructionFromModal(taskId, subtaskId) {
     toRoleIds: message.toRoleIds,
     source: message.source
   });
-  let injectResult = { ok: false, injectedCount: 0, reason: "not-requested" };
+  let injectResult = { ok: false, queuedCount: 0, reason: "not-requested" };
   if (injectTerminal) {
     injectResult = await injectMessageIntoAgentTerminals(message.id, { limit: 1 });
   }
   render();
   showMessageCenterModal({ ...messageComposerDefaults, filterTaskId: task.id });
   const injectSuffix = injectTerminal
-    ? (injectResult.ok ? `并已注入 ${injectResult.injectedCount} 个终端。` : "但未找到可注入的运行中 Agent 终端。")
+    ? (injectResult.ok ? `并已加入 ${injectResult.queuedCount} 个待确认投递。` : "但未找到可投递的运行中 Agent 终端。")
     : "";
   setMessageStatus(`任务指令已发送。${injectSuffix}`, injectTerminal && !injectResult.ok ? "warn" : "ready");
 }
@@ -2522,6 +2978,7 @@ function renderModal(content) {
 
 function closeModal() {
   pendingTaskPlanDraft = null;
+  pendingFileOperation = null;
   document.querySelector(".modal-backdrop")?.remove();
 }
 
@@ -2677,6 +3134,32 @@ function renderAgentAuthLines(auth) {
   ].filter(Boolean);
 
   return lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("");
+}
+
+function renderAgentLoginTestStatus(provider) {
+  const normalized = normalizeAgentProvider(provider);
+  const status = agentLoginTestStatuses[normalized];
+  const attr = `data-agent-login-status="${escapeHtml(normalized)}"`;
+  if (!status) {
+    return `<div class="model-connectivity-status idle" ${attr}>尚未测试 ${normalized === "codex" ? "Codex" : "Claude Code"} 远程登录态。</div>`;
+  }
+  if (status.state === "testing") {
+    return `<div class="model-connectivity-status testing" ${attr}>正在测试远程登录态...</div>`;
+  }
+  if (status.ok) {
+    return `
+      <div class="model-connectivity-status ready" ${attr}>
+        <strong>远程登录态可用</strong>
+        <span>${escapeHtml(status.message || "远程 API 校验通过。")} · ${escapeHtml(formatDateTime(status.checkedAt))}</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="model-connectivity-status missing" ${attr}>
+      <strong>${status.skipped ? "远程登录态未测试" : "远程登录态不可用"}</strong>
+      <span>${escapeHtml(status.message || status.error || "远程 API 校验失败。")}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
+    </div>
+  `;
 }
 
 function renderLogRows() {
@@ -2910,6 +3393,14 @@ function renderAgentSettingsSection() {
     <div class="settings-status-slot" id="claudeStatusMount">${renderClaudeStatus(latestClaudeStatus)}</div>
     <div class="settings-row">
       <div>
+        <strong>Claude Code 登录测试</strong>
+        <span>手动调用远程 API 校验当前凭据是否可用；没有 API key 时只显示跳过原因。</span>
+      </div>
+      <button class="secondary-button" data-action="test-agent-login" data-provider="claude">测试登录态</button>
+    </div>
+    <div class="settings-status-slot" id="claudeLoginTestMount">${renderAgentLoginTestStatus("claude")}</div>
+    <div class="settings-row">
+      <div>
         <strong>Codex 命令</strong>
         <span>默认查找 codex；不可运行时会通过 npm 自动安装 Codex CLI。需要自定义路径时，可设置环境变量 COSS_CODEX_COMMAND。</span>
       </div>
@@ -2923,6 +3414,14 @@ function renderAgentSettingsSection() {
       <button class="secondary-button" data-action="check-codex">重新检测</button>
     </div>
     <div class="settings-status-slot" id="codexStatusMount">${renderCodexStatus(latestCodexStatus)}</div>
+    <div class="settings-row">
+      <div>
+        <strong>Codex 登录测试</strong>
+        <span>手动调用 OpenAI/Codex 远程 API 校验当前凭据是否可用；没有 key 时只显示跳过原因。</span>
+      </div>
+      <button class="secondary-button" data-action="test-agent-login" data-provider="codex">测试登录态</button>
+    </div>
+    <div class="settings-status-slot" id="codexLoginTestMount">${renderAgentLoginTestStatus("codex")}</div>
     <div class="settings-row">
       <div>
         <strong>Agent 角色提示词模板</strong>
@@ -3053,6 +3552,34 @@ async function checkCodexStatus() {
   const nextMount = document.getElementById("codexStatusMount");
   if (nextMount) {
     nextMount.innerHTML = renderCodexStatus(latestCodexStatus);
+  }
+}
+
+async function testAgentLogin(provider) {
+  const normalized = normalizeAgentProvider(provider);
+  agentLoginTestStatuses[normalized] = { state: "testing" };
+  const mountId = normalized === "codex" ? "codexLoginTestMount" : "claudeLoginTestMount";
+  const mount = document.getElementById(mountId);
+  if (mount) {
+    mount.innerHTML = renderAgentLoginTestStatus(normalized);
+  }
+
+  try {
+    const result = await window.cossAPI.testAgentLogin(normalized);
+    agentLoginTestStatuses[normalized] = result || { ok: false, message: "远程登录态测试无返回。" };
+  } catch (error) {
+    agentLoginTestStatuses[normalized] = {
+      ok: false,
+      skipped: false,
+      provider: normalized,
+      checkedAt: new Date().toISOString(),
+      message: error.message
+    };
+  }
+
+  const nextMount = document.getElementById(mountId);
+  if (nextMount) {
+    nextMount.innerHTML = renderAgentLoginTestStatus(normalized);
   }
 }
 
@@ -3613,20 +4140,41 @@ function renderTerminalContent(win) {
 
 function renderBrowserContent(win) {
   const role = getRole(win.roleId);
-  const url = normalizeBrowserUrl(win.browserUrl || DEFAULT_BROWSER_URL);
+  ensureBrowserWindowShape(win);
+  const activeTab = getActiveBrowserTab(win);
+  const url = normalizeBrowserUrl(activeTab?.url || win.browserUrl || DEFAULT_BROWSER_URL);
+  const bookmarks = uniqueStrings(win.browserBookmarks || []);
+  const history = (win.browserHistory || []).slice(-5).reverse();
   const partition = `persist:coss-${state.activeProjectId || "default"}-${role.id}`;
   return `
     <div class="browser-program">
+      <div class="browser-tabs">
+        ${win.browserTabs.map((tab) => `
+          <button class="browser-tab ${tab.id === win.activeBrowserTabId ? "active" : ""}" data-action="browser-switch-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">
+            <span>${escapeHtml(tab.title || tab.url || "新标签")}</span>
+          </button>
+        `).join("")}
+        <button class="icon-button" title="新标签" data-action="browser-new-tab" data-window-id="${escapeHtml(win.id)}">+</button>
+        ${win.browserTabs.length > 1 ? `<button class="icon-button" title="关闭当前标签" data-action="browser-close-tab" data-window-id="${escapeHtml(win.id)}">×</button>` : ""}
+      </div>
       <div class="browser-bar">
         <button class="icon-button" title="后退" data-action="browser-back" data-window-id="${escapeHtml(win.id)}">‹</button>
         <button class="icon-button" title="前进" data-action="browser-forward" data-window-id="${escapeHtml(win.id)}">›</button>
         <button class="icon-button" title="刷新" data-action="browser-reload" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
         <input class="browser-address" data-browser-address="${escapeHtml(win.id)}" value="${escapeHtml(url)}" />
         <button class="primary-button compact" data-action="browser-go" data-window-id="${escapeHtml(win.id)}">打开</button>
+        <button class="secondary-button compact" data-action="browser-bookmark" data-window-id="${escapeHtml(win.id)}">${bookmarks.includes(url) ? "已收藏" : "收藏"}</button>
+      </div>
+      <div class="browser-quick-links">
+        <span>收藏</span>
+        ${bookmarks.slice(-5).reverse().map((item) => `<button data-action="browser-open-bookmark" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("") || "<em>暂无</em>"}
+        <span>历史</span>
+        ${history.map((item) => `<button data-action="browser-open-history" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item.url)}">${escapeHtml(item.title || item.url)}</button>`).join("") || "<em>暂无</em>"}
       </div>
       <div class="browser-status" data-browser-status="${escapeHtml(win.id)}">${escapeHtml(win.browserStatus || `${role.name} 浏览器就绪`)}</div>
       <webview class="browser-webview"
         data-browser-webview="${escapeHtml(win.id)}"
+        data-browser-tab-id="${escapeHtml(activeTab?.id || "")}"
         src="${escapeHtml(url)}"
         partition="${escapeHtml(partition)}"
         allowpopups="false"></webview>
@@ -3646,6 +4194,10 @@ function renderFileContent(win) {
           <button class="secondary-button compact" data-action="file-open" data-window-id="${escapeHtml(win.id)}">打开</button>
           <button class="secondary-button compact" data-action="file-pick" data-window-id="${escapeHtml(win.id)}">选择</button>
           <button class="primary-button compact" data-action="file-save" data-window-id="${escapeHtml(win.id)}">保存</button>
+          <button class="secondary-button compact" data-action="file-save-as" data-window-id="${escapeHtml(win.id)}">另存为</button>
+          <button class="secondary-button compact" data-action="file-create-folder" data-window-id="${escapeHtml(win.id)}">新建文件夹</button>
+          <button class="secondary-button compact" data-action="file-rename" data-window-id="${escapeHtml(win.id)}">重命名</button>
+          <button class="secondary-button compact danger" data-action="file-delete" data-window-id="${escapeHtml(win.id)}">删除</button>
         </div>
         <div class="file-status ${win.fileError ? "error" : ""}" data-file-status="${escapeHtml(win.id)}">
           ${escapeHtml(win.fileError || win.fileStatus || `${role.name} 文件编辑器 · ${project ? project.path : "未选择项目"}`)}
@@ -3661,8 +4213,11 @@ function renderFileContent(win) {
             ${
               fileList.length
                 ? fileList.slice(0, 120).map((file) => `
-                    <button class="file-list-item ${file.path === win.filePath ? "active" : ""}" data-action="file-open-list-item" data-window-id="${escapeHtml(win.id)}" data-file-path-value="${escapeHtml(file.path)}">
-                      <span>${escapeHtml(file.path)}</span>
+                    <button class="file-list-item ${file.path === win.filePath ? "active" : ""} ${file.type === "directory" ? "folder" : ""}"
+                      data-action="${file.type === "directory" ? "file-select-list-path" : "file-open-list-item"}"
+                      data-window-id="${escapeHtml(win.id)}"
+                      data-file-path-value="${escapeHtml(file.path)}">
+                      <span>${file.type === "directory" ? "[dir] " : ""}${escapeHtml(file.path)}</span>
                     </button>
                   `).join("")
                 : `<div class="file-list-empty">点击刷新或输入路径打开项目文件。</div>`
@@ -3729,19 +4284,75 @@ function renderSubtaskStatusChip(status) {
   return `<span class="subtask-status ${escapeHtml(normalized)}">${escapeHtml(SUBTASK_STATUS_DEFS[normalized].label)}</span>`;
 }
 
+function getSubtaskTaskUrl(task, subtask) {
+  return extractFirstUrl([
+    task?.goal || "",
+    task?.title || "",
+    subtask?.description || "",
+    subtask?.title || ""
+  ].join("\n"));
+}
+
+function openTaskUrlForSubtask(taskId, subtaskId) {
+  const project = getProject();
+  const task = project?.tasks.find((item) => item.id === taskId);
+  const subtask = task?.subtasks.find((item) => item.id === subtaskId);
+  const url = getSubtaskTaskUrl(task, subtask);
+  if (!project || !task || !subtask || !url) {
+    return;
+  }
+
+  const desktopId = task.desktopId || getActiveDesktopId(project);
+  let browserWindow = project.windows.find((win) => (
+    win.type === "browser"
+    && win.roleId === subtask.roleId
+    && win.desktopId === desktopId
+  ));
+  if (!browserWindow) {
+    browserWindow = createProgram("browser", subtask.roleId, {
+      desktopId,
+      browserUrl: url
+    });
+  }
+  if (!browserWindow) {
+    return;
+  }
+  project.activeDesktopId = desktopId;
+  ensureBrowserWindowShape(browserWindow);
+  setActiveBrowserTabState(browserWindow, { url: normalizeBrowserUrl(url), title: "任务 URL", status: "ready" });
+  pushBrowserHistory(browserWindow, url, "任务 URL");
+  focusWindow(browserWindow.id, { render: false });
+  recordAppLog("browser.task-url.opened", {
+    projectId: project.id,
+    taskId,
+    subtaskId,
+    roleId: subtask.roleId,
+    windowId: browserWindow.id,
+    url
+  });
+  saveState();
+  render();
+}
+
 function renderSubtaskActions(taskId, subtask) {
+  const project = getProject();
+  const task = project?.tasks.find((item) => item.id === taskId);
   const status = normalizeSubtaskStatus(subtask.status);
   const button = (label, nextStatus, kind = "secondary") => (
     `<button class="${kind}-button compact" data-action="set-subtask-status" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(label)}</button>`
   );
   const instructionButton = `<button class="secondary-button compact" data-action="show-subtask-instruction" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">发送给角色</button>`;
+  const url = getSubtaskTaskUrl(task, subtask);
+  const taskUrlButton = url
+    ? `<button class="secondary-button compact" data-action="open-task-url" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">打开任务 URL</button>`
+    : "";
   const actions = {
     pending: [button("开始执行", "running", "primary")],
     running: [button("标记完成", "done", "primary"), button("标记阻塞", "blocked")],
     blocked: [button("继续执行", "running", "primary"), button("标记完成", "done")],
     done: [button("重新打开", "pending")]
   }[status] || [];
-  return `<div class="task-actions">${[...actions, instructionButton].join("")}</div>`;
+  return `<div class="task-actions">${[...actions, instructionButton, taskUrlButton].join("")}</div>`;
 }
 
 function renderCollabPopover(win, collaborators, status) {
@@ -3811,6 +4422,7 @@ function setBrowserStatus(windowId, message, status = "ready") {
   const win = getWindowState(windowId);
   if (win) {
     win.browserStatus = message;
+    setActiveBrowserTabState(win, { status: message });
   }
   const node = document.querySelector(`[data-browser-status="${CSS.escape(windowId)}"]`);
   if (node) {
@@ -3828,11 +4440,12 @@ function navigateBrowserWindow(windowId, rawUrl = null) {
   }
 
   const url = normalizeBrowserUrl(rawUrl ?? input?.value ?? win.browserUrl);
-  win.browserUrl = url;
+  setActiveBrowserTabState(win, { url, status: `正在打开 ${url}` });
   if (input) {
     input.value = url;
   }
   setBrowserStatus(windowId, `正在打开 ${url}`, "loading");
+  pushBrowserHistory(win, url);
   recordAppLog("browser.navigate", { projectId: state.activeProjectId, windowId, url });
   saveState();
   try {
@@ -3867,13 +4480,95 @@ function runBrowserCommand(windowId, command) {
   }
 }
 
+function createBrowserTab(windowId, url = DEFAULT_BROWSER_URL) {
+  const win = getWindowState(windowId);
+  if (!win) {
+    return;
+  }
+  ensureBrowserWindowShape(win);
+  const tab = {
+    id: uid("tab"),
+    url: normalizeBrowserUrl(url),
+    title: "",
+    status: "ready",
+    createdAt: new Date().toISOString()
+  };
+  win.browserTabs.push(tab);
+  win.browserTabs = win.browserTabs.slice(-8);
+  win.activeBrowserTabId = tab.id;
+  recordAppLog("browser.tab.created", { projectId: state.activeProjectId, windowId, tabId: tab.id, url: tab.url });
+  saveState();
+  render();
+}
+
+function switchBrowserTab(windowId, tabId) {
+  const win = getWindowState(windowId);
+  if (!win || !win.browserTabs?.some((tab) => tab.id === tabId)) {
+    return;
+  }
+  win.activeBrowserTabId = tabId;
+  const tab = getActiveBrowserTab(win);
+  win.browserUrl = tab?.url || win.browserUrl;
+  win.browserStatus = tab?.status || "ready";
+  recordAppLog("browser.tab.switched", { projectId: state.activeProjectId, windowId, tabId });
+  saveState();
+  render();
+}
+
+function closeBrowserTab(windowId) {
+  const win = getWindowState(windowId);
+  if (!win) {
+    return;
+  }
+  ensureBrowserWindowShape(win);
+  if (win.browserTabs.length <= 1) {
+    return;
+  }
+  const closingTabId = win.activeBrowserTabId;
+  const closingIndex = win.browserTabs.findIndex((tab) => tab.id === closingTabId);
+  win.browserTabs = win.browserTabs.filter((tab) => tab.id !== closingTabId);
+  win.activeBrowserTabId = win.browserTabs[Math.max(0, closingIndex - 1)]?.id || win.browserTabs[0].id;
+  recordAppLog("browser.tab.closed", { projectId: state.activeProjectId, windowId, tabId: closingTabId });
+  saveState();
+  render();
+}
+
+function toggleBrowserBookmark(windowId) {
+  const win = getWindowState(windowId);
+  const tab = getActiveBrowserTab(win);
+  if (!win || !tab?.url) {
+    return;
+  }
+  win.browserBookmarks ||= [];
+  const url = normalizeBrowserUrl(tab.url);
+  if (win.browserBookmarks.includes(url)) {
+    win.browserBookmarks = win.browserBookmarks.filter((item) => item !== url);
+  } else {
+    win.browserBookmarks.push(url);
+    win.browserBookmarks = uniqueStrings(win.browserBookmarks).slice(-40);
+  }
+  recordAppLog("browser.bookmark.toggled", { projectId: state.activeProjectId, windowId, url, saved: win.browserBookmarks.includes(url) });
+  saveState();
+  render();
+}
+
+function openBrowserUrlInWindow(windowId, url, newTab = false) {
+  if (newTab) {
+    createBrowserTab(windowId, url);
+    return;
+  }
+  navigateBrowserWindow(windowId, url);
+}
+
 function hydrateBrowserViews() {
   document.querySelectorAll("webview[data-browser-webview]").forEach((webview) => {
     const windowId = webview.dataset.browserWebview;
-    if (!windowId || hydratedBrowserViews.has(windowId)) {
+    const tabId = webview.dataset.browserTabId || "";
+    const hydrationKey = `${windowId}:${tabId}`;
+    if (!windowId || hydratedBrowserViews.has(hydrationKey)) {
       return;
     }
-    hydratedBrowserViews.add(windowId);
+    hydratedBrowserViews.add(hydrationKey);
     webview.addEventListener("did-start-loading", () => {
       setBrowserStatus(windowId, "正在加载页面...", "loading");
     });
@@ -3882,9 +4577,12 @@ function hydrateBrowserViews() {
       const title = webview.getTitle?.() || "";
       const win = getWindowState(windowId);
       if (win) {
-        win.browserUrl = url || win.browserUrl;
-        win.browserTitle = title;
-        win.browserStatus = title ? `已加载：${title}` : "页面已加载";
+        setActiveBrowserTabState(win, {
+          url: url || win.browserUrl,
+          title,
+          status: title ? `已加载：${title}` : "页面已加载"
+        });
+        pushBrowserHistory(win, url || win.browserUrl, title);
         saveState();
       }
       const input = document.querySelector(`[data-browser-address="${CSS.escape(windowId)}"]`);
@@ -3896,13 +4594,15 @@ function hydrateBrowserViews() {
     webview.addEventListener("did-navigate", (event) => {
       const win = getWindowState(windowId);
       if (win && event.url) {
-        win.browserUrl = event.url;
+        setActiveBrowserTabState(win, { url: event.url });
+        pushBrowserHistory(win, event.url);
       }
     });
     webview.addEventListener("did-navigate-in-page", (event) => {
       const win = getWindowState(windowId);
       if (win && event.url) {
-        win.browserUrl = event.url;
+        setActiveBrowserTabState(win, { url: event.url });
+        pushBrowserHistory(win, event.url);
       }
     });
     webview.addEventListener("did-fail-load", (event) => {
@@ -4044,6 +4744,219 @@ async function saveFileFromWindow(windowId) {
   saveState();
   recordAppLog("file.saved.renderer", { projectId: project.id, windowId, path: result.path, size: result.size });
   await refreshFileList(windowId);
+}
+
+function selectFileListPath(windowId, filePath) {
+  const win = getWindowState(windowId);
+  if (!win) {
+    return;
+  }
+  win.filePath = filePath || "";
+  win.fileStatus = `已选择 ${win.filePath}`;
+  win.fileError = "";
+  const input = document.querySelector(`[data-file-path="${CSS.escape(windowId)}"]`);
+  if (input) {
+    input.value = win.filePath;
+  }
+  setFileStatus(windowId, win.fileStatus, "ready");
+  saveState();
+}
+
+function showFileOperationModal(windowId, operation) {
+  const project = getProject();
+  const win = getWindowState(windowId);
+  if (!project || !win) {
+    return;
+  }
+  const currentPath = String(document.querySelector(`[data-file-path="${CSS.escape(windowId)}"]`)?.value || win.filePath || "").trim();
+  const baseDir = currentPath && /[/\\]/.test(currentPath) ? currentPath.replace(/[/\\][^/\\]*$/, "") : "";
+  const config = {
+    "create-folder": {
+      title: "新建文件夹",
+      label: "项目内文件夹路径",
+      defaultValue: baseDir ? `${baseDir}/new-folder` : "new-folder",
+      confirmLabel: "创建"
+    },
+    "save-as": {
+      title: "另存为",
+      label: "新的项目内文件路径",
+      defaultValue: currentPath || "untitled.md",
+      confirmLabel: "另存为"
+    },
+    rename: {
+      title: "重命名",
+      label: "新的项目内路径",
+      defaultValue: currentPath,
+      confirmLabel: "重命名"
+    },
+    delete: {
+      title: "删除",
+      label: "将删除的项目内路径",
+      defaultValue: currentPath,
+      confirmLabel: "确认删除",
+      danger: true
+    }
+  }[operation];
+
+  if (!config || (!config.defaultValue && operation !== "create-folder")) {
+    setFileStatus(windowId, "请先选择文件或文件夹。", "error");
+    return;
+  }
+
+  pendingFileOperation = { windowId, operation, fromPath: currentPath };
+  renderModal(`
+    <div class="modal file-operation-modal">
+      <h2>${escapeHtml(config.title)}</h2>
+      <p>路径必须位于当前项目目录内：${escapeHtml(project.path)}</p>
+      <div class="field">
+        <label for="fileOperationPath">${escapeHtml(config.label)}</label>
+        <input id="fileOperationPath" value="${escapeHtml(config.defaultValue)}" ${operation === "delete" ? "readonly" : ""} />
+      </div>
+      <div id="fileOperationStatus" class="form-status muted">${operation === "delete" ? "删除操作不可撤销，请确认路径无误。" : "确认后会写入项目文件系统。"}</div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="${config.danger ? "secondary-button danger" : "primary-button"}" data-action="confirm-file-operation">${escapeHtml(config.confirmLabel)}</button>
+      </div>
+    </div>
+  `);
+}
+
+function setFileOperationStatus(message, type = "error") {
+  const status = document.getElementById("fileOperationStatus");
+  if (!status) {
+    return;
+  }
+  status.className = `form-status ${type}`;
+  status.textContent = message;
+}
+
+function createFolderFromWindow(windowId) {
+  showFileOperationModal(windowId, "create-folder");
+}
+
+function saveFileAsFromWindow(windowId) {
+  showFileOperationModal(windowId, "save-as");
+}
+
+function renameFileFromWindow(windowId) {
+  showFileOperationModal(windowId, "rename");
+}
+
+function deleteFileFromWindow(windowId) {
+  showFileOperationModal(windowId, "delete");
+}
+
+async function confirmFileOperationFromModal() {
+  const operation = pendingFileOperation;
+  const targetPath = document.getElementById("fileOperationPath")?.value.trim();
+  if (!operation || !targetPath) {
+    setFileOperationStatus("请填写项目内路径。");
+    return;
+  }
+  const project = getProject();
+  const win = getWindowState(operation.windowId);
+  if (!project || !win) {
+    setFileOperationStatus("当前项目或窗口不存在。");
+    return;
+  }
+
+  const windowId = operation.windowId;
+  if (operation.operation === "create-folder") {
+    if (!window.cossAPI?.createProjectFolder) {
+      setFileOperationStatus("当前运行环境不支持新建文件夹。");
+      return;
+    }
+    const result = await window.cossAPI.createProjectFolder({
+      projectPath: project.path,
+      folderPath: targetPath
+    });
+    if (!result?.ok) {
+      setFileOperationStatus(result?.error || "新建文件夹失败。");
+      return;
+    }
+    pendingFileOperation = null;
+    closeModal();
+    win.filePath = result.path;
+    setFileStatus(windowId, `已创建文件夹 ${result.path}`, "ready");
+    recordAppLog("file.folder.created.renderer", { projectId: project.id, windowId, path: result.path });
+    await refreshFileList(windowId);
+    return;
+  }
+
+  if (operation.operation === "save-as") {
+    if (!window.cossAPI?.writeProjectFile) {
+      setFileOperationStatus("当前运行环境不支持保存文件。");
+      return;
+    }
+    const editor = document.querySelector(`[data-file-editor="${CSS.escape(windowId)}"]`);
+    const content = String(editor?.value ?? win.fileDraft ?? "");
+    const result = await window.cossAPI.writeProjectFile({
+      projectPath: project.path,
+      filePath: targetPath,
+      content
+    });
+    if (!result?.ok) {
+      setFileOperationStatus(result?.error || "另存为失败。");
+      return;
+    }
+    pendingFileOperation = null;
+    closeModal();
+    win.filePath = result.path;
+    win.fileDraft = content;
+    win.fileLoaded = true;
+    win.fileDirty = false;
+    setFileStatus(windowId, `已另存为 ${result.path}`, "ready");
+    recordAppLog("file.saved-as.renderer", { projectId: project.id, windowId, path: result.path, size: result.size });
+    await refreshFileList(windowId);
+    return;
+  }
+
+  if (operation.operation === "rename") {
+    if (!window.cossAPI?.renameProjectFile || !operation.fromPath) {
+      setFileOperationStatus("请先选择要重命名的文件或文件夹。");
+      return;
+    }
+    const result = await window.cossAPI.renameProjectFile({
+      projectPath: project.path,
+      fromPath: operation.fromPath,
+      toPath: targetPath
+    });
+    if (!result?.ok) {
+      setFileOperationStatus(result?.error || "重命名失败。");
+      return;
+    }
+    pendingFileOperation = null;
+    closeModal();
+    win.filePath = result.path;
+    setFileStatus(windowId, `已重命名为 ${result.path}`, "ready");
+    recordAppLog("file.renamed.renderer", { projectId: project.id, windowId, fromPath: operation.fromPath, path: result.path });
+    await refreshFileList(windowId);
+    return;
+  }
+
+  if (operation.operation === "delete") {
+    if (!window.cossAPI?.deleteProjectFile || !operation.fromPath) {
+      setFileOperationStatus("请先选择要删除的文件或文件夹。");
+      return;
+    }
+    const result = await window.cossAPI.deleteProjectFile({
+      projectPath: project.path,
+      filePath: operation.fromPath
+    });
+    if (!result?.ok) {
+      setFileOperationStatus(result?.error || "删除失败。");
+      return;
+    }
+    pendingFileOperation = null;
+    closeModal();
+    win.filePath = "";
+    win.fileDraft = "";
+    win.fileLoaded = false;
+    win.fileDirty = false;
+    setFileStatus(windowId, `已删除 ${result.path}`, "ready");
+    recordAppLog("file.deleted.renderer", { projectId: project.id, windowId, path: result.path });
+    await refreshFileList(windowId);
+  }
 }
 
 function cleanupTerminalView(windowId, disposeBackend = false) {
@@ -4201,6 +5114,7 @@ function hydrateTerminalWindows() {
     const unsubscribeData = window.cossAPI.onTerminalData(({ id, data }) => {
       if (id === win.id) {
         term.write(data);
+        recordTerminalOutputReference(win.id, data);
       }
     });
     const unsubscribeExit = window.cossAPI.onTerminalExit(({ id, exitCode }) => {
@@ -4710,6 +5624,31 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "browser-new-tab") {
+    createBrowserTab(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "browser-close-tab") {
+    closeBrowserTab(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "browser-switch-tab") {
+    switchBrowserTab(target.dataset.windowId, target.dataset.tabId);
+    return;
+  }
+
+  if (action === "browser-bookmark") {
+    toggleBrowserBookmark(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "browser-open-history" || action === "browser-open-bookmark") {
+    openBrowserUrlInWindow(target.dataset.windowId, target.dataset.url);
+    return;
+  }
+
   if (action === "browser-reload") {
     runBrowserCommand(target.dataset.windowId, "reload");
     return;
@@ -4740,6 +5679,11 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "file-select-list-path") {
+    selectFileListPath(target.dataset.windowId, target.dataset.filePathValue);
+    return;
+  }
+
   if (action === "file-pick") {
     pickFileForWindow(target.dataset.windowId);
     return;
@@ -4747,6 +5691,31 @@ document.addEventListener("click", (event) => {
 
   if (action === "file-save") {
     saveFileFromWindow(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "file-save-as") {
+    saveFileAsFromWindow(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "file-create-folder") {
+    createFolderFromWindow(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "file-rename") {
+    renameFileFromWindow(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "file-delete") {
+    deleteFileFromWindow(target.dataset.windowId);
+    return;
+  }
+
+  if (action === "confirm-file-operation") {
+    confirmFileOperationFromModal();
     return;
   }
 
@@ -4867,6 +5836,11 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "test-agent-login") {
+    testAgentLogin(target.dataset.provider);
+    return;
+  }
+
   if (action === "create-task") {
     createTaskFromModal();
     return;
@@ -4882,6 +5856,11 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "open-task-url") {
+    openTaskUrlForSubtask(target.dataset.taskId, target.dataset.subtaskId);
+    return;
+  }
+
   if (action === "send-subtask-instruction") {
     sendSubtaskInstructionFromModal(target.dataset.taskId, target.dataset.subtaskId);
     return;
@@ -4891,15 +5870,53 @@ document.addEventListener("click", (event) => {
     injectMessageIntoAgentTerminals(target.dataset.messageId).then((result) => {
       showMessageCenterModal(messageComposerDefaults);
       setMessageStatus(
-        result.ok ? `已注入 ${result.injectedCount} 个 Agent 终端。` : "未找到可注入的运行中 Agent 终端。",
+        result.ok ? `已加入 ${result.queuedCount} 个待确认投递。` : "未找到可投递的运行中 Agent 终端。",
         result.ok ? "ready" : "warn"
       );
     });
     return;
   }
 
+  if (action === "confirm-agent-delivery") {
+    confirmAgentDelivery(target.dataset.deliveryId).then(() => showMessageCenterModal(messageComposerDefaults));
+    return;
+  }
+
+  if (action === "cancel-agent-delivery") {
+    cancelAgentDelivery(target.dataset.deliveryId);
+    showMessageCenterModal(messageComposerDefaults);
+    return;
+  }
+
+  if (action === "retry-agent-delivery") {
+    retryAgentDelivery(target.dataset.deliveryId);
+    showMessageCenterModal(messageComposerDefaults);
+    return;
+  }
+
+  if (action === "show-terminal-output-refs") {
+    showTerminalOutputRefsModal(target.dataset.messageId);
+    return;
+  }
+
+  if (action === "focus-terminal-ref-window") {
+    closeModal();
+    focusWindow(target.dataset.windowId);
+    return;
+  }
+
   if (action === "confirm-task-plan") {
     confirmTaskPlan();
+    return;
+  }
+
+  if (action === "add-task-plan-subtask") {
+    addPendingTaskPlanSubtask();
+    return;
+  }
+
+  if (action === "delete-task-plan-subtask") {
+    deletePendingTaskPlanSubtask(Number(target.dataset.planIndex));
     return;
   }
 
@@ -4969,6 +5986,12 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("input", (event) => {
   const inputTarget = event.target instanceof Element ? event.target : null;
+  const planField = inputTarget?.closest("[data-plan-field]");
+  if (planField) {
+    updatePendingTaskPlanField(Number(planField.dataset.planIndex), planField.dataset.planField, planField.value);
+    return;
+  }
+
   if (inputTarget?.id === "messageTimelineSearch") {
     messageTimelineFilters = {
       ...messageTimelineFilters,
@@ -5016,6 +6039,12 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) {
+    return;
+  }
+
+  const planField = target.closest("[data-plan-field]");
+  if (planField) {
+    updatePendingTaskPlanField(Number(planField.dataset.planIndex), planField.dataset.planField, planField.value);
     return;
   }
 
