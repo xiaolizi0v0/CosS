@@ -1171,6 +1171,27 @@ button {
   line-height: 1.55;
 }
 
+.message-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: #58667d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.checkbox-line input {
+  width: 16px;
+  height: 16px;
+}
+
 @media (max-width: 680px) {
   .message-composer {
     grid-template-columns: 1fr;

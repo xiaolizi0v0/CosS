@@ -76,7 +76,7 @@ test("boots into the workspace shell", async () => {
 
   try {
     await expect(page.locator(".brand")).toContainText("CosS");
-    await expect(page.locator(".brand-version")).toHaveText("v0.5.1");
+    await expect(page.locator(".brand-version")).toHaveText("v0.5.2");
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".workspace-title")).toHaveText("E2E Project");
   } finally {
@@ -103,7 +103,7 @@ test("creates a project from the project modal", async () => {
   }
 });
 
-test("renders v0.5.1 custom title bar menus and exposes log directory info", async () => {
+test("renders v0.5.2 custom title bar menus and exposes log directory info", async () => {
   const { app, page, userDataDir } = await launchApp();
 
   try {
@@ -132,7 +132,7 @@ test("renders v0.5.1 custom title bar menus and exposes log directory info", asy
     await expect(page.locator(".app-menu-dropdown")).toContainText("关于 CosS");
 
     const info = await page.evaluate(() => window.cossAPI.getAppInfo());
-    expect(info.version).toBe("0.5.1");
+    expect(info.version).toBe("0.5.2");
     expect(info.logDirectory).toBe(path.join(userDataDir, "logs"));
   } finally {
     await app.close();
@@ -544,7 +544,7 @@ test("sends a v0.4 role message from the message center", async () => {
   try {
     await page.locator('.workspace-actions [data-action="show-message-center"]').click();
     await expect(page.locator(".message-center-modal")).toBeVisible();
-    await expect(page.locator(".message-center-modal")).toContainText("v0.5.1 协作时间线");
+    await expect(page.locator(".message-center-modal")).toContainText("v0.5.2 协作时间线");
 
     await page.locator("#messageFromRole").selectOption("product-manager");
     await page.locator("#messageToRole").selectOption("frontend-engineer");
@@ -617,7 +617,7 @@ test("stores confirmed task plan collaboration messages in the v0.4 message bus"
   }
 });
 
-test("v0.5.1 sends subtask instructions into the collaboration timeline", async () => {
+test("v0.5.2 sends subtask instructions into the collaboration timeline", async () => {
   const mockPlan = {
     summary: "登录任务需要产品、前端、后端和测试协同。",
     subtasks: [
@@ -677,6 +677,133 @@ test("v0.5.1 sends subtask instructions into the collaboration timeline", async 
     const logText = await waitForLogEvent(userDataDir, "task.instruction.sent");
     expect(logText).toContain("task-instruction");
   } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.2 injects timeline messages into a running Agent terminal", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page, userDataDir } = await launchApp(
+    {
+      desktops: [
+        {
+          id: "desktop-main",
+          name: "主桌面",
+          createdAt
+        }
+      ],
+      activeDesktopId: "desktop-main",
+      windows: [
+        {
+          id: "agent-inject-terminal",
+          type: "terminal",
+          roleId: "frontend-engineer",
+          title: "前端工程师 Agent(Codex)",
+          x: 280,
+          y: 110,
+          width: 520,
+          height: 340,
+          z: 100,
+          status: "idle",
+          terminalMode: "agent",
+          agentProvider: "codex",
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          desktopId: "desktop-main",
+          agentSession: {
+            sessionId: "agent-session-inject-e2e",
+            provider: "codex",
+            roleId: "frontend-engineer",
+            roleName: "前端工程师",
+            workspace: process.cwd(),
+            projectId: "project-e2e",
+            projectName: "E2E Project",
+            taskId: "task-inject-e2e",
+            subtaskId: "subtask-inject-e2e",
+            sessionName: "CosS-E2E-frontend-codex",
+            promptTemplateVersion: "v0.5",
+            createdAt,
+            lastStartedAt: "",
+            resumeCount: 0,
+            lastActiveMode: "",
+            lastEventAt: ""
+          }
+        }
+      ],
+      tasks: [
+        {
+          id: "task-inject-e2e",
+          title: "登录页任务",
+          goal: "实现登录页",
+          status: "running",
+          desktopId: "desktop-main",
+          createdAt,
+          updatedAt: createdAt,
+          model: { provider: "system", modelName: "agent-brain" },
+          planner: { status: "success", source: "mock", summary: "注入测试", plannedAt: createdAt, confirmedAt: createdAt },
+          subtasks: [
+            {
+              id: "subtask-inject-e2e",
+              roleId: "frontend-engineer",
+              title: "实现登录表单",
+              description: "实现登录表单和错误提示。",
+              status: "running",
+              createdAt,
+              updatedAt: createdAt
+            }
+          ]
+        }
+      ],
+      messages: [
+        {
+          id: "message-inject-e2e",
+          type: "role-message",
+          channelType: "task",
+          channelId: "task:task-inject-e2e",
+          fromRoleId: "product-manager",
+          toRoleIds: ["frontend-engineer"],
+          content: "请直接开始实现登录表单，并同步接口阻塞点。",
+          taskId: "task-inject-e2e",
+          source: "manual",
+          status: "sent",
+          readBy: ["product-manager"],
+          createdAt
+        }
+      ]
+    },
+    {},
+    {
+      settings: {
+        agentProvider: "codex",
+        agentFallbackToShell: true,
+        modelProvider: "system"
+      }
+    }
+  );
+
+  try {
+    await expect(page.locator('.program-window[data-window-id="agent-inject-terminal"]')).toBeVisible();
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-inject-terminal"] .xterm')).toBeVisible();
+
+    await page.locator('.workspace-actions [data-action="show-message-center"]').click();
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    await expect(page.locator('[data-action="inject-message-terminal"]')).toBeVisible();
+    await page.locator('[data-action="inject-message-terminal"]').click();
+
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    await expect(page.locator(".message-row").first()).toContainText("已注入 1 个终端");
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const message = savedState.projects[0].messages.find((item) => item.id === "message-inject-e2e");
+    expect(message.injectedWindowIds).toContain("agent-inject-terminal");
+    expect(message.injectedAt).toBeTruthy();
+
+    const logText = await waitForLogEvent(userDataDir, "agent.instruction.injected");
+    expect(logText).toContain("message-inject-e2e");
+    expect(logText).toContain("agent-inject-terminal");
+  } finally {
+    await page.evaluate(() => window.cossAPI.disposeTerminal("agent-inject-terminal")).catch(() => {});
     await app.close();
   }
 });
@@ -1223,7 +1350,7 @@ test("v0.4.2 task view layout presets arrange current desktop windows", async ()
   }
 });
 
-test("v0.5.1 stores Agent prompt templates and shows Codex auth state on demand", async () => {
+test("v0.5.2 stores Agent prompt templates and shows Codex auth state on demand", async () => {
   const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-codex-auth-"));
   const codexAuthPath = path.join(authDir, "auth.json");
   fs.writeFileSync(
@@ -1261,7 +1388,7 @@ test("v0.5.1 stores Agent prompt templates and shows Codex auth state on demand"
   }
 });
 
-test("v0.5.1 syncs Codex Agent terminal events back to task state and timeline", async () => {
+test("v0.5.2 syncs Codex Agent terminal events back to task state and timeline", async () => {
   const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codex-"));
   const fakeCodexPath = path.join(fakeCliDir, "codex.cmd");
   fs.writeFileSync(
@@ -1269,7 +1396,7 @@ test("v0.5.1 syncs Codex Agent terminal events back to task state and timeline",
     [
       "@echo off",
       "if \"%~1\"==\"--version\" (",
-      "  echo codex-cli 0.5.1-e2e",
+      "  echo codex-cli 0.5.2-e2e",
       "  exit /b 0",
       ")",
       "echo COSS_AGENT_STATUS:done",
