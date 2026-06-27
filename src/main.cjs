@@ -28,6 +28,8 @@ const defaultLlmRequestTimeoutMs = 60000;
 const maxEditableFileBytes = 1024 * 1024 * 2;
 const fileListLimit = 240;
 let windowsEnvCache = null;
+const cossMainWindowIds = new Set();
+let creatingCosSMainWindow = false;
 
 if (process.env.COSS_TEST_USER_DATA) {
   app.setPath("userData", process.env.COSS_TEST_USER_DATA);
@@ -2515,7 +2517,49 @@ function controlWindow(event, action) {
   return { ok: false };
 }
 
+function isAllowedEmbeddedBrowserUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl || "about:blank");
+    return new Set(["http:", "https:", "file:", "data:", "about:"]).has(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function attachEmbeddedBrowserPopupPolicy(contents) {
+  if (!contents || typeof contents.setWindowOpenHandler !== "function") {
+    return;
+  }
+
+  contents.setWindowOpenHandler(({ url }) => {
+    if (!isAllowedEmbeddedBrowserUrl(url)) {
+      appendLogEvent("browser.webview.window-open.blocked", { url, reason: "protocol" }, "warn");
+      return { action: "deny" };
+    }
+
+    appendLogEvent("browser.webview.window-open.redirected", { url });
+    contents.loadURL(url).catch((error) => {
+      appendLogEvent("browser.webview.window-open.redirect.failed", { url, error: serializeError(error) }, "error");
+    });
+    return { action: "deny" };
+  });
+
+  contents.on("did-create-window", (childWindow, details = {}) => {
+    const url = details.url || "";
+    appendLogEvent("browser.webview.created-window.closed", { url });
+    if (isAllowedEmbeddedBrowserUrl(url)) {
+      contents.loadURL(url).catch((error) => {
+        appendLogEvent("browser.webview.created-window.redirect.failed", { url, error: serializeError(error) }, "error");
+      });
+    }
+    if (childWindow && !childWindow.isDestroyed()) {
+      childWindow.destroy();
+    }
+  });
+}
+
 function createMainWindow() {
+  creatingCosSMainWindow = true;
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -2532,12 +2576,13 @@ function createMainWindow() {
       webviewTag: true
     }
   });
+  creatingCosSMainWindow = false;
+  cossMainWindowIds.add(win.id);
+  win.on("closed", () => cossMainWindowIds.delete(win.id));
 
   win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     try {
-      const url = new URL(params.src || "about:blank");
-      const allowedProtocols = new Set(["http:", "https:", "file:", "data:", "about:"]);
-      if (!allowedProtocols.has(url.protocol)) {
+      if (!isAllowedEmbeddedBrowserUrl(params.src || "about:blank")) {
         event.preventDefault();
         appendLogEvent("browser.webview.blocked", { src: params.src || "", reason: "protocol" }, "warn");
         return;
@@ -2555,9 +2600,23 @@ function createMainWindow() {
     webPreferences.allowRunningInsecureContent = false;
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    appendLogEvent("browser.window-open", { url });
-    shell.openExternal(url).catch((error) => appendLogEvent("browser.window-open.failed", { url, error: serializeError(error) }, "error"));
+    if (isAllowedEmbeddedBrowserUrl(url)) {
+      appendLogEvent("browser.window-open.redirected", { url });
+      win.webContents.send("browser:open-url", { url });
+      return { action: "deny" };
+    }
+    appendLogEvent("browser.window-open.blocked", { url, reason: "protocol" }, "warn");
     return { action: "deny" };
+  });
+  win.webContents.on("did-create-window", (childWindow, details = {}) => {
+    const url = details.url || "";
+    appendLogEvent("browser.created-window.closed", { url });
+    if (isAllowedEmbeddedBrowserUrl(url)) {
+      win.webContents.send("browser:open-url", { url });
+    }
+    if (childWindow && !childWindow.isDestroyed()) {
+      childWindow.destroy();
+    }
   });
 
   win.setAutoHideMenuBar(true);
@@ -2568,6 +2627,40 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  app.on("browser-window-created", (_event, createdWindow) => {
+    if (creatingCosSMainWindow || cossMainWindowIds.has(createdWindow.id)) {
+      return;
+    }
+    appendLogEvent("browser.popup-window.closed", {
+      id: createdWindow.id,
+      title: createdWindow.getTitle?.() || "",
+      url: createdWindow.webContents?.getURL?.() || ""
+    }, "warn");
+    if (!createdWindow.isDestroyed()) {
+      createdWindow.destroy();
+    }
+  });
+  app.on("web-contents-created", (_event, contents) => {
+    if (contents.getType?.() === "webview") {
+      attachEmbeddedBrowserPopupPolicy(contents);
+      return;
+    }
+
+    if (contents.getType?.() === "window") {
+      setTimeout(() => {
+        const popupWindow = BrowserWindow.fromWebContents(contents);
+        if (!popupWindow || popupWindow.isDestroyed() || cossMainWindowIds.has(popupWindow.id)) {
+          return;
+        }
+        appendLogEvent("browser.popup-webcontents.closed", {
+          id: popupWindow.id,
+          title: popupWindow.getTitle?.() || "",
+          url: contents.getURL?.() || ""
+        }, "warn");
+        popupWindow.destroy();
+      }, 0);
+    }
+  });
   createAppMenu();
   appendLogEvent("app.ready", { userData: app.getPath("userData"), logDirectory: getLogDirectory() });
   ipcMain.handle("state:load", () => readState());
