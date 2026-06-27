@@ -1,0 +1,21 @@
+{
+  "name": "coss-desktop",
+  "version": "0.5.0",
+  "description": "CosS Windows desktop AI collaboration workspace MVP.",
+  "main": "src/main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "npm run test:e2e",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "electron": "^31.7.7"
+  }
+}
