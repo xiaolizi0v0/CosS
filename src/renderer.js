@@ -96,10 +96,10 @@ const MODEL_PROVIDER_PRESETS = {
     id: "system",
     label: "系统默认",
     description: "内网默认系统模型，无需 API key。",
-    baseUrl: "http://10.21.1.61:26962/v1",
+    baseUrl: "http://10.21.1.45:22845/v1",
     modelName: "agent-brain",
-    apiKeyRequired: false,
-    locked: true
+    apiKeyRequired: true,
+    locked: false
   },
   deepseek: {
     id: "deepseek",
