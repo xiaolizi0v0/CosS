@@ -17,13 +17,16 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.5.3";
+    return "0.5.7";
   }
 })();
 const terminalSessions = new Map();
+const terminalTranscripts = new Map();
+const terminalWebContents = new Map();
 const agentOutputEventKeys = new Map();
 const claudeCodeWingetPackage = "Anthropic.ClaudeCode";
 const codexNpmPackage = "@openai/codex";
+const codeBuddyNpmPackage = "@tencent-ai/codebuddy-code";
 const defaultLlmRequestTimeoutMs = 60000;
 const maxEditableFileBytes = 1024 * 1024 * 2;
 const fileListLimit = 240;
@@ -800,6 +803,21 @@ function getClaudeAuthState(onboarding = null) {
   };
 }
 
+function getCodeBuddyAuthState(env = process.env) {
+  const hasApiKey = Boolean(getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY"));
+  return {
+    label: "CodeBuddy Code",
+    configured: hasApiKey,
+    loggedIn: hasApiKey,
+    source: hasApiKey ? "env" : "missing",
+    configPath: "",
+    configExists: false,
+    configError: "",
+    envKeys: hasApiKey ? ["CODEBUDDY_API_KEY"] : [],
+    checkedAt: new Date().toISOString()
+  };
+}
+
 function commandExists(command, env = getWindowsShellEnv()) {
   if (command.includes("\\") || command.includes("/") || path.isAbsolute(command)) {
     return fs.existsSync(command);
@@ -891,6 +909,18 @@ function checkCodexVersion(command, env) {
   };
 }
 
+function checkCodeBuddyVersion(command, env) {
+  const result = runCommandForStatus(command, ["--version"], env);
+  const output = commandOutput(result);
+  const errorDetail = commandErrorDetail(result, "codebuddy --version");
+
+  return {
+    runnable: result.status === 0,
+    version: result.status === 0 ? output : "",
+    errorDetail
+  };
+}
+
 function getCodexCommandStatus(env = getWindowsShellEnv()) {
   const requestedCommand = process.env.COSS_CODEX_COMMAND || "codex";
   const lookupPaths = findCommandPaths(requestedCommand, env);
@@ -922,6 +952,40 @@ function getCodexCommandStatus(env = getWindowsShellEnv()) {
   };
 }
 
+function getCodeBuddyCommandStatus(env = getWindowsShellEnv()) {
+  const requestedCommand = process.env.COSS_CODEBUDDY_COMMAND || "codebuddy";
+  const aliasCommand = requestedCommand === "codebuddy" ? "cbc" : "";
+  const lookupPaths = [
+    ...findCommandPaths(requestedCommand, env),
+    ...(aliasCommand ? findCommandPaths(aliasCommand, env) : [])
+  ].filter((item, index, list) => item && list.indexOf(item) === index);
+  const npmStatus = getNpmStatus(env);
+  const attemptedCommands = [requestedCommand, ...lookupPaths].filter((item, index, list) => (
+    item && list.indexOf(item) === index
+  ));
+  const attempts = attemptedCommands.map((item) => ({
+    command: item,
+    status: checkCodeBuddyVersion(item, env)
+  }));
+  const runnableAttempt = attempts.find((attempt) => attempt.status.runnable);
+  const primaryStatus = attempts[0]?.status || checkCodeBuddyVersion(requestedCommand, env);
+
+  return {
+    command: runnableAttempt?.command || requestedCommand,
+    requestedCommand,
+    aliasCommand,
+    lookupPaths,
+    runnable: Boolean(runnableAttempt),
+    version: runnableAttempt?.status.version || "",
+    errorDetail: runnableAttempt ? "" : primaryStatus.errorDetail,
+    npm: npmStatus,
+    auth: getCodeBuddyAuthState(env),
+    installCommand: getCodeBuddyInstallCommand(npmStatus.command),
+    autoInstallDisabled: process.env.COSS_DISABLE_CODEBUDDY_AUTO_INSTALL === "1",
+    checkedAt: new Date().toISOString()
+  };
+}
+
 function getNpmCommand() {
   return process.env.COSS_NPM_COMMAND || (process.platform === "win32" ? "npm.cmd" : "npm");
 }
@@ -936,6 +1000,14 @@ function getCodexInstallCommand(npmCommand = getNpmCommand()) {
 
 function getCodexInstallPowerShellInvocation(npmCommand = getNpmCommand()) {
   return buildPowerShellInvocation(npmCommand, ["install", "-g", codexNpmPackage]);
+}
+
+function getCodeBuddyInstallCommand(npmCommand = getNpmCommand()) {
+  return `${renderCommandForDisplay(npmCommand)} install -g ${codeBuddyNpmPackage}`;
+}
+
+function getCodeBuddyInstallPowerShellInvocation(npmCommand = getNpmCommand()) {
+  return buildPowerShellInvocation(npmCommand, ["install", "-g", codeBuddyNpmPackage]);
 }
 
 function getNpmCommonPaths(env) {
@@ -981,6 +1053,27 @@ function buildCodexInstallPowerShellCommand(codexStatus, installCommand) {
     : "";
 
   return `${writeMessages}; ${getCodexInstallPowerShellInvocation(codexStatus.npm?.command)}; Write-Host ''; Write-Host ${powerShellQuote(doneMessage)}${holdScript}`;
+}
+
+function buildCodeBuddyInstallPowerShellCommand(codeBuddyStatus, installCommand) {
+  const holdLogWindow = codeBuddyStatus.holdLogWindow === true;
+  const lookupText = codeBuddyStatus.lookupPaths.length
+    ? `检测到的路径: ${codeBuddyStatus.lookupPaths.join(" | ")}`
+    : "未在 PATH 中找到 codebuddy 或 cbc。";
+  const messages = [
+    `未检测到可运行的 CodeBuddy Code CLI，正在通过 npm 安装 ${codeBuddyNpmPackage}。`,
+    `命令: ${codeBuddyStatus.requestedCommand || codeBuddyStatus.command}`,
+    `原因: ${codeBuddyStatus.errorDetail || "codebuddy --version 未成功运行。"}`,
+    lookupText,
+    `即将执行: ${installCommand}`
+  ].filter(Boolean);
+  const writeMessages = messages.map((line) => `Write-Host ${powerShellQuote(line)}`).join("; ");
+  const doneMessage = "CodeBuddy Code 安装流程已结束。安装完成后请重启 CosS，或重新打开应用终端，让新的 PATH 生效。";
+  const holdScript = holdLogWindow
+    ? `; Write-Host ${powerShellQuote("已停留在日志窗口，关闭此角色窗口即可结束。")}; while ($true) { Start-Sleep -Seconds 3600 }`
+    : "";
+
+  return `${writeMessages}; ${getCodeBuddyInstallPowerShellInvocation(codeBuddyStatus.npm?.command)}; Write-Host ''; Write-Host ${powerShellQuote(doneMessage)}${holdScript}`;
 }
 
 function getNpmStatus(env = getWindowsShellEnv()) {
@@ -1149,6 +1242,16 @@ function getClaudeLoginCredential() {
   return token ? { token, source: "config" } : { token: "", source: "" };
 }
 
+function getCodeBuddyLoginCredential(apiKey = "") {
+  const configuredKey = String(apiKey || "").trim();
+  if (configuredKey) {
+    return { token: configuredKey, source: "settings" };
+  }
+
+  const envKey = process.env.CODEBUDDY_API_KEY || process.env.COSS_AGENT_LOGIN_TEST_API_KEY || "";
+  return envKey ? { token: envKey, source: "env" } : { token: "", source: "" };
+}
+
 function joinApiUrl(baseUrl, endpoint) {
   const base = String(baseUrl || "").trim().replace(/\/+$/, "");
   const suffix = String(endpoint || "").replace(/^\/+/, "");
@@ -1165,17 +1268,28 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
   }
 }
 
-async function testAgentRemoteLogin(_event, provider) {
-  const normalizedProvider = provider === "claude" ? "claude" : "codex";
+async function testAgentRemoteLogin(_event, request) {
+  const payload = typeof request === "object" && request !== null ? request : { provider: request };
+  const normalizedProvider = normalizeAgentProvider(payload.provider);
   const startedAt = Date.now();
   const baseUrl = (
     normalizedProvider === "claude"
       ? process.env.COSS_CLAUDE_LOGIN_TEST_BASE_URL
-      : process.env.COSS_CODEX_LOGIN_TEST_BASE_URL
+      : normalizedProvider === "codebuddy"
+        ? (payload.baseUrl || process.env.CODEBUDDY_BASE_URL || process.env.COSS_CODEBUDDY_LOGIN_TEST_BASE_URL)
+        : process.env.COSS_CODEX_LOGIN_TEST_BASE_URL
   ) || process.env.COSS_AGENT_LOGIN_TEST_BASE_URL || (
-    normalizedProvider === "claude" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"
+    normalizedProvider === "claude"
+      ? "https://api.anthropic.com/v1"
+      : normalizedProvider === "codebuddy"
+        ? "https://api.codebuddy.ai/v1"
+        : "https://api.openai.com/v1"
   );
-  const credential = normalizedProvider === "claude" ? getClaudeLoginCredential() : getCodexLoginCredential();
+  const credential = normalizedProvider === "claude"
+    ? getClaudeLoginCredential()
+    : normalizedProvider === "codebuddy"
+      ? getCodeBuddyLoginCredential(payload.apiKey)
+      : getCodexLoginCredential();
 
   if (!credential.token) {
     const result = {
@@ -1189,7 +1303,9 @@ async function testAgentRemoteLogin(_event, provider) {
       checkedAt: new Date().toISOString(),
       message: normalizedProvider === "claude"
         ? "未找到 Anthropic/Claude API key，无法执行远程登录态校验。"
-        : "未找到 OpenAI/Codex API key 或可用访问令牌，无法执行远程登录态校验。"
+        : normalizedProvider === "codebuddy"
+          ? "未找到 CodeBuddy API key，请先在智能体设置中填写。"
+          : "未找到 OpenAI/Codex API key 或可用访问令牌，无法执行远程登录态校验。"
     };
     appendLogEvent("agent.login-test.skipped", result, "warn");
     return result;
@@ -1274,6 +1390,10 @@ function buildCodexPowerShellCommand(command) {
   return buildPowerShellInvocation(command);
 }
 
+function buildCodeBuddyPowerShellCommand(command) {
+  return buildPowerShellInvocation(command);
+}
+
 function buildHeldInstallPowerShellCommand(messages, invocation, doneMessage) {
   const writeMessages = messages.filter(Boolean).map((line) => `Write-Host ${powerShellQuote(line)}`).join("; ");
   return `${writeMessages}; ${invocation}; Write-Host ''; Write-Host ${powerShellQuote(doneMessage)}; ` +
@@ -1302,8 +1422,11 @@ function normalizeAgentStatus(value) {
   if (["done", "complete", "completed", "success", "succeeded"].includes(normalized)) {
     return "done";
   }
-  if (["blocked", "block", "waiting"].includes(normalized)) {
+  if (["blocked", "block"].includes(normalized)) {
     return "blocked";
+  }
+  if (["waiting", "wait", "approval", "needs_approval", "needs-approval", "confirm", "confirmation"].includes(normalized)) {
+    return "waiting";
   }
   if (["failed", "fail", "error"].includes(normalized)) {
     return "failed";
@@ -1312,6 +1435,23 @@ function normalizeAgentStatus(value) {
     return "running";
   }
   return "";
+}
+
+function detectAgentApprovalWaitEvent(text) {
+  const source = stripAnsi(text);
+  const approvalPatterns = [
+    /do you want to (?:create|edit|modify|overwrite|update|write|delete|run|execute)\b[\s\S]{0,600}\?/i,
+    /(?:yes,\s*)?allow (?:all )?(?:edits|changes|commands)/i,
+    /(?:需要|是否).{0,80}(?:确认|批准|允许|授权)/i
+  ];
+  if (!approvalPatterns.some((pattern) => pattern.test(source))) {
+    return null;
+  }
+  return {
+    type: "approval-wait",
+    status: "waiting",
+    message: sanitizeLogText("Agent 正在等待人工确认。请在对应终端中批准或拒绝后继续。", 500)
+  };
 }
 
 function normalizeAgentEventRoleIds(value) {
@@ -1324,20 +1464,20 @@ function normalizeAgentEventRoleIds(value) {
 
 function parseStructuredAgentEvents(text) {
   const events = [];
-  const prefixRegex = /COSS_AGENT_EVENT\s*:/gi;
-  let match = prefixRegex.exec(text);
+  const markerRegex = /^\s*COSS_AGENT_EVENT\s*:\s*(.+?)\s*$/gim;
+  let match = markerRegex.exec(text);
   while (match) {
-    const afterPrefix = text.slice(match.index + match[0].length);
-    const objectStart = afterPrefix.indexOf("{");
+    const linePayload = match[1] || "";
+    const objectStart = linePayload.indexOf("{");
     if (objectStart === -1) {
-      match = prefixRegex.exec(text);
+      match = markerRegex.exec(text);
       continue;
     }
 
-    const candidateSource = afterPrefix.slice(objectStart);
+    const candidateSource = linePayload.slice(objectStart);
     const jsonText = findBalancedJsonObject(candidateSource);
     if (!jsonText) {
-      match = prefixRegex.exec(text);
+      match = markerRegex.exec(text);
       continue;
     }
 
@@ -1366,26 +1506,29 @@ function parseStructuredAgentEvents(text) {
       events.push({
         type: "structured-parse-error",
         structured: true,
-        status: "failed",
+        status: "",
         message: `COSS_AGENT_EVENT JSON 解析失败：${error.message}`
       });
     }
 
-    prefixRegex.lastIndex = match.index + match[0].length + objectStart + jsonText.length;
-    match = prefixRegex.exec(text);
+    match = markerRegex.exec(text);
   }
   return events;
 }
 
 function parseAgentOutputEvents(data, launch = {}) {
   const activeMode = launch.activeMode || "";
-  if (!["claude", "codex"].includes(activeMode)) {
+  if (!["claude", "codex", "codebuddy"].includes(activeMode)) {
     return [];
   }
 
   const text = stripAnsi(data);
   const events = parseStructuredAgentEvents(text);
-  const statusRegex = /COSS_AGENT_STATUS\s*:\s*([a-zA-Z_-]+)/gi;
+  const approvalWaitEvent = detectAgentApprovalWaitEvent(text);
+  if (approvalWaitEvent) {
+    events.push(approvalWaitEvent);
+  }
+  const statusRegex = /^\s*COSS_AGENT_STATUS\s*:\s*([a-zA-Z_-]+)\s*$/gim;
   let match = statusRegex.exec(text);
   while (match) {
     const status = normalizeAgentStatus(match[1]);
@@ -1396,10 +1539,10 @@ function parseAgentOutputEvents(data, launch = {}) {
   }
 
   const markerStatus = [
-    [/COSS_TASK_DONE/i, "done"],
-    [/COSS_TASK_BLOCKED/i, "blocked"],
-    [/COSS_TASK_FAILED/i, "failed"],
-    [/COSS_TASK_RUNNING/i, "running"]
+    [/^\s*COSS_TASK_DONE\s*$/im, "done"],
+    [/^\s*COSS_TASK_BLOCKED\s*$/im, "blocked"],
+    [/^\s*COSS_TASK_FAILED\s*$/im, "failed"],
+    [/^\s*COSS_TASK_RUNNING\s*$/im, "running"]
   ].find(([pattern]) => pattern.test(text));
   if (markerStatus && !events.some((event) => event.status === markerStatus[1])) {
     events.push({ type: "status", status: markerStatus[1], message: markerStatus[0].source });
@@ -1409,7 +1552,7 @@ function parseAgentOutputEvents(data, launch = {}) {
   const launchSubtaskId = launch.taskContext?.subtaskId || launch.agentSession?.subtaskId || "";
   return events.map((event) => ({
     ...event,
-    provider: activeMode === "codex" ? "codex" : "claude",
+    provider: activeMode,
     activeMode,
     roleId: event.roleId || event.fromRoleId || launch.roleId || "",
     fromRoleId: event.fromRoleId || event.roleId || launch.roleId || "",
@@ -1521,15 +1664,23 @@ function buildRolePrompt(options) {
 }
 
 function normalizeTerminalMode(value) {
-  return value === "agent" || value === "claude" || value === "codex" ? "agent" : "shell";
+  return value === "agent" || value === "claude" || value === "codex" || value === "codebuddy" ? "agent" : "shell";
 }
 
 function normalizeAgentProvider(value) {
-  return value === "codex" ? "codex" : "claude";
+  return ["claude", "codex", "codebuddy"].includes(value) ? value : "claude";
+}
+
+function getAgentProviderLabel(provider) {
+  return {
+    claude: "Claude Code",
+    codex: "Codex",
+    codebuddy: "CodeBuddy Code"
+  }[normalizeAgentProvider(provider)] || "Claude Code";
 }
 
 function getEffectiveAgentProvider(options) {
-  if (options.terminalMode === "codex" || options.terminalMode === "claude") {
+  if (options.terminalMode === "codex" || options.terminalMode === "claude" || options.terminalMode === "codebuddy") {
     return options.terminalMode;
   }
 
@@ -1548,6 +1699,7 @@ function resolveTerminalLaunch(options) {
   const rolePrompt = buildRolePrompt(options);
   const taskContext = options.taskContext || {};
   const agentSession = options.agentSession || {};
+  const codeBuddyApiKey = String(options.codeBuddyApiKey || "").trim();
   const env = getShellEnv({
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
@@ -1563,7 +1715,8 @@ function resolveTerminalLaunch(options) {
     COSS_TASK_ID: taskContext.taskId || agentSession.taskId || "",
     COSS_SUBTASK_ID: taskContext.subtaskId || agentSession.subtaskId || "",
     COSS_TASK_TITLE: taskContext.taskTitle || "",
-    COSS_SUBTASK_TITLE: taskContext.subtaskTitle || ""
+    COSS_SUBTASK_TITLE: taskContext.subtaskTitle || "",
+    ...(agentProvider === "codebuddy" && codeBuddyApiKey ? { CODEBUDDY_API_KEY: codeBuddyApiKey } : {})
   });
 
   if (terminalMode === "shell") {
@@ -1662,6 +1815,112 @@ function resolveTerminalLaunch(options) {
     };
   }
 
+  if (terminalMode === "agent" && agentProvider === "codebuddy") {
+    const codeBuddyStatus = getCodeBuddyCommandStatus(env);
+    const hasCodeBuddyKey = Boolean(codeBuddyApiKey || getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY"));
+
+    if (!codeBuddyStatus.runnable) {
+      const lookupText = codeBuddyStatus.lookupPaths.length
+        ? `\r\n检测到的路径: ${codeBuddyStatus.lookupPaths.join(" | ")}`
+        : "\r\n未在 PATH 中找到 codebuddy 或 cbc。";
+      const npmStatus = codeBuddyStatus.npm || getNpmStatus(env);
+      const canAutoInstall = !codeBuddyStatus.autoInstallDisabled && npmStatus.usable;
+      const installCommand = codeBuddyStatus.installCommand;
+      const unavailableWarning =
+        `未检测到可运行的 CodeBuddy Code CLI，且当前不会自动执行 npm 安装。\r\n` +
+        `命令: ${codeBuddyStatus.command}\r\n` +
+        `原因: ${codeBuddyStatus.errorDetail || "codebuddy --version 未成功运行。"}${lookupText}\r\n` +
+        `${codeBuddyStatus.autoInstallDisabled ? "当前环境禁用了 CodeBuddy Code 自动安装。\r\n" : `npm 状态: ${npmStatus.errorDetail || "npm 不可用。"}\r\n`}` +
+        `请手动安装 CodeBuddy Code CLI 后再创建 Agent 终端。推荐命令: ${installCommand}`;
+
+      if (!canAutoInstall && !fallbackToShell) {
+        return buildStaticLogLaunch({
+          env,
+          label: "CodeBuddy Code Agent Error",
+          rolePrompt,
+          warning: `${unavailableWarning}\r\n已关闭失败回退到普通 PowerShell，因此仅保留此日志窗口。`
+        });
+      }
+
+      const installerLaunch = canAutoInstall && process.platform === "win32"
+        ? {
+            file: "powershell.exe",
+            args: [
+              "-NoLogo",
+              ...(fallbackToShell ? ["-NoExit"] : []),
+              "-Command",
+              buildCodeBuddyInstallPowerShellCommand({ ...codeBuddyStatus, holdLogWindow: !fallbackToShell }, installCommand)
+            ]
+          }
+        : shell;
+
+      return {
+        ...installerLaunch,
+        env,
+        label: canAutoInstall ? "CodeBuddy Code CLI Installer" : "PowerShell",
+        requestedMode: "agent",
+        activeMode: canAutoInstall ? "installing" : "shell",
+        rolePrompt,
+        installCommand: canAutoInstall && process.platform !== "win32" ? installCommand : null,
+        warning:
+          canAutoInstall && process.platform !== "win32"
+            ? `未检测到可运行的 CodeBuddy Code CLI，正在通过 npm 安装 ${codeBuddyNpmPackage}。\r\n` +
+              `命令: ${codeBuddyStatus.command}\r\n` +
+              `原因: ${codeBuddyStatus.errorDetail || "codebuddy --version 未成功运行。"}${lookupText}\r\n` +
+              `即将执行: ${installCommand}\r\n` +
+              "安装完成后请重启 CosS，或重新打开应用终端，让新的 PATH 生效。"
+            : canAutoInstall
+              ? ""
+              : unavailableWarning
+      };
+    }
+
+    if (!hasCodeBuddyKey) {
+      const warning =
+        "未配置 CodeBuddy Code API Key。\r\n" +
+        "请在 设置 > 智能体设置 中填写 CodeBuddy API Key，或通过环境变量 CODEBUDDY_API_KEY 提供。";
+      if (!fallbackToShell) {
+        return buildStaticLogLaunch({
+          env,
+          label: "CodeBuddy Code Agent Error",
+          rolePrompt,
+          warning: `${warning}\r\n已关闭失败回退到普通 PowerShell，因此仅保留此日志窗口。`
+        });
+      }
+      return {
+        ...shell,
+        env,
+        label: "PowerShell",
+        requestedMode: "agent",
+        activeMode: "shell",
+        rolePrompt,
+        warning
+      };
+    }
+
+    if (process.platform === "win32") {
+      return {
+        file: "powershell.exe",
+        args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", buildCodeBuddyPowerShellCommand(codeBuddyStatus.command)],
+        env,
+        label: "CodeBuddy Code",
+        requestedMode: "agent",
+        activeMode: "codebuddy",
+        rolePrompt
+      };
+    }
+
+    return {
+      file: codeBuddyStatus.command,
+      args: [],
+      env,
+      label: "CodeBuddy Code",
+      requestedMode: "agent",
+      activeMode: "codebuddy",
+      rolePrompt
+    };
+  }
+
   const claudeCommand = process.env.COSS_CLAUDE_COMMAND || "claude";
   const claudeConfig = ensureClaudeOnboardingCompleted();
   const hasClaude = commandExists(claudeCommand, env);
@@ -1754,15 +2013,34 @@ function resolveTerminalLaunch(options) {
   };
 }
 
+function appendTerminalTranscript(id, data) {
+  if (!id || typeof data !== "string" || !data) {
+    return;
+  }
+  const previous = terminalTranscripts.get(id) || "";
+  terminalTranscripts.set(id, `${previous}${data}`.slice(-120000));
+}
+
+function getTerminalTargetWebContents(id, fallbackWebContents) {
+  const current = terminalWebContents.get(id);
+  if (current && !current.isDestroyed()) {
+    return current;
+  }
+  return fallbackWebContents;
+}
+
 function sendTerminalData(webContents, id, data) {
-  if (!webContents.isDestroyed()) {
-    webContents.send("terminal:data", { id, data });
+  appendTerminalTranscript(id, data);
+  const targetWebContents = getTerminalTargetWebContents(id, webContents);
+  if (targetWebContents && !targetWebContents.isDestroyed()) {
+    targetWebContents.send("terminal:data", { id, data });
   }
 }
 
 function sendTerminalExit(webContents, id, exitCode) {
-  if (!webContents.isDestroyed()) {
-    webContents.send("terminal:exit", { id, exitCode });
+  const targetWebContents = getTerminalTargetWebContents(id, webContents);
+  if (targetWebContents && !targetWebContents.isDestroyed()) {
+    targetWebContents.send("terminal:exit", { id, exitCode });
   }
 }
 
@@ -1908,15 +2186,34 @@ function createPtyTerminal(webContents, id, options, launch = resolveTerminalLau
 
 function createTerminalSession(event, options = {}) {
   const id = typeof options.id === "string" ? options.id : randomUUID();
-  disposeTerminalSession(id);
-
   const webContents = event.sender;
+  terminalWebContents.set(id, webContents);
+  const existingSession = terminalSessions.get(id);
+  if (existingSession) {
+    appendLogEvent("terminal.reattached", {
+      id,
+      mode: existingSession.mode,
+      activeMode: existingSession.launch?.activeMode || "",
+      transcriptLength: (terminalTranscripts.get(id) || "").length,
+      sessionId: existingSession.launch?.agentSession?.sessionId || ""
+    });
+    return {
+      id,
+      mode: existingSession.mode,
+      requestedMode: existingSession.launch?.requestedMode || "shell",
+      activeMode: existingSession.launch?.activeMode || existingSession.mode || "shell",
+      agentSession: existingSession.launch?.agentSession || null,
+      reattached: true,
+      transcript: terminalTranscripts.get(id) || ""
+    };
+  }
+
   const roleName = options.roleName || "角色终端";
   const cwd = normalizeCwd(options.cwd);
   const terminalMode = normalizeTerminalMode(options.terminalMode);
   const agentProvider = getEffectiveAgentProvider(options);
   const requestedMode = {
-    agent: `Agent(${agentProvider === "codex" ? "Codex" : "Claude Code"})`,
+    agent: `Agent(${getAgentProviderLabel(agentProvider)})`,
     shell: "PowerShell"
   }[terminalMode];
   appendLogEvent("terminal.create.requested", {
@@ -2082,6 +2379,8 @@ function disposeTerminalSession(id) {
   }
 
   terminalSessions.delete(id);
+  terminalTranscripts.delete(id);
+  terminalWebContents.delete(id);
   agentOutputEventKeys.delete(id);
   try {
     session.kill();
@@ -2714,6 +3013,23 @@ app.whenReady().then(() => {
   ipcMain.handle("codex:status", () => {
     const status = getCodexCommandStatus();
     appendLogEvent("agent.codex.status.checked", {
+      runnable: Boolean(status.runnable),
+      command: status.command || "",
+      requestedCommand: status.requestedCommand || "",
+      version: sanitizeLogText(status.version, 80),
+      npmUsable: Boolean(status.npm?.usable),
+      npmCommand: status.npm?.command || "",
+      authLoggedIn: Boolean(status.auth?.loggedIn),
+      authSource: status.auth?.source || "",
+      autoInstallDisabled: Boolean(status.autoInstallDisabled),
+      errorDetail: sanitizeLogText(status.errorDetail, 300)
+    }, status.runnable ? "info" : "warn");
+    return status;
+  });
+  ipcMain.handle("codebuddy:status", (_event, request = {}) => {
+    const apiKey = typeof request === "object" && request !== null ? String(request.apiKey || "").trim() : "";
+    const status = getCodeBuddyCommandStatus(getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {}));
+    appendLogEvent("agent.codebuddy.status.checked", {
       runnable: Boolean(status.runnable),
       command: status.command || "",
       requestedCommand: status.requestedCommand || "",

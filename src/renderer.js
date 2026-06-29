@@ -86,7 +86,8 @@ const PROGRAMS = {
   terminal: { label: "终端", icon: ">" },
   browser: { label: "浏览器", icon: "◎" },
   file: { label: "文件", icon: "□" },
-  task: { label: "任务", icon: "✓" }
+  task: { label: "任务", icon: "✓" },
+  "task-list": { label: "任务列表", icon: "☰" }
 };
 
 const DEFAULT_TASK_ROLE_IDS = ["product-manager", "frontend-engineer", "backend-engineer", "qa-engineer", "tech-lead"];
@@ -154,6 +155,7 @@ const defaultState = {
   settings: {
     agentProvider: "claude",
     agentFallbackToShell: true,
+    codeBuddyApiKey: "",
     agentPromptTemplate:
       "你是 CosS 类桌面工作区中的{{roleName}}。\n" +
       "角色 ID：{{roleId}}\n" +
@@ -171,9 +173,12 @@ const defaultState = {
   }
 };
 
-const APP_VERSION = "v0.5.3";
+const APP_VERSION = "v0.5.7";
 
 let state = structuredClone(defaultState);
+let saveStateInFlight = false;
+let saveStateDirty = false;
+let saveStatePromise = Promise.resolve();
 let bootingProjectId = null;
 let contextMenu = null;
 let roleMenu = null;
@@ -189,10 +194,12 @@ const DEFAULT_DESKTOP_ID = "desktop-main";
 const MAXIMIZED_WINDOW_STYLE = "left:16px; top:66px; width:calc(100% - 32px); height:calc(100% - 150px);";
 const terminalViews = new Map();
 const terminalBackendIds = new Set();
+const deliveryStuckTimers = new Map();
 const hydratedBrowserViews = new Set();
 let pendingCommandApproval = null;
 let latestClaudeStatus = null;
 let latestCodexStatus = null;
+let latestCodeBuddyStatus = null;
 let modelEditorProvider = "system";
 let activeSettingsSection = "system";
 const modelConnectivityStatuses = {};
@@ -202,12 +209,18 @@ let isWindowMaximized = false;
 let pendingTaskPlanDraft = null;
 let messageComposerDefaults = {};
 let messageTimelineFilters = { taskId: "", query: "" };
+let selectedTimelineItemId = "";
+let messageTimelineScrollLeft = 0;
 let taskViewOpen = false;
 let pendingFileOperation = null;
+let taskRoleFilter = "";
+let taskListFilters = { query: "", roleId: "", status: "", model: "", includeArchived: false };
+let selectedTaskListTaskId = "";
 
 const SUBTASK_STATUS_DEFS = {
   pending: { label: "待执行", windowStatus: "waiting" },
   running: { label: "执行中", windowStatus: "working" },
+  waiting: { label: "待人工确认", windowStatus: "waiting" },
   done: { label: "已完成", windowStatus: "done" },
   blocked: { label: "已阻塞", windowStatus: "blocked" }
 };
@@ -386,11 +399,14 @@ function normalizeLayoutPreset(value) {
   return TASK_LAYOUT_PRESETS.some((preset) => preset.id === normalized) ? normalized : "split-two";
 }
 
-function createDesktopState(name = "主桌面", options = {}) {
+function createDesktopState(name = "主对话", options = {}) {
+  const taskIds = uniqueStrings([...(options.taskIds || []), options.taskId || ""]);
   return {
     id: options.id || uid("desktop"),
     name,
     taskId: options.taskId || "",
+    taskIds,
+    lastTaskId: options.lastTaskId || options.taskId || taskIds[0] || "",
     layoutPreset: normalizeLayoutPreset(options.layoutPreset),
     createdAt: options.createdAt || new Date().toISOString()
   };
@@ -403,7 +419,7 @@ function ensureProjectDesktops(project) {
 
   if (!Array.isArray(project.desktops) || project.desktops.length === 0) {
     project.desktops = [
-      createDesktopState("主桌面", {
+      createDesktopState("主对话", {
         id: DEFAULT_DESKTOP_ID,
         createdAt: project.createdAt || new Date().toISOString()
       })
@@ -412,8 +428,10 @@ function ensureProjectDesktops(project) {
 
   project.desktops = project.desktops.map((desktop, index) => ({
     id: desktop.id || (index === 0 ? DEFAULT_DESKTOP_ID : uid("desktop")),
-    name: desktop.name || (index === 0 ? "主桌面" : `桌面 ${index + 1}`),
+    name: desktop.name || (index === 0 ? "主对话" : `对话 ${index + 1}`),
     taskId: desktop.taskId || "",
+    taskIds: uniqueStrings([...(desktop.taskIds || []), desktop.taskId || ""]),
+    lastTaskId: desktop.lastTaskId || desktop.taskId || desktop.taskIds?.[0] || "",
     layoutPreset: normalizeLayoutPreset(desktop.layoutPreset),
     createdAt: desktop.createdAt || project.createdAt || new Date().toISOString()
   }));
@@ -447,6 +465,112 @@ function getDesktopWindows(project, desktopId = getActiveDesktopId(project)) {
   return (project?.windows || []).filter((win) => win.desktopId === desktopId);
 }
 
+function getTaskConversationId(task) {
+  return task?.conversationId || task?.desktopId || "";
+}
+
+function setTaskConversation(task, desktopId) {
+  task.desktopId = desktopId;
+  task.conversationId = desktopId;
+}
+
+function getConversationTasks(project, desktopId = getActiveDesktopId(project)) {
+  return (project?.tasks || []).filter((task) => getTaskConversationId(task) === desktopId);
+}
+
+function getTaskSubtaskPairs(task) {
+  return (task?.subtasks || []).map((subtask) => ({ task, subtask }));
+}
+
+function getTaskDoneCount(task) {
+  return (task?.subtasks || []).filter((subtask) => normalizeSubtaskStatus(subtask.status) === "done").length;
+}
+
+function getTaskRoleIds(task) {
+  return uniqueRoleIds((task?.subtasks || []).map((subtask) => subtask.roleId));
+}
+
+function getTaskStatusValue(task) {
+  return normalizeSubtaskStatus(task?.status || deriveTaskStatus(task?.subtasks || []));
+}
+
+function getTaskModelName(task) {
+  return String(task?.model?.modelName || task?.model?.provider || "agent-brain");
+}
+
+function getFilteredConversationTasks(project, desktopId = getActiveDesktopId(project)) {
+  const query = String(taskListFilters.query || "").trim().toLowerCase();
+  const roleId = taskListFilters.roleId || "";
+  const status = taskListFilters.status || "";
+  const model = taskListFilters.model || "";
+  return getConversationTasks(project, desktopId).filter((task) => {
+    if (!taskListFilters.includeArchived && task.archived) {
+      return false;
+    }
+    if (roleId && !getTaskRoleIds(task).includes(roleId)) {
+      return false;
+    }
+    if (status && getTaskStatusValue(task) !== status) {
+      return false;
+    }
+    if (model && getTaskModelName(task) !== model) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    const searchable = [
+      task.title,
+      task.goal,
+      task.planner?.summary,
+      getTaskModelName(task),
+      ...getTaskSubtaskPairs(task).flatMap(({ subtask }) => [getRole(subtask.roleId).name, subtask.title, subtask.description])
+    ].join(" ").toLowerCase();
+    return searchable.includes(query);
+  });
+}
+
+function getTaskMessages(project, taskId) {
+  return (project?.messages || []).filter((message) => message.taskId === taskId);
+}
+
+function getTaskDeliveries(project, taskId) {
+  return (project?.agentDeliveries || []).filter((delivery) => delivery.taskId === taskId);
+}
+
+function getTaskOutputRefs(project, taskId) {
+  return (project?.terminalOutputRefs || []).filter((ref) => ref.taskId === taskId);
+}
+
+function syncConversationTaskIds(project) {
+  if (!project) {
+    return;
+  }
+  const desktops = getProjectDesktops(project);
+  const fallbackDesktopId = desktops[0]?.id || DEFAULT_DESKTOP_ID;
+  project.tasks.forEach((task) => {
+    if (!getTaskConversationId(task)) {
+      setTaskConversation(task, task.desktopId || fallbackDesktopId);
+    } else if (!task.conversationId) {
+      task.conversationId = task.desktopId;
+    } else if (!task.desktopId) {
+      task.desktopId = task.conversationId;
+    }
+  });
+  desktops.forEach((desktop) => {
+    const taskIds = uniqueStrings([
+      ...(desktop.taskIds || []),
+      desktop.taskId || "",
+      ...project.tasks
+        .filter((task) => getTaskConversationId(task) === desktop.id)
+        .map((task) => task.id)
+    ]);
+    desktop.taskIds = taskIds;
+    desktop.taskId = desktop.taskId || taskIds[0] || "";
+    desktop.lastTaskId = taskIds.includes(desktop.lastTaskId) ? desktop.lastTaskId : taskIds[0] || "";
+  });
+}
+
 function getVisibleWindows(project = getProject()) {
   return getDesktopWindows(project).filter((win) => !win.minimized);
 }
@@ -465,6 +589,9 @@ function deriveTaskStatus(subtasks = []) {
   if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "blocked")) {
     return "blocked";
   }
+  if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "waiting")) {
+    return "running";
+  }
   if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "running")) {
     return "running";
   }
@@ -472,11 +599,16 @@ function deriveTaskStatus(subtasks = []) {
 }
 
 function ensureTaskShape(task) {
+  task.desktopId ||= task.conversationId || "";
+  task.conversationId ||= task.desktopId || "";
+  task.archived = Boolean(task.archived);
+  task.archivedAt ||= "";
   task.subtasks ||= [];
   task.subtasks.forEach((subtask) => {
     subtask.status = normalizeSubtaskStatus(subtask.status);
     subtask.createdAt ||= task.createdAt || new Date().toISOString();
     subtask.updatedAt ||= subtask.createdAt;
+    subtask.lastStatusChangedAt ||= subtask.updatedAt;
   });
   task.status = deriveTaskStatus(task.subtasks);
   return task;
@@ -547,7 +679,7 @@ function ensureAgentEventShape(event) {
 }
 
 function normalizeDeliveryStatus(value) {
-  return ["pending", "sent", "failed", "canceled"].includes(value) ? value : "pending";
+  return ["pending", "sent", "submitted", "responded", "waiting", "failed", "canceled"].includes(value) ? value : "pending";
 }
 
 function ensureAgentDeliveryShape(delivery) {
@@ -562,8 +694,20 @@ function ensureAgentDeliveryShape(delivery) {
     createdAt: delivery.createdAt || new Date().toISOString(),
     updatedAt: delivery.updatedAt || delivery.createdAt || new Date().toISOString(),
     sentAt: delivery.sentAt || "",
+    submittedAt: delivery.submittedAt || delivery.sentAt || "",
+    respondedAt: delivery.respondedAt || "",
+    waitingAt: delivery.waitingAt || "",
     canceledAt: delivery.canceledAt || "",
-    lastError: String(delivery.lastError || "").slice(0, 300)
+    submissionProvider: delivery.submissionProvider ? normalizeAgentProvider(delivery.submissionProvider) : "",
+    submissionMethod: String(delivery.submissionMethod || "").slice(0, 80),
+    submissionDetail: String(delivery.submissionDetail || "").slice(0, 240),
+    responseWatchStartedAt: delivery.responseWatchStartedAt || "",
+    stuckCheckAt: delivery.stuckCheckAt || "",
+    stuckDetectedAt: delivery.stuckDetectedAt || "",
+    lastFeedback: String(delivery.lastFeedback || "").slice(0, 160),
+    lastError: String(delivery.lastError || "").slice(0, 300),
+    deliveryFilePath: String(delivery.deliveryFilePath || ""),
+    deliveryFileAbsolutePath: String(delivery.deliveryFileAbsolutePath || "")
   };
 }
 
@@ -626,8 +770,9 @@ function ensureProjectShape(project) {
   project.agentEvents ||= [];
   project.agentDeliveries ||= [];
   project.terminalOutputRefs ||= [];
-  ensureProjectDesktops(project);
   project.tasks.forEach(ensureTaskShape);
+  ensureProjectDesktops(project);
+  syncConversationTaskIds(project);
   project.messages = project.messages
     .map(ensureMessageShape)
     .filter((message) => message.content && message.toRoleIds.length > 0);
@@ -655,7 +800,7 @@ function ensureProjectShape(project) {
       return;
     }
 
-    if (win.terminalMode === "claude" || win.terminalMode === "codex") {
+    if (win.terminalMode === "claude" || win.terminalMode === "codex" || win.terminalMode === "codebuddy") {
       win.agentProvider ||= win.terminalMode;
       win.terminalMode = "agent";
     }
@@ -686,6 +831,7 @@ function ensureStateShape(nextState) {
   nextState.settings ||= {};
   nextState.settings.agentProvider = normalizeAgentProvider(nextState.settings.agentProvider);
   nextState.settings.agentFallbackToShell = nextState.settings.agentFallbackToShell !== false;
+  nextState.settings.codeBuddyApiKey ||= "";
   nextState.settings.agentPromptTemplate ||= defaultState.settings.agentPromptTemplate;
   ensureModelSettings(nextState.settings);
   (nextState.projects || []).forEach(ensureProjectShape);
@@ -849,12 +995,34 @@ function normalizeStoredWindowStacks(nextState) {
 }
 
 async function saveState() {
-  if (window.cossAPI?.saveState) {
-    await window.cossAPI.saveState(state);
-    return;
+  saveStateDirty = true;
+  if (saveStateInFlight) {
+    return saveStatePromise;
   }
 
-  localStorage.setItem("coss-state", JSON.stringify(state));
+  saveStateInFlight = true;
+  saveStatePromise = (async () => {
+    while (saveStateDirty) {
+      saveStateDirty = false;
+      const snapshot = structuredClone(state);
+      if (window.cossAPI?.saveState) {
+        await window.cossAPI.saveState(snapshot);
+      } else {
+        localStorage.setItem("coss-state", JSON.stringify(snapshot));
+      }
+    }
+  })()
+    .catch((error) => {
+      console.warn("Failed to save CosS state", error);
+    })
+    .finally(() => {
+      saveStateInFlight = false;
+      if (saveStateDirty) {
+        saveState();
+      }
+    });
+
+  return saveStatePromise;
 }
 
 function recordAppLog(eventName, payload = {}, level = "info") {
@@ -891,7 +1059,7 @@ async function loadState() {
 function createProjectState(name, projectPath) {
   const id = uid("project");
   const createdAt = new Date().toISOString();
-  const defaultDesktop = createDesktopState("主桌面", {
+  const defaultDesktop = createDesktopState("主对话", {
     id: DEFAULT_DESKTOP_ID,
     createdAt
   });
@@ -919,18 +1087,18 @@ function createWindowState(type, roleId, x = 260, y = 108, options = {}) {
   const terminalMode = normalizeTerminalMode(options.terminalMode);
   const agentProvider = normalizeAgentProvider(options.agentProvider || state.settings?.agentProvider);
   const terminalLabel = {
-    agent: `Agent(${agentProvider === "codex" ? "Codex" : "Claude Code"})`,
+    agent: `Agent(${getAgentProviderLabel(agentProvider)})`,
     shell: "PowerShell"
   }[terminalMode];
-  const title =
-    type === "terminal"
+  const title = options.title || (type === "terminal"
       ? `${role.name} ${terminalLabel}`
-      : `${role.name}${getProgramLabel(type)}`;
+      : `${role.name}${getProgramLabel(type)}`);
   const sizes = {
     terminal: [500, 338],
     browser: [640, 420],
     file: [560, 390],
-    task: [500, 360]
+    task: [500, 360],
+    "task-list": [820, 500]
   };
   const [width, height] = sizes[type] || [440, 300];
 
@@ -984,15 +1152,23 @@ function createWindowState(type, roleId, x = 260, y = 108, options = {}) {
 }
 
 function normalizeTerminalMode(value) {
-  return ["agent", "shell"].includes(value) ? value : "shell";
+  return ["agent", "shell"].includes(value) ? value : ["claude", "codex", "codebuddy"].includes(value) ? "agent" : "shell";
 }
 
 function normalizeAgentProvider(value) {
-  return value === "codex" ? "codex" : "claude";
+  return ["claude", "codex", "codebuddy"].includes(value) ? value : "claude";
+}
+
+function getAgentProviderLabel(provider) {
+  return {
+    claude: "Claude Code",
+    codex: "Codex",
+    codebuddy: "CodeBuddy Code"
+  }[normalizeAgentProvider(provider)] || "Claude Code";
 }
 
 function findTaskForDesktop(project, desktopId) {
-  return project?.tasks?.find((task) => task.desktopId === desktopId) || null;
+  return getConversationTasks(project, desktopId)[0] || null;
 }
 
 function findSubtaskForRole(task, roleId) {
@@ -1245,6 +1421,60 @@ function createProgram(type, roleId, options = {}) {
   return win;
 }
 
+function openTaskListWindow() {
+  const project = getProject();
+  if (!project) {
+    return null;
+  }
+
+  const desktopId = getActiveDesktopId(project);
+  const existing = project.windows.find((win) => win.type === "task-list" && win.desktopId === desktopId);
+  if (existing) {
+    focusWindow(existing.id);
+    return existing;
+  }
+
+  const activeConversation = getActiveDesktop(project);
+  const win = createProgram("task-list", "product-manager", {
+    desktopId,
+    title: `${activeConversation?.name || "当前对话"}任务列表`
+  });
+  recordAppLog("task-list.opened", {
+    projectId: project.id,
+    conversationId: desktopId,
+    windowId: win?.id || "",
+    taskCount: getConversationTasks(project, desktopId).length
+  });
+  return win;
+}
+
+function selectTaskListTask(taskId) {
+  selectedTaskListTaskId = taskId || "";
+  render();
+}
+
+function setTaskArchived(taskId, archived) {
+  const project = getProject();
+  const task = project?.tasks.find((item) => item.id === taskId);
+  if (!project || !task) {
+    return false;
+  }
+  task.archived = Boolean(archived);
+  task.archivedAt = task.archived ? new Date().toISOString() : "";
+  task.updatedAt = task.archivedAt || new Date().toISOString();
+  if (selectedTaskListTaskId === taskId && task.archived && !taskListFilters.includeArchived) {
+    selectedTaskListTaskId = "";
+  }
+  recordAppLog(task.archived ? "task.archived" : "task.restored", {
+    projectId: project.id,
+    taskId,
+    conversationId: getTaskConversationId(task)
+  });
+  saveState();
+  render();
+  return true;
+}
+
 function closeWindow(windowId) {
   const project = getProject();
   if (!project) {
@@ -1427,7 +1657,7 @@ function createProjectDesktop(name = "") {
     return;
   }
 
-  const desktop = createDesktopState(name || `桌面 ${getProjectDesktops(project).length + 1}`);
+  const desktop = createDesktopState(name || `对话 ${getProjectDesktops(project).length + 1}`);
   project.desktops.push(desktop);
   project.activeDesktopId = desktop.id;
   focusedWindowId = null;
@@ -1435,6 +1665,12 @@ function createProjectDesktop(name = "") {
   recordAppLog("desktop.created", {
     projectId: project.id,
     desktopId: desktop.id,
+    name: desktop.name,
+    source: "manual"
+  });
+  recordAppLog("conversation.created", {
+    projectId: project.id,
+    conversationId: desktop.id,
     name: desktop.name,
     source: "manual"
   });
@@ -1610,6 +1846,7 @@ async function createTaskFromModal() {
   pendingTaskPlanDraft = {
     id: uid("taskdraft"),
     projectId: project.id,
+    conversationId: getActiveDesktopId(project),
     goal,
     activeModel,
     llmResult,
@@ -1734,6 +1971,67 @@ function confirmTaskPlan() {
   render();
 }
 
+function confirmTaskPlanInConversation() {
+  const project = getProject();
+  const draft = pendingTaskPlanDraft;
+  if (!project || !draft || draft.projectId !== project.id) {
+    pendingTaskPlanDraft = null;
+    closeModal();
+    return;
+  }
+
+  const taskPlan = draft.taskPlan;
+  const selectedRoles = getRoleIdsFromTaskPlan(taskPlan);
+  const task = buildTaskFromDraft(draft);
+  getProjectDesktops(project);
+  const conversation = project.desktops.find((desktop) => desktop.id === draft.conversationId) || getActiveDesktop(project);
+  const conversationId = conversation?.id || getActiveDesktopId(project);
+  setTaskConversation(task, conversationId);
+
+  project.tasks.unshift(task);
+  if (conversation) {
+    conversation.taskIds = uniqueStrings([task.id, ...(conversation.taskIds || [])]);
+    conversation.taskId = conversation.taskId || task.id;
+    conversation.lastTaskId = task.id;
+  }
+  project.activeDesktopId = conversationId;
+  project.messages.push(...taskPlan.messages.map((message) => (
+    createMessage(message.fromRoleId, message.toRoleIds, message.content, task.id, {
+      source: "task-plan",
+      channelType: "task"
+    })
+  )));
+
+  ensureRoleWindowsForTask(project, selectedRoles, conversationId);
+  closeModal();
+  pendingTaskPlanDraft = null;
+  saveState();
+  recordAppLog("conversation.task.added", {
+    projectId: project.id,
+    conversationId,
+    conversationName: conversation?.name || "",
+    taskId: task.id,
+    source: "task-plan",
+    reusedProgramCount: getDesktopWindows(project, conversationId).length
+  });
+  recordAppLog("task.created", {
+    projectId: project.id,
+    taskId: task.id,
+    title: task.title,
+    desktopId: conversationId,
+    conversationId,
+    plannerStatus: task.planner.status,
+    modelProvider: task.model.provider
+  });
+  recordAppLog("role.messages.created", {
+    projectId: project.id,
+    taskId: task.id,
+    source: "task-plan",
+    count: taskPlan.messages.length
+  });
+  render();
+}
+
 function updateSubtaskStatus(taskId, subtaskId, nextStatus) {
   const project = getProject();
   const task = project?.tasks.find((item) => item.id === taskId);
@@ -1742,9 +2040,33 @@ function updateSubtaskStatus(taskId, subtaskId, nextStatus) {
   if (!project || !task || !subtask) {
     return;
   }
+  const previousStatus = normalizeSubtaskStatus(subtask.status);
+  const nowDate = new Date();
+  const lastChangedAt = Date.parse(subtask.lastStatusChangedAt || subtask.updatedAt || "");
+  if (status === "blocked" && previousStatus === "running" && Number.isFinite(lastChangedAt) && nowDate.getTime() - lastChangedAt < 900) {
+    recordAppLog("subtask.status.guard_ignored", {
+      projectId: project.id,
+      taskId,
+      subtaskId,
+      previousStatus,
+      requestedStatus: status,
+      reason: "recent-running-transition"
+    }, "warn");
+    return;
+  }
+  if (status === previousStatus) {
+    recordAppLog("subtask.status.unchanged", {
+      projectId: project.id,
+      taskId,
+      subtaskId,
+      status
+    });
+    return;
+  }
 
   subtask.status = status;
-  subtask.updatedAt = new Date().toISOString();
+  subtask.updatedAt = nowDate.toISOString();
+  subtask.lastStatusChangedAt = subtask.updatedAt;
   task.status = deriveTaskStatus(task.subtasks);
   task.updatedAt = subtask.updatedAt;
 
@@ -1844,6 +2166,11 @@ function getWindowStatus(win) {
 function normalizeAgentEventStatus(status) {
   return {
     running: "running",
+    waiting: "waiting",
+    wait: "waiting",
+    approval: "waiting",
+    "needs-approval": "waiting",
+    needs_approval: "waiting",
     done: "done",
     blocked: "blocked",
     failed: "blocked"
@@ -1880,7 +2207,7 @@ function applyAgentEventToState(event) {
   project.agentEvents = project.agentEvents.slice(-120);
 
   let createdMessage = null;
-  if (storedEvent.structured && storedEvent.message) {
+  if (storedEvent.structured && storedEvent.type !== "structured-parse-error" && storedEvent.message) {
     let toRoleIds = uniqueRoleIds(storedEvent.toRoleIds).filter((roleId) => roleId !== fromRoleId);
     if (toRoleIds.length === 0) {
       toRoleIds = uniqueRoleIds(["product-manager", "tech-lead"]).filter((roleId) => roleId !== fromRoleId);
@@ -1898,22 +2225,60 @@ function applyAgentEventToState(event) {
     }
   }
 
-  if (status) {
-    win.status = SUBTASK_STATUS_DEFS[status]?.windowStatus || (status === "failed" ? "blocked" : "working");
-    if (win.agentSession) {
-      win.agentSession.lastEventAt = storedEvent.receivedAt;
-    }
-  }
-
   const task = project.tasks.find((item) => item.id === storedEvent.taskId) || findTaskForDesktop(project, win.desktopId);
   const subtask = task?.subtasks.find((item) => item.id === storedEvent.subtaskId)
     || task?.subtasks.find((item) => item.roleId === win.roleId && normalizeSubtaskStatus(item.status) !== "done")
     || task?.subtasks.find((item) => item.roleId === win.roleId);
-  if (task && subtask && status) {
+  const ignoresWaitingResume = Boolean(task && subtask && status === "running" && normalizeSubtaskStatus(subtask.status) === "waiting");
+
+  if (status && !ignoresWaitingResume) {
+    win.status = SUBTASK_STATUS_DEFS[status]?.windowStatus || (status === "failed" ? "blocked" : "working");
+    if (win.agentSession) {
+      win.agentSession.lastEventAt = storedEvent.receivedAt;
+    }
+  } else if (ignoresWaitingResume) {
+    recordAppLog("agent.event.status_ignored", {
+      projectId: project.id,
+      windowId: win.id,
+      taskId: task?.id || "",
+      subtaskId: subtask?.id || "",
+      status,
+      reason: "waiting-requires-manual-resume"
+    }, "warn");
+  }
+
+  if (task && subtask && status && !ignoresWaitingResume) {
     subtask.status = status;
     subtask.updatedAt = storedEvent.receivedAt;
+    subtask.lastStatusChangedAt = storedEvent.receivedAt;
     task.status = deriveTaskStatus(task.subtasks);
     task.updatedAt = storedEvent.receivedAt;
+  }
+
+  const activeDelivery = project.agentDeliveries?.find((delivery) => delivery.id === win.lastAgentDeliveryId);
+  if (activeDelivery && ["sent", "submitted", "responded", "waiting"].includes(activeDelivery.status) && !ignoresWaitingResume) {
+    const previousDeliveryStatus = activeDelivery.status;
+    if (status === "waiting") {
+      activeDelivery.status = "waiting";
+      activeDelivery.waitingAt = storedEvent.receivedAt;
+      activeDelivery.lastFeedback = "Agent 正在等待人工确认。";
+    } else if (["running", "done", "blocked"].includes(status) && activeDelivery.status !== "responded") {
+      activeDelivery.status = "responded";
+      activeDelivery.respondedAt = storedEvent.receivedAt;
+      activeDelivery.lastFeedback = "Agent 已产生结构化事件。";
+    }
+    activeDelivery.updatedAt = storedEvent.receivedAt;
+    if (activeDelivery.status !== previousDeliveryStatus) {
+      recordAppLog("agent.delivery.status.changed", {
+        projectId: project.id,
+        deliveryId: activeDelivery.id,
+        messageId: activeDelivery.messageId,
+        windowId: win.id,
+        previousStatus: previousDeliveryStatus,
+        status: activeDelivery.status,
+        source: "agent-event"
+      });
+    }
   }
 
   recordAppLog("agent.event.applied", {
@@ -1964,7 +2329,7 @@ function openContextMenu(event) {
     y: event.clientY
   };
   roleMenu = null;
-  render();
+  refreshFloatingMenus();
 }
 
 function openRoleMenu(type, anchorElement) {
@@ -1974,13 +2339,29 @@ function openRoleMenu(type, anchorElement) {
     x: rect.right + 8,
     y: rect.top
   };
-  render();
+  refreshFloatingMenus();
 }
 
 function closeMenus() {
   contextMenu = null;
   roleMenu = null;
   openAppMenuId = null;
+  refreshFloatingMenus();
+}
+
+function refreshFloatingMenus() {
+  const frame = appRoot?.querySelector(".app-frame");
+  if (!frame) {
+    return;
+  }
+  frame.querySelectorAll(":scope > .context-menu, :scope > .role-menu").forEach((node) => node.remove());
+  const floatingMarkup = [
+    contextMenu ? renderContextMenu() : "",
+    roleMenu ? renderRoleMenu() : ""
+  ].join("");
+  if (floatingMarkup.trim()) {
+    frame.insertAdjacentHTML("beforeend", floatingMarkup);
+  }
 }
 
 function showCreateProjectModal() {
@@ -2138,6 +2519,24 @@ function getMessageTaskLabel(taskId) {
   return task ? `任务：${task.title}` : "私聊";
 }
 
+function getCurrentTaskFilterId(project = getProject()) {
+  if (!project) {
+    return "";
+  }
+  const focusedWindow = project.windows.find((win) => win.id === focusedWindowId);
+  if (focusedWindow?.agentSession?.taskId) {
+    return focusedWindow.agentSession.taskId;
+  }
+  const activeDesktop = getActiveDesktop(project);
+  if (activeDesktop?.lastTaskId) {
+    return activeDesktop.lastTaskId;
+  }
+  if (activeDesktop?.taskId) {
+    return activeDesktop.taskId;
+  }
+  return findTaskForDesktop(project, activeDesktop?.id)?.id || "";
+}
+
 function renderRoleSelectOptions(selectedRoleId, excludedRoleId = "") {
   return ROLE_TEMPLATES
     .filter((role) => role.id !== excludedRoleId)
@@ -2158,16 +2557,24 @@ function getDefaultMessageRoles(defaults = {}) {
 }
 
 function getRunningAgentWindowsForRole(project, roleId, taskId = "") {
+  const task = taskId ? project?.tasks?.find((item) => item.id === taskId) : null;
+  const conversationId = getTaskConversationId(task);
   return (project?.windows || [])
     .filter((win) => win.type === "terminal")
     .filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
     .filter((win) => win.roleId === roleId)
+    .filter((win) => !conversationId || win.desktopId === conversationId || win.agentSession?.taskId === taskId)
     .filter((win) => terminalBackendIds.has(win.id))
     .sort((a, b) => {
       const aMatchesTask = taskId && (a.agentSession?.taskId === taskId || getTaskContextForWindow(a, project).taskId === taskId);
       const bMatchesTask = taskId && (b.agentSession?.taskId === taskId || getTaskContextForWindow(b, project).taskId === taskId);
       if (aMatchesTask !== bMatchesTask) {
         return aMatchesTask ? -1 : 1;
+      }
+      const aMatchesConversation = conversationId && a.desktopId === conversationId;
+      const bMatchesConversation = conversationId && b.desktopId === conversationId;
+      if (aMatchesConversation !== bMatchesConversation) {
+        return aMatchesConversation ? -1 : 1;
       }
       return normalizeZIndex(b.z) - normalizeZIndex(a.z);
     });
@@ -2190,7 +2597,7 @@ function buildTerminalInstructionPayload(message, targetWindow) {
   const fromRole = getRole(message.fromRoleId);
   const toRole = getRole(targetWindow.roleId);
   const taskLabel = message.taskId ? getMessageTaskLabel(message.taskId) : "私聊";
-  const provider = targetWindow.agentProvider === "codex" ? "Codex" : "Claude Code";
+  const provider = getAgentProviderLabel(targetWindow.agentProvider);
   return stripTerminalControlChars([
     "请处理来自 CosS 协作时间线的指令。",
     `目标角色：${toRole.name}`,
@@ -2206,12 +2613,160 @@ function buildTerminalInstructionPayload(message, targetWindow) {
   ].join("\n"));
 }
 
-function sendPastedTerminalInstruction(windowId, content) {
+function isCodeBuddyAgentWindow(win) {
+  return normalizeAgentProvider(win?.agentProvider || state.settings.agentProvider) === "codebuddy";
+}
+
+function getAgentDeliveryAdapter(win) {
+  const provider = normalizeAgentProvider(win?.agentProvider || state.settings.agentProvider);
+  if (provider === "codebuddy") {
+    return {
+      provider,
+      method: "delivery-file-interactive",
+      detail: "Delivery file plus interactive CodeBuddy submit"
+    };
+  }
+  return {
+    provider,
+    method: "bracketed-paste",
+    detail: `${getAgentProviderLabel(provider)} bracketed paste`
+  };
+}
+
+function sanitizeDeliveryFileName(value) {
+  return String(value || uid("delivery"))
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || uid("delivery");
+}
+
+async function writeAgentDeliveryInstructionFile(project, delivery, content) {
+  if (!window.cossAPI?.writeProjectFile || !project?.path) {
+    return { ok: false, error: "file-api-unavailable" };
+  }
+
+  const filePath = `.coss/deliveries/${sanitizeDeliveryFileName(delivery.id)}.md`;
+  const result = await window.cossAPI.writeProjectFile({
+    projectPath: project.path,
+    filePath,
+    content: [
+      "# CosS Agent 投递指令",
+      "",
+      "请把本文档作为本次投递的唯一新增任务上下文。不要把终端输入框中的提示、示例或残留文字当成用户指令。",
+      "",
+      content,
+      ""
+    ].join("\n")
+  });
+
+  if (result?.ok) {
+    delivery.deliveryFilePath = result.path || filePath;
+    delivery.deliveryFileAbsolutePath = result.absolutePath || "";
+  }
+  return result || { ok: false, error: "empty-result" };
+}
+
+async function sendPastedTerminalInstruction(windowId, content, adapter = null) {
   const sanitized = stripTerminalControlChars(content);
   if (!sanitized || !window.cossAPI?.sendTerminalInput) {
-    return Promise.resolve(false);
+    return { ok: false, error: "terminal-input-unavailable" };
   }
-  return window.cossAPI.sendTerminalInput(windowId, `\x1b[200~${sanitized}\x1b[201~\r`);
+  const ok = await window.cossAPI.sendTerminalInput(windowId, `\x01\x0b\x1b[200~${sanitized}\x1b[201~\r`);
+  return {
+    ok,
+    provider: adapter?.provider || "",
+    method: adapter?.method || "bracketed-paste",
+    detail: adapter?.detail || "Bracketed paste",
+    error: ok ? "" : "terminal-write-failed"
+  };
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendTerminalInputChunks(windowId, chunks, delayMs = 80) {
+  if (!window.cossAPI?.sendTerminalInput) {
+    return false;
+  }
+  for (const chunk of chunks) {
+    const isStep = chunk && typeof chunk === "object";
+    const data = isStep ? String(chunk.data || "") : String(chunk || "");
+    const delayAfter = isStep && Number.isFinite(Number(chunk.delayAfter))
+      ? Number(chunk.delayAfter)
+      : delayMs;
+    if (data) {
+      const ok = await window.cossAPI.sendTerminalInput(windowId, data);
+      if (!ok) {
+        return false;
+      }
+    }
+    if (delayAfter > 0) {
+      await wait(delayAfter);
+    }
+  }
+  return true;
+}
+
+function chunkTerminalText(value, size = 48) {
+  const text = String(value || "");
+  const chunks = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function sendAgentDeliveryInstruction(project, delivery, targetWindow, content) {
+  const sanitized = stripTerminalControlChars(content);
+  if (!sanitized || !window.cossAPI?.sendTerminalInput) {
+    return { ok: false, error: "terminal-input-unavailable" };
+  }
+
+  const adapter = getAgentDeliveryAdapter(targetWindow);
+  delivery.submissionProvider = adapter.provider;
+  delivery.submissionMethod = adapter.method;
+  delivery.submissionDetail = adapter.detail;
+
+  if (adapter.provider !== "codebuddy") {
+    return sendPastedTerminalInstruction(targetWindow.id, sanitized, adapter);
+  }
+
+  const fileResult = await writeAgentDeliveryInstructionFile(project, delivery, sanitized);
+  if (!fileResult?.ok) {
+    delivery.lastError = fileResult?.error || "delivery-file-write-failed";
+    return {
+      ok: false,
+      provider: adapter.provider,
+      method: adapter.method,
+      detail: adapter.detail,
+      error: delivery.lastError
+    };
+  }
+
+  const fileRef = delivery.deliveryFileAbsolutePath || delivery.deliveryFilePath;
+  const instruction = stripTerminalControlChars(
+    `请读取并执行 CosS 投递文件：${fileRef}。以该文件为唯一新增指令，忽略输入框已有提示或示例；完成或阻塞时输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。`
+  );
+  const instructionChunks = chunkTerminalText(instruction).map((data) => ({ data, delayAfter: 45 }));
+  const ok = await sendTerminalInputChunks(targetWindow.id, [
+    { data: "\x05", delayAfter: 90 },
+    { data: "\x15", delayAfter: 90 },
+    { data: "\x0b", delayAfter: 160 },
+    ...instructionChunks,
+    { data: "", delayAfter: 800 },
+    { data: "\r", delayAfter: 220 },
+    { data: "\x1b[13u", delayAfter: 0 }
+  ]);
+  return {
+    ok,
+    provider: adapter.provider,
+    method: adapter.method,
+    detail: adapter.detail,
+    deliveryFilePath: delivery.deliveryFilePath,
+    deliveryFileAbsolutePath: delivery.deliveryFileAbsolutePath,
+    error: ok ? "" : "terminal-write-failed"
+  };
 }
 
 function getDeliveriesForMessage(project, messageId) {
@@ -2220,6 +2775,107 @@ function getDeliveriesForMessage(project, messageId) {
 
 function getOutputRefsForMessage(project, messageId) {
   return (project?.terminalOutputRefs || []).filter((ref) => ref.messageId === messageId);
+}
+
+function getOutputRefsForDelivery(project, deliveryId) {
+  return (project?.terminalOutputRefs || []).filter((ref) => ref.deliveryId === deliveryId);
+}
+
+function isPasteOnlyTerminalFeedback(excerpt) {
+  return /^\s*\[Pasted text #\d+(?:(?:\s*\+\s*|\s*:\s*)\d+ lines)?\]\s*$/i.test(String(excerpt || "").trim());
+}
+
+function isDeliveryInstructionEcho(excerpt) {
+  const text = stripTerminalControlChars(excerpt);
+  return /璇疯鍙栧苟鎵ц CosS 鎶曢€掓枃浠|请读取并执行 CosS 投递文件/.test(text);
+}
+
+function isDeliverySystemFeedback(excerpt) {
+  const text = stripTerminalControlChars(excerpt);
+  if (!text) {
+    return true;
+  }
+  if (isPasteOnlyTerminalFeedback(text) || isDeliveryInstructionEcho(text)) {
+    return true;
+  }
+  return /CosS/i.test(text) && /(投递|delivery|确认|等待|submitted|confirmed|waiting|鎶曢|纭|绛夊緟)/i.test(text);
+}
+
+function hasRealDeliveryOutput(project, delivery) {
+  return getOutputRefsForDelivery(project, delivery.id).some((ref) => (
+    String(ref.excerpt || "")
+      .split(/\r?\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .some((line) => !isDeliverySystemFeedback(line))
+  ));
+}
+
+function scheduleDeliveryStuckCheck(deliveryId, delayMs = 12000) {
+  if (deliveryStuckTimers.has(deliveryId)) {
+    clearTimeout(deliveryStuckTimers.get(deliveryId));
+  }
+  const timer = setTimeout(() => {
+    deliveryStuckTimers.delete(deliveryId);
+    markDeliveryIfStuck(deliveryId);
+  }, delayMs);
+  deliveryStuckTimers.set(deliveryId, timer);
+}
+
+function markDeliveryIfStuck(deliveryId) {
+  const project = getProject();
+  const delivery = project?.agentDeliveries?.find((item) => item.id === deliveryId);
+  if (!project || !delivery || delivery.status !== "submitted") {
+    return false;
+  }
+  if (hasRealDeliveryOutput(project, delivery)) {
+    return false;
+  }
+
+  const now = new Date().toISOString();
+  delivery.stuckCheckAt = now;
+  delivery.stuckDetectedAt = now;
+  delivery.updatedAt = now;
+  delivery.lastFeedback = "已提交但尚未检测到 Agent 响应，可重试投递或查看终端。";
+  recordAppLog("agent.delivery.stuck.detected", {
+    projectId: project.id,
+    deliveryId: delivery.id,
+    messageId: delivery.messageId,
+    windowId: delivery.windowId,
+    provider: delivery.submissionProvider || "",
+    method: delivery.submissionMethod || ""
+  }, "warn");
+  saveState();
+  refreshMessageTimelineList();
+  return true;
+}
+
+function isAgentApprovalPromptOutput(excerpt) {
+  const text = stripTerminalControlChars(excerpt);
+  return [
+    /do you want to (?:create|edit|modify|overwrite|update|write|delete|run|execute)\b[\s\S]{0,600}\?/i,
+    /(?:yes,\s*)?allow (?:all )?(?:edits|changes|commands)/i,
+    /(?:需要|是否).{0,80}(?:确认|批准|允许|授权)/
+  ].some((pattern) => pattern.test(text));
+}
+
+function getDeliveryStatusLabel(status) {
+  return {
+    pending: "待确认投递",
+    sent: "已提交",
+    submitted: "已提交",
+    responded: "Agent 已响应",
+    waiting: "等待人工确认",
+    failed: "投递失败",
+    canceled: "已取消"
+  }[normalizeDeliveryStatus(status)] || status;
+}
+
+function getDeliveryMethodLabel(method) {
+  return {
+    "bracketed-paste": "Bracketed Paste",
+    "delivery-file-interactive": "投递文件 + 交互提交"
+  }[method] || method || "未提交";
 }
 
 function queueAgentDeliveriesForMessage(messageId, options = {}) {
@@ -2248,7 +2904,7 @@ function queueAgentDeliveriesForMessage(messageId, options = {}) {
     const existing = project.agentDeliveries.find((delivery) => (
       delivery.messageId === message.id
       && delivery.windowId === targetWindow.id
-      && ["pending", "sent"].includes(delivery.status)
+      && ["pending", "sent", "submitted", "responded", "waiting"].includes(delivery.status)
     ));
     if (existing) {
       queued.push(existing);
@@ -2261,6 +2917,7 @@ function queueAgentDeliveriesForMessage(messageId, options = {}) {
       roleId: targetWindow.roleId,
       taskId: message.taskId || "",
       status: "pending",
+      submissionProvider: normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider),
       createdAt: now,
       updatedAt: now
     });
@@ -2309,18 +2966,24 @@ async function confirmAgentDelivery(deliveryId) {
   }
 
   const payload = buildTerminalInstructionPayload(message, targetWindow);
-  const ok = await sendPastedTerminalInstruction(targetWindow.id, payload);
+  const submission = await sendAgentDeliveryInstruction(project, delivery, targetWindow, payload);
+  const ok = submission?.ok;
   const now = new Date().toISOString();
   delivery.attempts += 1;
   delivery.updatedAt = now;
+  delivery.submissionProvider = submission?.provider || delivery.submissionProvider || normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider);
+  delivery.submissionMethod = submission?.method || delivery.submissionMethod || "";
+  delivery.submissionDetail = submission?.detail || delivery.submissionDetail || "";
   if (!ok) {
     delivery.status = "failed";
-    delivery.lastError = "terminal-write-failed";
+    delivery.lastError ||= submission?.error || "terminal-write-failed";
     recordAppLog("agent.delivery.failed", {
       projectId: project.id,
       deliveryId: delivery.id,
       messageId: message.id,
       windowId: targetWindow.id,
+      provider: delivery.submissionProvider,
+      method: delivery.submissionMethod,
       reason: delivery.lastError
     }, "error");
     saveState();
@@ -2328,8 +2991,15 @@ async function confirmAgentDelivery(deliveryId) {
     return { ok: false, reason: delivery.lastError };
   }
 
-  delivery.status = "sent";
+  delivery.status = "submitted";
   delivery.sentAt = now;
+  delivery.submittedAt = now;
+  delivery.responseWatchStartedAt = now;
+  delivery.stuckCheckAt = "";
+  delivery.stuckDetectedAt = "";
+  delivery.lastFeedback = isCodeBuddyAgentWindow(targetWindow)
+    ? "指令文件已生成并提交给 CodeBuddy，等待 Agent 输出。"
+    : "指令已写入终端，等待 Agent 输出。";
   delivery.lastError = "";
   message.injectedWindowIds = uniqueStrings([...(message.injectedWindowIds || []), targetWindow.id]);
   message.injectedAt = now;
@@ -2359,10 +3029,14 @@ async function confirmAgentDelivery(deliveryId) {
     taskId: message.taskId || "",
     windowId: targetWindow.id,
     roleId: targetWindow.roleId,
+    provider: delivery.submissionProvider,
+    method: delivery.submissionMethod,
+    deliveryFilePath: delivery.deliveryFilePath || "",
     contentLength: message.content.length
   });
   saveState();
   render();
+  scheduleDeliveryStuckCheck(delivery.id);
   return { ok: true, deliveryId: delivery.id, windowId: targetWindow.id };
 }
 
@@ -2389,17 +3063,22 @@ function cancelAgentDelivery(deliveryId) {
 function retryAgentDelivery(deliveryId) {
   const project = getProject();
   const delivery = project?.agentDeliveries?.find((item) => item.id === deliveryId);
-  if (!project || !delivery || !["failed", "canceled"].includes(delivery.status)) {
+  const canRetrySubmitted = delivery?.status === "submitted" && Boolean(delivery.stuckDetectedAt);
+  if (!project || !delivery || (!["failed", "canceled"].includes(delivery.status) && !canRetrySubmitted)) {
     return false;
   }
   delivery.status = "pending";
   delivery.lastError = "";
+  delivery.lastFeedback = "";
+  delivery.stuckCheckAt = "";
+  delivery.stuckDetectedAt = "";
   delivery.updatedAt = new Date().toISOString();
   recordAppLog("agent.delivery.retried", {
     projectId: project.id,
     deliveryId,
     messageId: delivery.messageId,
-    windowId: delivery.windowId
+    windowId: delivery.windowId,
+    fromStatus: canRetrySubmitted ? "submitted-stuck" : "failed-or-canceled"
   });
   saveState();
   render();
@@ -2417,7 +3096,7 @@ function recordTerminalOutputReference(windowId, data) {
     return;
   }
   const delivery = project.agentDeliveries?.find((item) => item.id === win.lastAgentDeliveryId);
-  if (!delivery || delivery.status !== "sent") {
+  if (!delivery || !["sent", "submitted", "responded", "waiting"].includes(delivery.status)) {
     return;
   }
 
@@ -2442,13 +3121,51 @@ function recordTerminalOutputReference(windowId, data) {
     project.terminalOutputRefs.push(ref);
   }
   project.terminalOutputRefs = project.terminalOutputRefs.slice(-300);
+
+  const previousDeliveryStatus = delivery.status;
+  if (isAgentApprovalPromptOutput(excerpt)) {
+    delivery.status = "waiting";
+    delivery.waitingAt = now;
+    delivery.stuckDetectedAt = "";
+    if (deliveryStuckTimers.has(delivery.id)) {
+      clearTimeout(deliveryStuckTimers.get(delivery.id));
+      deliveryStuckTimers.delete(delivery.id);
+    }
+    delivery.lastFeedback = "Agent 正在等待人工确认。";
+  } else if (!isPasteOnlyTerminalFeedback(excerpt) && !isDeliveryInstructionEcho(excerpt) && !["responded", "waiting"].includes(delivery.status)) {
+    delivery.status = "responded";
+    delivery.respondedAt = now;
+    delivery.stuckDetectedAt = "";
+    if (deliveryStuckTimers.has(delivery.id)) {
+      clearTimeout(deliveryStuckTimers.get(delivery.id));
+      deliveryStuckTimers.delete(delivery.id);
+    }
+    delivery.lastFeedback = "Agent 已产生终端输出。";
+  } else if (isDeliveryInstructionEcho(excerpt)) {
+    delivery.lastFeedback = "CodeBuddy delivery instruction entered; waiting for Agent output.";
+  } else if (isPasteOnlyTerminalFeedback(excerpt)) {
+    delivery.lastFeedback = "终端已接收粘贴文本，尚未检测到 Agent 输出。";
+  }
+  delivery.updatedAt = now;
+
   recordAppLog("agent.delivery.output-referenced", {
     projectId: project.id,
     deliveryId: delivery.id,
     messageId: delivery.messageId,
     windowId,
-    excerptLength: excerpt.length
+    excerptLength: excerpt.length,
+    deliveryStatus: delivery.status
   });
+  if (delivery.status !== previousDeliveryStatus) {
+    recordAppLog("agent.delivery.status.changed", {
+      projectId: project.id,
+      deliveryId: delivery.id,
+      messageId: delivery.messageId,
+      windowId,
+      previousStatus: previousDeliveryStatus,
+      status: delivery.status
+    });
+  }
   saveState();
   refreshMessageTimelineList();
 }
@@ -2502,104 +3219,279 @@ function getProjectTimelineEvents(project) {
     .slice(0, 120);
 }
 
+function getTimelineItemKey(item) {
+  return `${item.kind}:${item.id}`;
+}
+
+function getTimelineItemDate(item) {
+  return new Date(item.time || 0);
+}
+
+function getTimelineItemLabel(item) {
+  if (item.kind === "agent-event") {
+    const event = item.event;
+    return {
+      title: `Agent · ${getRole(event.roleId).name}`,
+      subtitle: event.status || event.type || "event",
+      summary: event.message || event.sessionId || "Agent 输出了状态事件。"
+    };
+  }
+
+  const message = item.message;
+  return {
+    title: getRole(message.fromRoleId).name,
+    subtitle: message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"),
+    summary: message.content
+  };
+}
+
+function renderTimelineNode(item, isSelected, index, total) {
+  const key = getTimelineItemKey(item);
+  const labels = getTimelineItemLabel(item);
+  const statusClass = item.kind === "agent-event"
+    ? normalizeAgentEventStatus(item.event.status) || item.event.status || "running"
+    : "message";
+  const nodeClasses = [
+    "message-timeline-node",
+    item.kind,
+    item.kind === "agent-event" ? "agent-timeline-row" : "",
+    statusClass,
+    isSelected ? "active" : "",
+    item.kind === "message" && item.message.toRoleIds.length > 1 ? "branching" : ""
+  ].filter(Boolean).join(" ");
+  const timeLabel = formatDateTime(item.time);
+  const branchTargets = item.kind === "message" && item.message.toRoleIds.length > 1
+    ? `
+      <div class="message-branch-targets" aria-label="分叉接收角色">
+        ${item.message.toRoleIds.map((roleId) => `<span>${escapeHtml(getRole(roleId).name)}</span>`).join("")}
+      </div>
+    `
+    : "";
+  const singleTarget = item.kind === "message" && item.message.toRoleIds.length === 1
+    ? `<div class="message-node-target">${escapeHtml(labels.subtitle)}</div>`
+    : "";
+
+  return `
+    <button class="${escapeHtml(nodeClasses)}"
+      data-action="select-message-timeline-node"
+      data-timeline-item-id="${escapeHtml(key)}"
+      style="--node-index:${index}; --node-count:${total};"
+      aria-pressed="${isSelected ? "true" : "false"}">
+      <span class="message-node-time">${escapeHtml(timeLabel)}</span>
+      <span class="message-node-dot"></span>
+      <span class="message-node-title">${escapeHtml(labels.title)}</span>
+      <span class="message-node-summary">${escapeHtml(labels.summary)}</span>
+      ${singleTarget}
+      ${branchTargets}
+    </button>
+  `;
+}
+
+function renderDeliveryRows(deliveries, refs = []) {
+  if (!deliveries.length) {
+    return "";
+  }
+
+  return `
+    <div class="delivery-list">
+      ${deliveries.map((delivery) => {
+        const deliveryRefs = refs.filter((ref) => ref.deliveryId === delivery.id);
+        const latestRef = deliveryRefs.at(-1);
+        const canRetry = ["failed", "canceled"].includes(delivery.status) || (delivery.status === "submitted" && delivery.stuckDetectedAt);
+        const providerLabel = delivery.submissionProvider ? getAgentProviderLabel(delivery.submissionProvider) : "未提交";
+        const filePath = delivery.deliveryFileAbsolutePath || delivery.deliveryFilePath || "";
+        return `
+          <div class="delivery-row ${escapeHtml(delivery.status)} ${delivery.stuckDetectedAt ? "stuck" : ""}">
+            <div class="delivery-row-head">
+              <span>${escapeHtml(getRole(delivery.roleId).name)} · ${escapeHtml(getDeliveryStatusLabel(delivery.status))}</span>
+              <span>${escapeHtml(formatDateTime(delivery.updatedAt))}</span>
+            </div>
+            <div class="delivery-meta">
+              <span>后端：${escapeHtml(providerLabel)}</span>
+              <span>方式：${escapeHtml(getDeliveryMethodLabel(delivery.submissionMethod))}</span>
+              ${delivery.attempts ? `<span>尝试：${escapeHtml(delivery.attempts)}</span>` : ""}
+              ${delivery.stuckDetectedAt ? `<span>疑似卡住：${escapeHtml(formatDateTime(delivery.stuckDetectedAt))}</span>` : ""}
+            </div>
+            ${filePath ? `<code class="delivery-path">${escapeHtml(filePath)}</code>` : ""}
+            ${delivery.submissionDetail ? `<em class="delivery-feedback">${escapeHtml(delivery.submissionDetail)}</em>` : ""}
+            ${delivery.lastError ? `<em>${escapeHtml(delivery.lastError)}</em>` : ""}
+            ${delivery.lastFeedback ? `<em class="delivery-feedback">${escapeHtml(delivery.lastFeedback)}</em>` : ""}
+            ${latestRef?.excerpt ? `<pre class="delivery-output-preview">${escapeHtml(latestRef.excerpt.slice(-420))}</pre>` : ""}
+            <div class="delivery-actions">
+              ${delivery.status === "pending" ? `
+                <button class="secondary-button compact" data-action="confirm-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">确认投递</button>
+                <button class="secondary-button compact" data-action="cancel-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">取消</button>
+              ` : ""}
+              ${canRetry ? `
+                <button class="secondary-button compact" data-action="retry-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">重试</button>
+              ` : ""}
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderTimelineDetail(project, item) {
+  if (!item) {
+    return `<div class="message-empty">请选择时间轴节点查看详情。</div>`;
+  }
+
+  if (item.kind === "agent-event") {
+    const event = item.event;
+    const toNames = event.toRoleIds.length > 0
+      ? ` → ${event.toRoleIds.map((roleId) => getRole(roleId).name).join("、")}`
+      : "";
+    return `
+      <div class="message-row timeline-row agent-timeline-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}" data-agent-event-id="${escapeHtml(event.id)}">
+        <div class="message-row-head">
+          <strong>Agent 事件 · ${escapeHtml(getRole(event.roleId).name)}${escapeHtml(toNames)}</strong>
+          <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
+        </div>
+        <div class="message-meta">
+          <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : "会话事件")}</span>
+          <span>${escapeHtml(event.status || "event")}</span>
+          <span>${escapeHtml(event.structured ? "structured-event" : event.type || "status")}</span>
+        </div>
+        <p>${escapeHtml(event.message || event.sessionId || "Agent 输出了状态事件。")}</p>
+      </div>
+    `;
+  }
+
+  const message = item.message;
+  const fromRole = getRole(message.fromRoleId);
+  const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
+  const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
+  const injectableWindows = getInjectableWindowsForMessage(project, message);
+  const deliveries = getDeliveriesForMessage(project, message.id);
+  const refs = getOutputRefsForMessage(project, message.id);
+  const injectedLabel = message.injectedWindowIds?.length
+    ? `<span>已注入 ${message.injectedWindowIds.length} 个终端</span>`
+    : "";
+  const submittedDeliveryCount = deliveries.filter((delivery) => ["sent", "submitted", "responded", "waiting"].includes(delivery.status)).length;
+  const deliverySummary = deliveries.length
+    ? `<span>投递 ${submittedDeliveryCount}/${deliveries.length}</span>`
+    : "";
+
+  return `
+    <div class="message-row timeline-row" data-message-id="${escapeHtml(message.id)}">
+      <div class="message-row-head">
+        <strong>${escapeHtml(fromRole.name)} → ${escapeHtml(toNames)}</strong>
+        <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
+      </div>
+      <div class="message-meta">
+        <span>${escapeHtml(channelLabel)}</span>
+        <span>${escapeHtml(message.source || "manual")}</span>
+        ${injectedLabel}
+        ${deliverySummary}
+        ${refs.length ? `<span>${refs.length} 条输出引用</span>` : ""}
+      </div>
+      <p>${escapeHtml(message.content)}</p>
+      ${renderDeliveryRows(deliveries, refs)}
+      <div class="message-row-actions">
+        ${injectableWindows.length > 0 ? `<button class="secondary-button compact" data-action="inject-message-terminal" data-message-id="${escapeHtml(message.id)}">加入投递队列</button>` : ""}
+        ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">查看输出</button>` : ""}
+      </div>
+    </div>
+  `;
+}
+
 function renderMessageRows(project) {
   const timeline = getProjectTimelineEvents(project);
   if (timeline.length === 0) {
+    selectedTimelineItemId = "";
     return `<div class="message-empty">暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。</div>`;
   }
 
-  return timeline
-    .map((item) => {
-      if (item.kind === "agent-event") {
-        const event = item.event;
-        const toNames = event.toRoleIds.length > 0
-          ? ` → ${event.toRoleIds.map((roleId) => getRole(roleId).name).join("、")}`
-          : "";
-        return `
-          <div class="message-row timeline-row agent-timeline-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}" data-agent-event-id="${escapeHtml(event.id)}">
-            <div class="message-row-head">
-              <strong>Agent 事件 · ${escapeHtml(getRole(event.roleId).name)}${escapeHtml(toNames)}</strong>
-              <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
-            </div>
-            <div class="message-meta">
-              <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : "会话事件")}</span>
-              <span>${escapeHtml(event.status || "event")}</span>
-              <span>${escapeHtml(event.structured ? "structured-event" : event.type || "status")}</span>
-            </div>
-            <p>${escapeHtml(event.message || event.sessionId || "Agent 输出了状态事件。")}</p>
-          </div>
-        `;
-      }
+  const timelineKeys = new Set(timeline.map(getTimelineItemKey));
+  if (!selectedTimelineItemId || !timelineKeys.has(selectedTimelineItemId)) {
+    selectedTimelineItemId = getTimelineItemKey(timeline[0]);
+  }
 
-      const message = item.message;
-      const fromRole = getRole(message.fromRoleId);
-      const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
-      const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
-      const injectableWindows = getInjectableWindowsForMessage(project, message);
-      const deliveries = getDeliveriesForMessage(project, message.id);
-      const refs = getOutputRefsForMessage(project, message.id);
-      const injectedLabel = message.injectedWindowIds?.length
-        ? `<span>已注入 ${message.injectedWindowIds.length} 个终端</span>`
-        : "";
-      const deliverySummary = deliveries.length
-        ? `<span>投递 ${deliveries.filter((item) => item.status === "sent").length}/${deliveries.length}</span>`
-        : "";
-      const deliveryRows = deliveries.length ? `
-        <div class="delivery-list">
-          ${deliveries.map((delivery) => `
-            <div class="delivery-row ${escapeHtml(delivery.status)}">
-              <span>${escapeHtml(getRole(delivery.roleId).name)} · ${escapeHtml(delivery.status)}</span>
-              <span>${escapeHtml(formatDateTime(delivery.updatedAt))}</span>
-              <div class="delivery-actions">
-                ${delivery.status === "pending" ? `
-                  <button class="secondary-button compact" data-action="confirm-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">确认投递</button>
-                  <button class="secondary-button compact" data-action="cancel-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">取消</button>
-                ` : ""}
-                ${["failed", "canceled"].includes(delivery.status) ? `
-                  <button class="secondary-button compact" data-action="retry-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">重试</button>
-                ` : ""}
-              </div>
-              ${delivery.lastError ? `<em>${escapeHtml(delivery.lastError)}</em>` : ""}
-            </div>
-          `).join("")}
+  const chronological = [...timeline].sort((a, b) => getTimelineItemDate(a).getTime() - getTimelineItemDate(b).getTime());
+  const selectedItem = timeline.find((item) => getTimelineItemKey(item) === selectedTimelineItemId) || timeline[0];
+
+  return `
+    <div class="message-timeline-shell">
+      <div class="message-timeline-scroll" aria-label="协作横向时间轴">
+        <div class="message-timeline-track" style="--timeline-count:${chronological.length};">
+          ${chronological.map((item, index) => renderTimelineNode(item, getTimelineItemKey(item) === selectedTimelineItemId, index, chronological.length)).join("")}
         </div>
-      ` : "";
-      return `
-        <div class="message-row timeline-row" data-message-id="${escapeHtml(message.id)}">
-          <div class="message-row-head">
-            <strong>${escapeHtml(fromRole.name)} → ${escapeHtml(toNames)}</strong>
-            <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
-          </div>
-          <div class="message-meta">
-            <span>${escapeHtml(channelLabel)}</span>
-            <span>${escapeHtml(message.source || "manual")}</span>
-            ${injectedLabel}
-            ${deliverySummary}
-            ${refs.length ? `<span>${refs.length} 条输出引用</span>` : ""}
-          </div>
-          <p>${escapeHtml(message.content)}</p>
-          ${deliveryRows}
-          <div class="message-row-actions">
-            ${injectableWindows.length > 0 ? `<button class="secondary-button compact" data-action="inject-message-terminal" data-message-id="${escapeHtml(message.id)}">加入投递队列</button>` : ""}
-            ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">查看输出</button>` : ""}
-          </div>
-        </div>
-      `;
-    })
-    .join("");
+      </div>
+      <div class="message-timeline-detail" data-message-timeline-detail>
+        ${renderTimelineDetail(project, selectedItem)}
+      </div>
+    </div>
+  `;
+}
+
+function getMessageTimelineScroller() {
+  return document.querySelector(".message-timeline-scroll");
+}
+
+function captureMessageTimelineScroll() {
+  const scroller = getMessageTimelineScroller();
+  if (scroller) {
+    messageTimelineScrollLeft = scroller.scrollLeft;
+  }
+  return messageTimelineScrollLeft;
+}
+
+function restoreMessageTimelineScroll(scrollLeft = messageTimelineScrollLeft) {
+  const apply = () => {
+    const scroller = getMessageTimelineScroller();
+    if (!scroller) {
+      return;
+    }
+    const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    scroller.scrollLeft = Math.min(Math.max(0, scrollLeft), maxScrollLeft);
+    messageTimelineScrollLeft = scroller.scrollLeft;
+  };
+  apply();
+  requestAnimationFrame(apply);
 }
 
 function refreshMessageTimelineList() {
   const list = document.querySelector("[data-message-timeline-list]");
   const project = getProject();
   if (list && project) {
+    const scrollLeft = captureMessageTimelineScroll();
     list.innerHTML = renderMessageRows(project);
+    restoreMessageTimelineScroll(scrollLeft);
+  }
+}
+
+function selectMessageTimelineNode(itemId) {
+  const project = getProject();
+  if (!project || !itemId) {
+    return;
+  }
+
+  const timeline = getProjectTimelineEvents(project);
+  const selectedItem = timeline.find((item) => getTimelineItemKey(item) === itemId);
+  if (!selectedItem) {
+    return;
+  }
+
+  selectedTimelineItemId = itemId;
+  document.querySelectorAll(".message-timeline-node").forEach((node) => {
+    const isActive = node instanceof HTMLElement && node.dataset.timelineItemId === selectedTimelineItemId;
+    node.classList.toggle("active", isActive);
+    node.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  const detail = document.querySelector("[data-message-timeline-detail]");
+  if (detail) {
+    detail.innerHTML = renderTimelineDetail(project, selectedItem);
   }
 }
 
 function showMessageCenterModal(defaults = {}) {
   closeMenus();
   const project = getProject();
+  const modalWasOpen = Boolean(document.querySelector(".message-center-modal"));
+  const timelineScrollLeft = modalWasOpen ? captureMessageTimelineScroll() : 0;
   if (!project) {
     renderModal(`
       <div class="modal message-center-modal">
@@ -2616,6 +3508,10 @@ function showMessageCenterModal(defaults = {}) {
   messageComposerDefaults = { ...messageComposerDefaults, ...defaults };
   if (Object.prototype.hasOwnProperty.call(defaults, "filterTaskId")) {
     messageTimelineFilters = { ...messageTimelineFilters, taskId: defaults.filterTaskId || "" };
+  } else if (!modalWasOpen) {
+    const currentTaskId = messageComposerDefaults.taskId || getCurrentTaskFilterId(project);
+    messageTimelineFilters = { ...messageTimelineFilters, taskId: currentTaskId || "", query: "" };
+    messageTimelineScrollLeft = 0;
   }
   ensureProjectShape(project);
   const { fromRoleId, toRoleId } = getDefaultMessageRoles(messageComposerDefaults);
@@ -2630,7 +3526,7 @@ function showMessageCenterModal(defaults = {}) {
 
   renderModal(`
     <div class="modal message-center-modal">
-      <h2>v0.5.3 协作时间线</h2>
+      <h2>v0.5.7 协作时间线</h2>
       <p>消息和 Agent 结构化事件会保存在当前项目中，用于驱动协作角标、任务群聊和角色私聊。</p>
       <div class="message-composer">
         <div class="field">
@@ -2676,6 +3572,9 @@ function showMessageCenterModal(defaults = {}) {
       </div>
     </div>
   `);
+  if (modalWasOpen) {
+    restoreMessageTimelineScroll(timelineScrollLeft);
+  }
 }
 
 function setMessageStatus(message, type = "error") {
@@ -2940,7 +3839,7 @@ function showRolePicker(type) {
         <div class="role-card terminal-role-card">
           <strong>${role.name}</strong>
           <span>${role.description}</span>
-          <div class="role-meta">${role.category} · Agent 当前使用 ${state.settings.agentProvider === "codex" ? "Codex" : "Claude Code"}</div>
+          <div class="role-meta">${role.category} · Agent 当前使用 ${getAgentProviderLabel(state.settings.agentProvider)}</div>
           <div class="role-card-actions">
             <button class="secondary-button" data-action="select-role" data-type="terminal" data-role-id="${role.id}" data-terminal-mode="shell">
               PowerShell
@@ -2957,7 +3856,7 @@ function showRolePicker(type) {
   renderModal(`
     <div class="modal">
       <h2>选择${getProgramLabel(type)}角色</h2>
-      <p>${type === "terminal" ? `终端会以角色身份运行，可选择普通 PowerShell 或 Agent。Agent 当前使用 ${state.settings.agentProvider === "codex" ? "Codex" : "Claude Code"}，可在系统设置中切换。` : "程序会以角色身份运行，后续任务分派和协作状态都绑定到这个角色。"}</p>
+      <p>${type === "terminal" ? `终端会以角色身份运行，可选择普通 PowerShell 或 Agent。Agent 当前使用 ${getAgentProviderLabel(state.settings.agentProvider)}，可在系统设置中切换。` : "程序会以角色身份运行，后续任务分派和协作状态都绑定到这个角色。"}</p>
       <div class="role-grid">${cards}</div>
       <div class="modal-actions">
         <button class="secondary-button" data-action="close-modal">取消</button>
@@ -3113,6 +4012,44 @@ function renderCodexStatus(status) {
   `;
 }
 
+function renderCodeBuddyStatus(status) {
+  if (!status) {
+    return `
+      <div class="claude-status empty" data-codebuddy-status>
+        尚未检测 CodeBuddy Code CLI 环境。
+      </div>
+    `;
+  }
+
+  const headline = status.runnable ? "CodeBuddy Code CLI 已可用" : "未检测到可运行的 CodeBuddy Code CLI";
+  const npmDetail = status.npm?.usable
+    ? `npm 可用：${status.npm.version || "已检测"}（${status.npm.command || "npm"}）`
+    : `npm 不可用：${status.npm?.errorDetail || "未返回版本信息"}`;
+  const npmCandidates = status.npm?.candidates?.length
+    ? `npm 候选：${status.npm.candidates.join(" | ")}`
+    : "";
+  const lookupDetail = status.lookupPaths?.length
+    ? `PATH 命中：${status.lookupPaths.join(" | ")}`
+    : "PATH 未命中 codebuddy 或 cbc。";
+  const detail = status.runnable
+    ? (status.version || "codebuddy 命令存在，但未返回版本信息。")
+    : `${status.autoInstallDisabled ? "当前环境禁用了 CodeBuddy Code 自动安装。" : "创建 CodeBuddy Agent 时会尝试自动安装。"} 推荐命令：${status.installCommand}`;
+
+  return `
+    <div class="claude-status ${status.runnable ? "ready" : "missing"}" data-codebuddy-status>
+      <strong>${escapeHtml(headline)}</strong>
+      <span>命令：${escapeHtml(status.command || "codebuddy")}</span>
+      <span>${escapeHtml(detail)}</span>
+      <span>${escapeHtml(npmDetail)}</span>
+      ${npmCandidates ? `<span>${escapeHtml(npmCandidates)}</span>` : ""}
+      <span>${escapeHtml(lookupDetail)}</span>
+      ${status.errorDetail ? `<span>${escapeHtml(`错误：${status.errorDetail}`)}</span>` : ""}
+      ${renderAgentAuthLines(status.auth)}
+      <span>检测时间：${escapeHtml(formatDateTime(status.checkedAt))}</span>
+    </div>
+  `;
+}
+
 function renderAgentAuthLines(auth) {
   if (!auth) {
     return "";
@@ -3141,7 +4078,7 @@ function renderAgentLoginTestStatus(provider) {
   const status = agentLoginTestStatuses[normalized];
   const attr = `data-agent-login-status="${escapeHtml(normalized)}"`;
   if (!status) {
-    return `<div class="model-connectivity-status idle" ${attr}>尚未测试 ${normalized === "codex" ? "Codex" : "Claude Code"} 远程登录态。</div>`;
+    return `<div class="model-connectivity-status idle" ${attr}>尚未测试 ${getAgentProviderLabel(normalized)} 远程登录态。</div>`;
   }
   if (status.state === "testing") {
     return `<div class="model-connectivity-status testing" ${attr}>正在测试远程登录态...</div>`;
@@ -3364,7 +4301,7 @@ function renderSystemSettingsSection() {
     <div class="settings-row">
       <div>
         <strong>Agent 摘要</strong>
-        <span>当前 Agent 后端为 ${state.settings.agentProvider === "codex" ? "Codex" : "Claude Code"}。终端后端与环境检测请进入“智能体设置”。</span>
+        <span>当前 Agent 后端为 ${getAgentProviderLabel(state.settings.agentProvider)}。终端后端与环境检测请进入“智能体设置”。</span>
       </div>
       <button class="secondary-button" data-action="set-settings-section" data-section="agent">打开智能体</button>
     </div>
@@ -3373,7 +4310,7 @@ function renderSystemSettingsSection() {
 
 function renderAgentSettingsSection() {
   return `
-    <div class="settings-row">
+    <div class="settings-row agent-provider-row">
       <div>
         <strong>Agent 终端</strong>
         <span>选择创建角色 Agent 时默认使用的终端后端。</span>
@@ -3381,6 +4318,7 @@ function renderAgentSettingsSection() {
       <div class="agent-provider-switch">
         ${renderAgentProviderOption("claude", "Claude Code", "适合 Claude Code 交互式开发任务。")}
         ${renderAgentProviderOption("codex", "Codex", "适合 Codex CLI 代码代理任务。")}
+        ${renderAgentProviderOption("codebuddy", "CodeBuddy Code", "适合 CodeBuddy Code 代码代理任务。")}
       </div>
     </div>
     <div class="settings-row">
@@ -3424,8 +4362,40 @@ function renderAgentSettingsSection() {
     <div class="settings-status-slot" id="codexLoginTestMount">${renderAgentLoginTestStatus("codex")}</div>
     <div class="settings-row">
       <div>
+        <strong>CodeBuddy Code 命令</strong>
+        <span>默认查找 codebuddy，并兼容 cbc；不可运行时会通过 npm 自动安装 CodeBuddy Code CLI。需要自定义路径时，可设置环境变量 COSS_CODEBUDDY_COMMAND。</span>
+      </div>
+      <span class="settings-value">codebuddy</span>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>CodeBuddy Code API Key</strong>
+        <span>创建 CodeBuddy Agent 终端时会写入 CODEBUDDY_API_KEY 环境变量；该值需要用户自行填写。</span>
+      </div>
+      <div class="settings-inline-field">
+        <input type="password" autocomplete="off" placeholder="填写 CodeBuddy API Key" value="${escapeHtml(state.settings.codeBuddyApiKey || "")}" data-codebuddy-api-key />
+      </div>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>CodeBuddy Code 自动检测</strong>
+        <span>检测 codebuddy、cbc、npm 和 PATH 命中路径。</span>
+      </div>
+      <button class="secondary-button" data-action="check-codebuddy">重新检测</button>
+    </div>
+    <div class="settings-status-slot" id="codeBuddyStatusMount">${renderCodeBuddyStatus(latestCodeBuddyStatus)}</div>
+    <div class="settings-row">
+      <div>
+        <strong>CodeBuddy Code 登录测试</strong>
+        <span>手动调用 CodeBuddy 兼容远程接口校验当前 API Key 是否可用；没有 key 时只显示跳过原因。</span>
+      </div>
+      <button class="secondary-button" data-action="test-agent-login" data-provider="codebuddy">测试登录态</button>
+    </div>
+    <div class="settings-status-slot" id="codeBuddyLoginTestMount">${renderAgentLoginTestStatus("codebuddy")}</div>
+    <div class="settings-row">
+      <div>
         <strong>Agent 角色提示词模板</strong>
-        <span>创建 Claude Code 或 Codex Agent 终端时，会把模板渲染后写入 COSS_ROLE_PROMPT，并同步会话与任务上下文。</span>
+        <span>创建 Claude Code、Codex 或 CodeBuddy Agent 终端时，会把模板渲染后写入 COSS_ROLE_PROMPT，并同步会话与任务上下文。</span>
       </div>
       <button class="secondary-button" data-action="reset-agent-prompt-template">恢复默认</button>
     </div>
@@ -3555,17 +4525,55 @@ async function checkCodexStatus() {
   }
 }
 
+async function checkCodeBuddyStatus() {
+  const mount = document.getElementById("codeBuddyStatusMount");
+  if (mount) {
+    mount.innerHTML = `<div class="claude-status empty" data-codebuddy-status>正在检测 CodeBuddy Code CLI 环境...</div>`;
+  }
+
+  try {
+    latestCodeBuddyStatus = await window.cossAPI.getCodeBuddyStatus({
+      apiKey: state.settings.codeBuddyApiKey || ""
+    });
+  } catch (error) {
+    latestCodeBuddyStatus = {
+      command: "codebuddy",
+      requestedCommand: "codebuddy",
+      lookupPaths: [],
+      runnable: false,
+      version: "",
+      errorDetail: error.message,
+      installCommand: "npm.cmd install -g @tencent-ai/codebuddy-code",
+      npm: { command: "npm.cmd", candidates: ["npm.cmd"], usable: false, version: "", errorDetail: error.message },
+      autoInstallDisabled: false,
+      checkedAt: new Date().toISOString()
+    };
+  }
+
+  const nextMount = document.getElementById("codeBuddyStatusMount");
+  if (nextMount) {
+    nextMount.innerHTML = renderCodeBuddyStatus(latestCodeBuddyStatus);
+  }
+}
+
 async function testAgentLogin(provider) {
   const normalized = normalizeAgentProvider(provider);
   agentLoginTestStatuses[normalized] = { state: "testing" };
-  const mountId = normalized === "codex" ? "codexLoginTestMount" : "claudeLoginTestMount";
+  const mountId = {
+    claude: "claudeLoginTestMount",
+    codex: "codexLoginTestMount",
+    codebuddy: "codeBuddyLoginTestMount"
+  }[normalized] || "claudeLoginTestMount";
   const mount = document.getElementById(mountId);
   if (mount) {
     mount.innerHTML = renderAgentLoginTestStatus(normalized);
   }
 
   try {
-    const result = await window.cossAPI.testAgentLogin(normalized);
+    const result = await window.cossAPI.testAgentLogin({
+      provider: normalized,
+      apiKey: normalized === "codebuddy" ? state.settings.codeBuddyApiKey || "" : ""
+    });
     agentLoginTestStatuses[normalized] = result || { ok: false, message: "远程登录态测试无返回。" };
   } catch (error) {
     agentLoginTestStatuses[normalized] = {
@@ -3947,17 +4955,19 @@ function renderWorkspace(project) {
   const collabOverlay = project ? renderCollabOverlay(project) : "";
   const desktopCount = project ? getProjectDesktops(project).length : 0;
   const activeProgramCount = project ? getDesktopWindows(project).length : 0;
+  const activeConversationTaskCount = project ? getConversationTasks(project).length : 0;
 
   return `
     <section class="workspace" data-active-desktop-id="${escapeHtml(activeDesktop?.id || "")}">
       <div class="workspace-topbar">
         <div class="project-heading">
           <h1 class="workspace-title">${project ? escapeHtml(project.name) : "未选择项目"}</h1>
-          <div class="workspace-subtitle">${project ? `${escapeHtml(project.path)} · ${escapeHtml(activeDesktop?.name || "主桌面")} · ${activeProgramCount} 个程序 · ${desktopCount} 个桌面 · ${project.tasks.length} 个任务` : "创建项目后启动工作区"}</div>
+          <div class="workspace-subtitle">${project ? `${escapeHtml(project.path)} · ${escapeHtml(activeDesktop?.name || "主对话")} · ${activeProgramCount} 个程序 · ${activeConversationTaskCount} 个对话任务 · ${desktopCount} 个对话 · ${project.tasks.length} 个项目任务` : "创建项目后启动工作区"}</div>
         </div>
         <div class="workspace-actions">
           <button class="secondary-button" data-action="show-message-center">${icon("assistant")}消息中心</button>
-          <button class="secondary-button task-view-toggle" data-action="show-task-view">${icon("layout")}任务视图</button>
+          <button class="secondary-button task-view-toggle" data-action="show-task-view">${icon("layout")}对话视图</button>
+          <button class="secondary-button" data-action="open-task-list-window">${icon("task")}任务列表</button>
           <button class="secondary-button" data-action="show-role-picker" data-type="terminal">${icon("terminal")}新建终端</button>
           <button class="secondary-button" data-action="show-create-task">${icon("task")}新建任务</button>
         </div>
@@ -4019,7 +5029,8 @@ function renderDock(project) {
   return `
     <div class="dock">
       <button class="dock-button" title="搜索">${icon("search")}</button>
-      <button class="dock-button task-view-toggle" title="任务视图" data-action="show-task-view">${icon("layout")}</button>
+      <button class="dock-button task-view-toggle" title="对话视图" data-action="show-task-view">${icon("layout")}</button>
+      <button class="dock-button" title="任务列表" data-action="open-task-list-window">${icon("task")}</button>
       <button class="dock-button" title="新建终端" data-action="show-role-picker" data-type="terminal">${icon("terminal")}</button>
       <button class="dock-button" title="新建浏览器" data-action="show-role-picker" data-type="browser">${icon("globe")}</button>
       <button class="dock-button" title="新建文件" data-action="show-role-picker" data-type="file">${icon("file")}</button>
@@ -4035,13 +5046,13 @@ function renderTaskView(project) {
 
   return `
     <div class="task-view-backdrop" data-action="close-task-view">
-      <div class="task-view-panel" role="dialog" aria-label="任务视图" data-no-focus="true">
+      <div class="task-view-panel" role="dialog" aria-label="对话视图" data-no-focus="true">
         <div class="task-view-head">
           <div>
-            <strong>任务视图</strong>
-            <span>把不同任务分组放到独立桌面，切换时只显示当前桌面的程序。</span>
+            <strong>对话视图</strong>
+            <span>一个对话是一组持续工作的桌面程序；同一对话内可连续发布任务并复用已有角色程序。</span>
           </div>
-          <button class="secondary-button compact" data-action="create-desktop">新建桌面</button>
+          <button class="secondary-button compact" data-action="create-desktop">新建对话</button>
         </div>
         <div class="snap-layout-strip" aria-label="窗口布局">
           ${TASK_LAYOUT_PRESETS.map((layout) => `
@@ -4055,11 +5066,12 @@ function renderTaskView(project) {
         <div class="desktop-switcher">
           ${desktops.map((desktop) => {
             const windows = getDesktopWindows(project, desktop.id);
+            const tasks = getConversationTasks(project, desktop.id);
             const previewWindows = windows.slice(0, 4);
             return `
               <button class="desktop-card ${desktop.id === activeDesktopId ? "active" : ""}" data-action="switch-desktop" data-desktop-id="${escapeHtml(desktop.id)}">
                 <span class="desktop-card-title">${escapeHtml(desktop.name)}</span>
-                <span class="desktop-card-meta">${windows.length} 个程序</span>
+                <span class="desktop-card-meta">${windows.length} 个程序 · ${tasks.length} 个任务</span>
                 <span class="desktop-card-preview">
                   ${previewWindows.map((win, index) => `<i style="--i:${index};" title="${escapeHtml(win.title)}"></i>`).join("")}
                 </span>
@@ -4079,7 +5091,8 @@ function renderProgramWindow(win) {
     terminal: renderTerminalContent,
     browser: renderBrowserContent,
     file: renderFileContent,
-    task: renderTaskContent
+    task: renderTaskContent,
+    "task-list": renderTaskListContent
   }[win.type]?.(win) || "";
 
   return `
@@ -4126,7 +5139,7 @@ function renderTerminalContent(win) {
   const role = getRole(win.roleId);
   const agentProvider = normalizeAgentProvider(win.agentProvider || state.settings.agentProvider);
   const modeLabel = {
-    agent: `Agent(${agentProvider === "codex" ? "Codex" : "Claude Code"})`,
+    agent: `Agent(${getAgentProviderLabel(agentProvider)})`,
     shell: "PowerShell"
   }[normalizeTerminalMode(win.terminalMode)];
   return `
@@ -4232,13 +5245,31 @@ function renderFileContent(win) {
 
 function renderTaskContent() {
   const project = getProject();
-  const tasks = project?.tasks || [];
+  const tasks = project ? getConversationTasks(project) : [];
   if (tasks.length === 0) {
-    return `<div class="browser-blank">暂无任务。右键桌面创建任务后会在这里显示拆解结果。</div>`;
+    return `<div class="browser-blank">当前对话暂无任务。右键空白处或点击新建任务后，会在这个对话中持续追加任务。</div>`;
   }
 
-  const taskCards = tasks
-    .flatMap((task) => task.subtasks.map((subtask) => ({ task, subtask })))
+  const pairs = tasks.flatMap((task) => task.subtasks.map((subtask) => ({ task, subtask })));
+  const availableRoleIds = uniqueRoleIds(pairs.map(({ subtask }) => subtask.roleId));
+  if (taskRoleFilter && !availableRoleIds.includes(taskRoleFilter)) {
+    taskRoleFilter = "";
+  }
+  const filteredPairs = taskRoleFilter
+    ? pairs.filter(({ subtask }) => subtask.roleId === taskRoleFilter)
+    : pairs;
+  const roleFilter = `
+    <div class="task-filterbar">
+      <label>
+        <span>角色过滤</span>
+        <select id="taskRoleFilter">
+          <option value="">全部角色</option>
+          ${availableRoleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskRoleFilter ? "selected" : ""}>${escapeHtml(getRole(roleId).name)}</option>`).join("")}
+        </select>
+      </label>
+    </div>
+  `;
+  const taskCards = filteredPairs
     .map(({ task, subtask }) => `
       <div class="task-card ${escapeHtml(normalizeSubtaskStatus(subtask.status))}">
         <div class="task-card-head">
@@ -4253,7 +5284,188 @@ function renderTaskContent() {
     `)
     .join("");
 
-  return `${taskCards}${renderRecentAgentEvents(project)}`;
+  return `${roleFilter}${taskCards || `<div class="message-empty">当前角色暂无子任务。</div>`}${renderRecentAgentEvents(project)}`;
+}
+
+function renderTaskListFilters(project, tasks) {
+  const roleIds = uniqueRoleIds(tasks.flatMap((task) => getTaskRoleIds(task)));
+  const statuses = uniqueStrings(tasks.map(getTaskStatusValue));
+  const models = uniqueStrings(tasks.map(getTaskModelName));
+  return `
+    <div class="task-list-filters">
+      <label>
+        <span>搜索</span>
+        <input id="taskListSearch" value="${escapeHtml(taskListFilters.query)}" placeholder="任务、角色、说明" />
+      </label>
+      <label>
+        <span>角色</span>
+        <select id="taskListRoleFilter">
+          <option value="">全部角色</option>
+          ${roleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskListFilters.roleId ? "selected" : ""}>${escapeHtml(getRole(roleId).name)}</option>`).join("")}
+        </select>
+      </label>
+      <label>
+        <span>状态</span>
+        <select id="taskListStatusFilter">
+          <option value="">全部状态</option>
+          ${statuses.map((status) => `<option value="${escapeHtml(status)}" ${status === taskListFilters.status ? "selected" : ""}>${escapeHtml(SUBTASK_STATUS_DEFS[status]?.label || status)}</option>`).join("")}
+        </select>
+      </label>
+      <label>
+        <span>模型</span>
+        <select id="taskListModelFilter">
+          <option value="">全部模型</option>
+          ${models.map((model) => `<option value="${escapeHtml(model)}" ${model === taskListFilters.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
+        </select>
+      </label>
+      <label class="task-list-check">
+        <input id="taskListIncludeArchived" type="checkbox" ${taskListFilters.includeArchived ? "checked" : ""} />
+        <span>显示归档</span>
+      </label>
+    </div>
+  `;
+}
+
+function renderTaskListDetail(project, task) {
+  if (!task) {
+    return `
+      <aside class="task-list-detail">
+        <div class="message-empty">选择一个任务查看详情。</div>
+      </aside>
+    `;
+  }
+
+  const messages = getTaskMessages(project, task.id);
+  const deliveries = getTaskDeliveries(project, task.id);
+  const refs = getTaskOutputRefs(project, task.id);
+  const status = getTaskStatusValue(task);
+  const doneCount = getTaskDoneCount(task);
+  return `
+    <aside class="task-list-detail">
+      <div class="task-detail-head">
+        <div>
+          <strong>${escapeHtml(task.title || "未命名任务")}</strong>
+          <span>${escapeHtml(task.goal || "")}</span>
+        </div>
+        ${renderSubtaskStatusChip(status)}
+      </div>
+      <div class="task-detail-actions">
+        <button class="secondary-button compact" data-action="show-message-center">查看时间线</button>
+        ${task.archived
+          ? `<button class="secondary-button compact" data-action="restore-task" data-task-id="${escapeHtml(task.id)}">恢复任务</button>`
+          : `<button class="secondary-button compact" data-action="archive-task" data-task-id="${escapeHtml(task.id)}">归档任务</button>`}
+      </div>
+      <div class="task-detail-metrics">
+        <span>子任务 ${doneCount}/${task.subtasks?.length || 0}</span>
+        <span>消息 ${messages.length}</span>
+        <span>投递 ${deliveries.length}</span>
+        <span>输出 ${refs.length}</span>
+        <span>${escapeHtml(getTaskModelName(task))}</span>
+      </div>
+      <div class="task-detail-section">
+        <strong>子任务</strong>
+        ${(task.subtasks || []).map((subtask) => `
+          <div class="task-detail-subtask ${escapeHtml(normalizeSubtaskStatus(subtask.status))}">
+            <span>${escapeHtml(getRole(subtask.roleId).name)}</span>
+            <strong>${escapeHtml(subtask.title)}</strong>
+            ${renderSubtaskStatusChip(subtask.status)}
+            <p>${escapeHtml(subtask.description || "")}</p>
+          </div>
+        `).join("")}
+      </div>
+      <div class="task-detail-section">
+        <strong>关联投递</strong>
+        ${deliveries.length
+          ? deliveries.slice(0, 5).map((delivery) => `
+            <div class="task-detail-linkrow">
+              <span>${escapeHtml(getRole(delivery.roleId).name)} · ${escapeHtml(getDeliveryStatusLabel(delivery.status))}</span>
+              <span>${escapeHtml(delivery.submissionMethod || "pending")}</span>
+            </div>
+          `).join("")
+          : `<div class="message-empty">暂无投递。</div>`}
+      </div>
+      <div class="task-detail-section">
+        <strong>最近消息</strong>
+        ${messages.length
+          ? messages.slice(-4).reverse().map((message) => `
+            <div class="task-detail-message">
+              <span>${escapeHtml(getRole(message.fromRoleId).name)} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</span>
+              <p>${escapeHtml(message.content)}</p>
+            </div>
+          `).join("")
+          : `<div class="message-empty">暂无消息。</div>`}
+      </div>
+    </aside>
+  `;
+}
+
+function renderTaskListContent() {
+  const project = getProject();
+  const conversation = getActiveDesktop(project);
+
+  if (!project) {
+    return `<div class="browser-blank">请先选择项目。</div>`;
+  }
+
+  const allTasks = getConversationTasks(project);
+  const visibleTasks = getFilteredConversationTasks(project);
+  const totalSubtasks = allTasks.reduce((sum, task) => sum + (task.subtasks?.length || 0), 0);
+  const archivedCount = allTasks.filter((task) => task.archived).length;
+
+  if (selectedTaskListTaskId && !visibleTasks.some((task) => task.id === selectedTaskListTaskId)) {
+    selectedTaskListTaskId = "";
+  }
+  const selectedTask = visibleTasks.find((task) => task.id === selectedTaskListTaskId) || visibleTasks[0] || null;
+  selectedTaskListTaskId = selectedTask?.id || "";
+
+  return `
+    <div class="task-list-program">
+      <div class="task-list-head">
+        <strong>${escapeHtml(conversation?.name || "当前对话")}任务列表</strong>
+        <span>${visibleTasks.length}/${allTasks.length} 个任务 · ${totalSubtasks} 个子任务 · ${archivedCount} 个归档</span>
+      </div>
+      ${renderTaskListFilters(project, allTasks)}
+      ${
+        allTasks.length === 0
+          ? `<div class="browser-blank">当前对话还没有任务。点击右上角“新建任务”后，任务会持续追加到这个对话中。</div>`
+          : `
+            <div class="task-list-layout">
+              <div class="task-list-items">
+                ${visibleTasks.length ? visibleTasks.map((task, index) => {
+                  const status = getTaskStatusValue(task);
+                  const doneCount = getTaskDoneCount(task);
+                  return `
+                    <button class="task-list-item ${selectedTask?.id === task.id ? "active" : ""} ${task.archived ? "archived" : ""}" data-action="select-task-list-task" data-task-id="${escapeHtml(task.id)}">
+                      <div class="task-list-row-head">
+                        <div>
+                          <strong>${escapeHtml(task.title || `任务 ${index + 1}`)}</strong>
+                          <span>${escapeHtml(task.goal || "")}</span>
+                        </div>
+                        ${renderSubtaskStatusChip(status)}
+                      </div>
+                      <div class="task-list-meta">
+                        <span>${escapeHtml(getTaskModelName(task))}</span>
+                        <span>${doneCount}/${task.subtasks?.length || 0} 已完成</span>
+                        <span>${escapeHtml(formatDateTime(task.confirmedAt || task.createdAt))}</span>
+                        ${task.archived ? `<span>已归档</span>` : ""}
+                      </div>
+                      <div class="task-list-subtasks">
+                        ${(task.subtasks || []).map((subtask) => `
+                          <span class="task-list-subtask ${escapeHtml(normalizeSubtaskStatus(subtask.status))}">
+                            ${escapeHtml(getRole(subtask.roleId).name)} · ${escapeHtml(subtask.title)}
+                          </span>
+                        `).join("")}
+                      </div>
+                    </button>
+                  `;
+                }).join("") : `<div class="message-empty">没有匹配当前筛选条件的任务。</div>`}
+              </div>
+              ${renderTaskListDetail(project, selectedTask)}
+            </div>
+          `
+      }
+    </div>
+  `;
 }
 
 function renderRecentAgentEvents(project) {
@@ -4349,6 +5561,7 @@ function renderSubtaskActions(taskId, subtask) {
   const actions = {
     pending: [button("开始执行", "running", "primary")],
     running: [button("标记完成", "done", "primary"), button("标记阻塞", "blocked")],
+    waiting: [button("继续执行", "running", "primary"), button("标记完成", "done"), button("标记阻塞", "blocked")],
     blocked: [button("继续执行", "running", "primary"), button("标记完成", "done")],
     done: [button("重新打开", "pending")]
   }[status] || [];
@@ -4379,6 +5592,7 @@ function renderContextMenu() {
       <button data-action="role-menu" data-type="terminal">${icon("terminal")}新建终端</button>
       <button data-action="role-menu" data-type="browser">${icon("globe")}新建浏览器</button>
       <button data-action="role-menu" data-type="file">${icon("file")}新建文件</button>
+      <button data-action="open-task-list-window">${icon("task")}任务列表</button>
       <button data-action="show-create-task">${icon("task")}新建任务</button>
       <button data-action="show-message-center">${icon("assistant")}消息中心</button>
       <div class="menu-divider"></div>
@@ -5024,12 +6238,6 @@ function disposeTerminalsOutsideActiveWorkspace(activeIds) {
       cleanupTerminalView(windowId, false);
     }
   }
-
-  for (const windowId of Array.from(terminalBackendIds)) {
-    if (!activeIds.has(windowId)) {
-      cleanupTerminalView(windowId, true);
-    }
-  }
 }
 
 function sendBufferedTerminalInput(win, data) {
@@ -5107,6 +6315,22 @@ function hydrateTerminalWindows() {
       return;
     }
 
+    const existingView = terminalViews.get(win.id);
+    if (existingView?.mount === mount) {
+      requestAnimationFrame(() => {
+        try {
+          existingView.fitAddon?.fit();
+          window.cossAPI.resizeTerminal(win.id, existingView.term.cols, existingView.term.rows);
+          if (focusedWindowId === win.id) {
+            existingView.term.focus();
+          }
+        } catch (error) {
+          console.warn("Failed to refit existing terminal", error);
+        }
+      });
+      return;
+    }
+
     cleanupTerminalView(win.id, false);
     mount.innerHTML = "";
 
@@ -5175,7 +6399,8 @@ function hydrateTerminalWindows() {
       resizeDisposable,
       unsubscribeData,
       unsubscribeExit,
-      resizeObserver
+      resizeObserver,
+      mount
     });
 
     requestAnimationFrame(() => {
@@ -5185,48 +6410,54 @@ function hydrateTerminalWindows() {
       }
     });
 
-    if (!terminalBackendIds.has(win.id)) {
-      terminalBackendIds.add(win.id);
-      if (normalizeTerminalMode(win.terminalMode) === "agent") {
-        win.agentSession = ensureAgentSessionShape(win, project);
-      }
-      const taskContext = getTaskContextForWindow(win, project);
-      window.cossAPI
-        .createTerminal({
-          id: win.id,
-          cwd: project?.path,
-          projectId: project?.id || "",
-          projectName: project?.name || "",
-          roleId: role.id,
-          roleName: role.name,
-          roleDescription: role.description,
-          useClaude: role.claude,
-          terminalMode: win.terminalMode || "shell",
-          agentProvider: win.agentProvider || state.settings.agentProvider,
-          agentSession: win.agentSession || null,
-          taskContext,
-          rolePromptTemplate: state.settings.agentPromptTemplate,
-          agentFallbackToShell: state.settings.agentFallbackToShell !== false,
-          cols: term.cols,
-          rows: term.rows
-        })
-        .then((result) => {
-          if (win.agentSession && result?.agentSession) {
-            win.agentSession = {
-              ...win.agentSession,
-              ...result.agentSession,
-              lastStartedAt: new Date().toISOString(),
-              resumeCount: Number(win.agentSession.resumeCount || 0) + 1,
-              lastActiveMode: result.activeMode || ""
-            };
-            saveState();
-          }
-        })
-        .catch((error) => {
-          terminalBackendIds.delete(win.id);
-          term.writeln(`\x1b[31m终端启动失败：${error.message}\x1b[0m`);
-        });
+    const backendWasKnown = terminalBackendIds.has(win.id);
+    terminalBackendIds.add(win.id);
+    if (normalizeTerminalMode(win.terminalMode) === "agent") {
+      win.agentSession = ensureAgentSessionShape(win, project);
     }
+    const taskContext = getTaskContextForWindow(win, project);
+    window.cossAPI
+      .createTerminal({
+        id: win.id,
+        cwd: project?.path,
+        projectId: project?.id || "",
+        projectName: project?.name || "",
+        roleId: role.id,
+        roleName: role.name,
+        roleDescription: role.description,
+        useClaude: role.claude,
+        terminalMode: win.terminalMode || "shell",
+        agentProvider: win.agentProvider || state.settings.agentProvider,
+        agentSession: win.agentSession || null,
+        taskContext,
+        rolePromptTemplate: state.settings.agentPromptTemplate,
+        agentFallbackToShell: state.settings.agentFallbackToShell !== false,
+        codeBuddyApiKey: state.settings.codeBuddyApiKey || "",
+        cols: term.cols,
+        rows: term.rows
+      })
+      .then((result) => {
+        if (result?.reattached && result.transcript) {
+          term.reset();
+          term.write(result.transcript);
+        }
+        if (win.agentSession && result?.agentSession) {
+          win.agentSession = {
+            ...win.agentSession,
+            ...result.agentSession,
+            lastStartedAt: result.reattached ? win.agentSession.lastStartedAt : new Date().toISOString(),
+            resumeCount: Number(win.agentSession.resumeCount || 0) + (result.reattached ? 0 : 1),
+            lastActiveMode: result.activeMode || ""
+          };
+          saveState();
+        }
+      })
+      .catch((error) => {
+        if (!backendWasKnown) {
+          terminalBackendIds.delete(win.id);
+        }
+        term.writeln(`\x1b[31m终端启动失败：${error.message}\x1b[0m`);
+      });
   });
 }
 
@@ -5248,7 +6479,8 @@ function getWindowMinSize(win) {
     terminal: { width: 360, height: 240 },
     browser: { width: 440, height: 300 },
     file: { width: 440, height: 300 },
-    task: { width: 360, height: 260 }
+    task: { width: 360, height: 260 },
+    "task-list": { width: 680, height: 360 }
   };
   return defaults[win.type] || { width: 320, height: 220 };
 }
@@ -5539,13 +6771,13 @@ document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) {
     const clickTarget = event.target instanceof Element ? event.target : event.target?.parentElement;
-    const shouldRefreshFloatingUi = Boolean(contextMenu || roleMenu || activePopoverWindowId || openAppMenuId || taskViewOpen);
+    const shouldRefreshFloatingUi = Boolean(activePopoverWindowId || openAppMenuId || taskViewOpen);
     closeMenus();
     activePopoverWindowId = null;
     if (!clickTarget?.closest(".task-view-panel")) {
       taskViewOpen = false;
     }
-    if (shouldRefreshFloatingUi || (!clickTarget?.closest(".program-window") && !clickTarget?.closest(".modal-backdrop"))) {
+    if (shouldRefreshFloatingUi) {
       render();
     }
     return;
@@ -5578,7 +6810,7 @@ document.addEventListener("click", (event) => {
   }
 
   if (action === "desktop") {
-    const shouldRefreshFloatingUi = Boolean(contextMenu || roleMenu || activePopoverWindowId || openAppMenuId || taskViewOpen);
+    const shouldRefreshFloatingUi = Boolean(activePopoverWindowId || openAppMenuId || taskViewOpen);
     closeMenus();
     activePopoverWindowId = null;
     taskViewOpen = false;
@@ -5612,6 +6844,27 @@ document.addEventListener("click", (event) => {
 
   if (action === "create-desktop") {
     createProjectDesktop();
+    return;
+  }
+
+  if (action === "open-task-list-window") {
+    closeMenus();
+    openTaskListWindow();
+    return;
+  }
+
+  if (action === "select-task-list-task") {
+    selectTaskListTask(target.dataset.taskId);
+    return;
+  }
+
+  if (action === "archive-task") {
+    setTaskArchived(target.dataset.taskId, true);
+    return;
+  }
+
+  if (action === "restore-task") {
+    setTaskArchived(target.dataset.taskId, false);
     return;
   }
 
@@ -5876,6 +7129,11 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "check-codebuddy") {
+    checkCodeBuddyStatus();
+    return;
+  }
+
   if (action === "test-agent-login") {
     testAgentLogin(target.dataset.provider);
     return;
@@ -5939,6 +7197,11 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "select-message-timeline-node") {
+    selectMessageTimelineNode(target.dataset.timelineItemId || "");
+    return;
+  }
+
   if (action === "focus-terminal-ref-window") {
     closeModal();
     focusWindow(target.dataset.windowId);
@@ -5946,7 +7209,7 @@ document.addEventListener("click", (event) => {
   }
 
   if (action === "confirm-task-plan") {
-    confirmTaskPlan();
+    confirmTaskPlanInConversation();
     return;
   }
 
@@ -6041,9 +7304,27 @@ document.addEventListener("input", (event) => {
     return;
   }
 
+  if (inputTarget?.id === "taskListSearch") {
+    taskListFilters = {
+      ...taskListFilters,
+      query: inputTarget.value
+    };
+    selectedTaskListTaskId = "";
+    render();
+    return;
+  }
+
   const agentPromptTemplate = event.target instanceof Element ? event.target.closest("[data-agent-prompt-template]") : null;
   if (agentPromptTemplate) {
     state.settings.agentPromptTemplate = agentPromptTemplate.value;
+    saveState();
+    return;
+  }
+
+  const codeBuddyApiKey = event.target instanceof Element ? event.target.closest("[data-codebuddy-api-key]") : null;
+  if (codeBuddyApiKey) {
+    state.settings.codeBuddyApiKey = codeBuddyApiKey.value;
+    delete agentLoginTestStatuses.codebuddy;
     saveState();
     return;
   }
@@ -6076,6 +7357,13 @@ document.addEventListener("input", (event) => {
   }
 });
 
+document.addEventListener("scroll", (event) => {
+  const scroller = event.target instanceof Element ? event.target.closest(".message-timeline-scroll") : null;
+  if (scroller) {
+    messageTimelineScrollLeft = scroller.scrollLeft;
+  }
+}, true);
+
 document.addEventListener("change", (event) => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) {
@@ -6103,6 +7391,51 @@ document.addEventListener("change", (event) => {
       taskId: target.value
     };
     refreshMessageTimelineList();
+  }
+
+  if (target.id === "taskRoleFilter") {
+    taskRoleFilter = target.value;
+    render();
+    return;
+  }
+
+  if (target.id === "taskListRoleFilter") {
+    taskListFilters = {
+      ...taskListFilters,
+      roleId: target.value
+    };
+    selectedTaskListTaskId = "";
+    render();
+    return;
+  }
+
+  if (target.id === "taskListStatusFilter") {
+    taskListFilters = {
+      ...taskListFilters,
+      status: target.value
+    };
+    selectedTaskListTaskId = "";
+    render();
+    return;
+  }
+
+  if (target.id === "taskListModelFilter") {
+    taskListFilters = {
+      ...taskListFilters,
+      model: target.value
+    };
+    selectedTaskListTaskId = "";
+    render();
+    return;
+  }
+
+  if (target.id === "taskListIncludeArchived") {
+    taskListFilters = {
+      ...taskListFilters,
+      includeArchived: Boolean(target.checked)
+    };
+    selectedTaskListTaskId = "";
+    render();
   }
 });
 

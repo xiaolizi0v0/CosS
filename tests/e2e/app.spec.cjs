@@ -71,12 +71,27 @@ async function waitForLogEvent(userDataDir, eventName) {
   throw new Error(`Timed out waiting for log event ${eventName}`);
 }
 
+async function waitForSavedState(userDataDir, predicate, timeoutMs = 5000) {
+  const statePath = path.join(userDataDir, stateFileName);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(statePath)) {
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      if (predicate(state)) {
+        return state;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Timed out waiting for saved state condition");
+}
+
 test("boots into the workspace shell", async () => {
   const { app, page } = await launchApp();
 
   try {
     await expect(page.locator(".brand")).toContainText("CosS");
-    await expect(page.locator(".brand-version")).toHaveText("v0.5.3");
+    await expect(page.locator(".brand-version")).toHaveText("v0.5.7");
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".workspace-title")).toHaveText("E2E Project");
   } finally {
@@ -103,7 +118,7 @@ test("creates a project from the project modal", async () => {
   }
 });
 
-test("renders v0.5.3 custom title bar menus and exposes log directory info", async () => {
+test("renders v0.5.7 custom title bar menus and exposes log directory info", async () => {
   const { app, page, userDataDir } = await launchApp();
 
   try {
@@ -132,7 +147,7 @@ test("renders v0.5.3 custom title bar menus and exposes log directory info", asy
     await expect(page.locator(".app-menu-dropdown")).toContainText("关于 CosS");
 
     const info = await page.evaluate(() => window.cossAPI.getAppInfo());
-    expect(info.version).toBe("0.5.3");
+    expect(info.version).toBe("0.5.7");
     expect(info.logDirectory).toBe(path.join(userDataDir, "logs"));
   } finally {
     await app.close();
@@ -544,7 +559,7 @@ test("sends a v0.4 role message from the message center", async () => {
   try {
     await page.locator('.workspace-actions [data-action="show-message-center"]').click();
     await expect(page.locator(".message-center-modal")).toBeVisible();
-    await expect(page.locator(".message-center-modal")).toContainText("v0.5.3 协作时间线");
+    await expect(page.locator(".message-center-modal")).toContainText("v0.5.7 协作时间线");
 
     await page.locator("#messageFromRole").selectOption("product-manager");
     await page.locator("#messageToRole").selectOption("frontend-engineer");
@@ -557,6 +572,108 @@ test("sends a v0.4 role message from the message center", async () => {
 
     const logText = await waitForLogEvent(userDataDir, "role.message.sent");
     expect(logText).toContain("frontend-engineer");
+  } finally {
+    await app.close();
+  }
+});
+
+test("renders message center as a wide horizontal branching timeline", async () => {
+  const firstAt = "2026-01-01T00:09:00.000Z";
+  const secondAt = "2026-01-01T00:10:00.000Z";
+  const extraMessages = Array.from({ length: 8 }, (_, index) => ({
+    id: `message-extra-${index}-e2e`,
+    type: "role-message",
+    channelType: "task",
+    channelId: "task:task-timeline-e2e",
+    fromRoleId: index % 2 === 0 ? "product-manager" : "tech-lead",
+    toRoleIds: [index % 2 === 0 ? "tech-lead" : "product-manager"],
+    content: `EXTRA_MESSAGE_${index}`,
+    taskId: "task-timeline-e2e",
+    source: "manual",
+    status: "sent",
+    readBy: ["product-manager"],
+    createdAt: `2026-01-01T00:0${index}:00.000Z`
+  }));
+  const { app, page } = await launchApp({
+    desktops: [{ id: "desktop-main", name: "Main Desktop", taskId: "task-timeline-e2e", createdAt: firstAt }],
+    activeDesktopId: "desktop-main",
+    tasks: [
+      {
+        id: "task-timeline-e2e",
+        title: "Timeline readability task",
+        goal: "Verify timeline readability",
+        status: "running",
+        desktopId: "desktop-main",
+        createdAt: firstAt,
+        updatedAt: secondAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "test", summary: "Timeline", plannedAt: firstAt, confirmedAt: firstAt },
+        subtasks: []
+      }
+    ],
+    messages: [
+      ...extraMessages,
+      {
+        id: "message-branch-e2e",
+        type: "role-message",
+        channelType: "task",
+        channelId: "task:task-timeline-e2e",
+        fromRoleId: "product-manager",
+        toRoleIds: ["frontend-engineer", "backend-engineer"],
+        content: "BRANCH_MESSAGE_CONTENT",
+        taskId: "task-timeline-e2e",
+        source: "manual",
+        status: "sent",
+        readBy: ["product-manager"],
+        createdAt: firstAt
+      },
+      {
+        id: "message-followup-e2e",
+        type: "role-message",
+        channelType: "task",
+        channelId: "task:task-timeline-e2e",
+        fromRoleId: "backend-engineer",
+        toRoleIds: ["product-manager"],
+        content: "FOLLOWUP_MESSAGE_CONTENT",
+        taskId: "task-timeline-e2e",
+        source: "manual",
+        status: "sent",
+        readBy: ["backend-engineer"],
+        createdAt: secondAt
+      }
+    ]
+  });
+
+  try {
+    await page.locator('.workspace-actions [data-action="show-message-center"]').click();
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    const modalBox = await page.locator(".message-center-modal").boundingBox();
+    expect(modalBox.width).toBeGreaterThan(900);
+
+    await expect(page.locator(".message-timeline-scroll")).toBeVisible();
+    await expect(page.locator(".message-timeline-node")).toHaveCount(10);
+    await expect(page.locator(".message-timeline-node.branching")).toBeVisible();
+    await expect(page.locator(".message-timeline-node.branching .message-branch-targets span")).toHaveCount(2);
+    const dotCentersY = await page.locator(".message-timeline-node .message-node-dot").evaluateAll((dots) =>
+      dots.map((dot) => {
+        const box = dot.getBoundingClientRect();
+        return Math.round((box.top + box.height / 2) * 10) / 10;
+      })
+    );
+    expect(Math.max(...dotCentersY) - Math.min(...dotCentersY)).toBeLessThanOrEqual(1);
+
+    await expect(page.locator(".message-timeline-detail")).toContainText("FOLLOWUP_MESSAGE_CONTENT");
+    const scroller = page.locator(".message-timeline-scroll");
+    await scroller.evaluate((node) => {
+      node.scrollLeft = node.scrollWidth;
+    });
+    const scrollBeforeClick = await scroller.evaluate((node) => node.scrollLeft);
+    expect(scrollBeforeClick).toBeGreaterThan(0);
+    await page.locator(".message-timeline-node.branching").click();
+    const scrollAfterClick = await scroller.evaluate((node) => node.scrollLeft);
+    expect(scrollAfterClick).toBeGreaterThan(0);
+    await expect(page.locator(".message-timeline-detail")).toContainText("BRANCH_MESSAGE_CONTENT");
+    await expect(page.locator(".message-timeline-node.branching")).toHaveAttribute("aria-pressed", "true");
   } finally {
     await app.close();
   }
@@ -617,7 +734,7 @@ test("stores confirmed task plan collaboration messages in the v0.4 message bus"
   }
 });
 
-test("v0.5.3 sends subtask instructions into the collaboration timeline", async () => {
+test("v0.5.4 sends subtask instructions into the collaboration timeline", async () => {
   const mockPlan = {
     summary: "登录任务需要产品、前端、后端和测试协同。",
     subtasks: [
@@ -681,8 +798,22 @@ test("v0.5.3 sends subtask instructions into the collaboration timeline", async 
   }
 });
 
-test("v0.5.3 queues timeline messages for a running Agent terminal", async () => {
-  const createdAt = "2026-01-01T00:00:00.000Z";
+test("v0.5.4 queues timeline messages for a running Agent terminal", async () => {
+  const createdAt = "2026-01-01T00:20:00.000Z";
+  const timelineExtraMessages = Array.from({ length: 10 }, (_, index) => ({
+    id: `message-inject-scroll-extra-${index}`,
+    type: "role-message",
+    channelType: "task",
+    channelId: "task:task-inject-e2e",
+    fromRoleId: index % 2 === 0 ? "product-manager" : "tech-lead",
+    toRoleIds: [index % 2 === 0 ? "tech-lead" : "qa-engineer"],
+    content: `SCROLL_EXTRA_MESSAGE_${index}`,
+    taskId: "task-inject-e2e",
+    source: "manual",
+    status: "sent",
+    readBy: ["product-manager"],
+    createdAt: `2026-01-01T00:${String(index).padStart(2, "0")}:00.000Z`
+  }));
   const { app, page, userDataDir } = await launchApp(
     {
       desktops: [
@@ -756,6 +887,7 @@ test("v0.5.3 queues timeline messages for a running Agent terminal", async () =>
         }
       ],
       messages: [
+        ...timelineExtraMessages,
         {
           id: "message-inject-e2e",
           type: "role-message",
@@ -795,14 +927,26 @@ test("v0.5.3 queues timeline messages for a running Agent terminal", async () =>
     await expect(page.locator('[data-action="confirm-agent-delivery"]')).toBeVisible();
     await page.locator('[data-action="confirm-agent-delivery"]').click();
     await expect(page.locator(".message-row").first()).toContainText("1/1");
+    const scroller = page.locator(".message-timeline-scroll");
+    await scroller.evaluate((node) => {
+      node.scrollLeft = node.scrollWidth;
+    });
+    const scrollAfterUserMove = await scroller.evaluate((node) => node.scrollLeft);
+    expect(scrollAfterUserMove).toBeGreaterThan(0);
     await expect(page.locator('[data-action="show-terminal-output-refs"]')).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(400);
+    const scrollAfterTerminalRefresh = await scroller.evaluate((node) => node.scrollLeft);
+    expect(scrollAfterTerminalRefresh).toBeGreaterThan(0);
 
     const savedState = await page.evaluate(() => window.cossAPI.loadState());
     const project = savedState.projects[0];
     const message = project.messages.find((item) => item.id === "message-inject-e2e");
     expect(message.injectedWindowIds).toContain("agent-inject-terminal");
     expect(message.injectedAt).toBeTruthy();
-    expect(project.agentDeliveries.some((item) => item.messageId === "message-inject-e2e" && item.status === "sent")).toBe(true);
+    expect(project.agentDeliveries.some((item) => (
+      item.messageId === "message-inject-e2e"
+      && ["submitted", "responded", "waiting"].includes(item.status)
+    ))).toBe(true);
     expect(project.terminalOutputRefs.some((item) => item.messageId === "message-inject-e2e" && item.windowId === "agent-inject-terminal")).toBe(true);
 
     const logText = await waitForLogEvent(userDataDir, "agent.delivery.confirmed");
@@ -810,6 +954,503 @@ test("v0.5.3 queues timeline messages for a running Agent terminal", async () =>
     expect(logText).toContain("agent-inject-terminal");
   } finally {
     await page.evaluate(() => window.cossAPI.disposeTerminal("agent-inject-terminal")).catch(() => {});
+    await app.close();
+  }
+});
+
+test("v0.5.5 delivers CodeBuddy messages through an instruction file without paste placeholders", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-codebuddy-delivery-"));
+  const createdAt = "2026-01-01T00:25:00.000Z";
+  const { app, page, userDataDir } = await launchApp(
+    {
+      path: projectDir,
+      desktops: [{ id: "desktop-main", name: "主对话", createdAt }],
+      activeDesktopId: "desktop-main",
+      windows: [
+        {
+          id: "codebuddy-inject-terminal",
+          type: "terminal",
+          roleId: "frontend-engineer",
+          title: "前端工程师 Agent(CodeBuddy Code)",
+          x: 280,
+          y: 110,
+          width: 520,
+          height: 340,
+          z: 100,
+          status: "idle",
+          terminalMode: "agent",
+          agentProvider: "codebuddy",
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          desktopId: "desktop-main"
+        }
+      ],
+      tasks: [
+        {
+          id: "task-codebuddy-inject-e2e",
+          title: "CodeBuddy 投递任务",
+          goal: "验证 CodeBuddy 投递",
+          status: "running",
+          desktopId: "desktop-main",
+          createdAt,
+          updatedAt: createdAt,
+          model: { provider: "system", modelName: "agent-brain" },
+          planner: { status: "success", source: "mock", summary: "CodeBuddy 注入测试", plannedAt: createdAt, confirmedAt: createdAt },
+          subtasks: [
+            {
+              id: "subtask-codebuddy-inject-e2e",
+              roleId: "frontend-engineer",
+              title: "读取投递文件",
+              description: "不要把 TUI 粘贴提示当成任务。",
+              status: "running",
+              createdAt,
+              updatedAt: createdAt
+            }
+          ]
+        }
+      ],
+      messages: [
+        {
+          id: "message-codebuddy-inject-e2e",
+          type: "role-message",
+          channelType: "task",
+          channelId: "task:task-codebuddy-inject-e2e",
+          fromRoleId: "product-manager",
+          toRoleIds: ["frontend-engineer"],
+          content: "CODEBUDDY_FILE_DELIVERY_MARKER：请读取文件后继续实现页面。",
+          taskId: "task-codebuddy-inject-e2e",
+          source: "manual",
+          status: "sent",
+          readBy: ["product-manager"],
+          createdAt
+        }
+      ]
+    },
+    {},
+    {
+      settings: {
+        agentProvider: "codebuddy",
+        codeBuddyApiKey: "sk-codebuddy-e2e",
+        agentFallbackToShell: false,
+        modelProvider: "system"
+      }
+    }
+  );
+
+  try {
+    await expect(page.locator('.program-window[data-window-id="codebuddy-inject-terminal"]')).toBeVisible();
+    await expect(page.locator('.terminal-mount[data-terminal-id="codebuddy-inject-terminal"] .xterm')).toBeVisible();
+
+    await page.locator('.workspace-actions [data-action="show-message-center"]').click();
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    await page.locator('[data-action="inject-message-terminal"]').click();
+    await expect(page.locator('[data-action="confirm-agent-delivery"]')).toBeVisible();
+    await page.locator('[data-action="confirm-agent-delivery"]').click();
+
+    const terminal = page.locator('[data-terminal-id="codebuddy-inject-terminal"]');
+    await expect(terminal).toContainText("请读取并执行 CosS 投递文件", { timeout: 5000 });
+    await expect(terminal).not.toContainText("[Pasted text");
+
+    const savedState = await waitForSavedState(userDataDir, (state) => (
+      state.projects[0].agentDeliveries.some((item) => (
+        item.messageId === "message-codebuddy-inject-e2e"
+        && item.status === "submitted"
+      ))
+    ), 5000);
+    const delivery = savedState.projects[0].agentDeliveries.find((item) => item.messageId === "message-codebuddy-inject-e2e");
+    expect(delivery.status).toBe("submitted");
+    expect(delivery.submissionProvider).toBe("codebuddy");
+    expect(delivery.submissionMethod).toBe("delivery-file-interactive");
+    expect(delivery.submissionDetail).toContain("Delivery file");
+    const normalizedDeliveryPath = delivery.deliveryFilePath.replaceAll("\\", "/");
+    expect(normalizedDeliveryPath).toMatch(/^\.coss\/deliveries\/delivery-/);
+    const deliveryFile = path.join(projectDir, ...normalizedDeliveryPath.split("/"));
+    expect(fs.existsSync(deliveryFile)).toBe(true);
+    const deliveryText = fs.readFileSync(deliveryFile, "utf8");
+    await expect(page.locator(".message-center-modal")).toContainText("CodeBuddy Code");
+    await expect(page.locator(".message-center-modal")).toContainText("Delivery file plus interactive CodeBuddy submit");
+    await expect(page.locator(".message-center-modal")).toContainText(path.basename(delivery.deliveryFilePath));
+
+    const stuckMarked = await page.evaluate((deliveryId) => window.markDeliveryIfStuck(deliveryId), delivery.id);
+    expect(stuckMarked).toBe(true);
+    await expect(page.locator('[data-action="retry-agent-delivery"]')).toBeVisible();
+
+    await page.locator('[data-action="retry-agent-delivery"]').click();
+    const retriedState = await waitForSavedState(userDataDir, (state) => (
+      state.projects[0].agentDeliveries.some((item) => (
+        item.id === delivery.id
+        && item.status === "pending"
+        && !item.stuckDetectedAt
+      ))
+    ), 5000);
+    const retriedDelivery = retriedState.projects[0].agentDeliveries.find((item) => item.id === delivery.id);
+    expect(retriedDelivery.status).toBe("pending");
+    expect(deliveryText).toContain("CODEBUDDY_FILE_DELIVERY_MARKER");
+    expect(deliveryText).toContain("唯一新增任务上下文");
+  } finally {
+    await page.evaluate(() => window.cossAPI.disposeTerminal("codebuddy-inject-terminal")).catch(() => {});
+    await app.close();
+  }
+});
+
+test("v0.5.5 keeps Agent terminal stable when clicking or right-clicking blank desktop space", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page } = await launchApp({
+    desktops: [{ id: "desktop-main", name: "主对话", createdAt }],
+    activeDesktopId: "desktop-main",
+    windows: [
+      {
+        id: "agent-stable-terminal",
+        type: "terminal",
+        roleId: "frontend-engineer",
+        title: "前端工程师 Agent(Codex)",
+        x: 260,
+        y: 110,
+        width: 520,
+        height: 340,
+        z: 100,
+        status: "idle",
+        terminalMode: "agent",
+        agentProvider: "codex",
+        minimized: false,
+        maximized: false,
+        restoreBounds: null,
+        desktopId: "desktop-main"
+      }
+    ]
+  });
+
+  try {
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-stable-terminal"] .xterm')).toBeVisible();
+    await page.evaluate(() => {
+      const originalCreateTerminal = window.cossAPI.createTerminal;
+      window.__terminalCreateCallsAfterBlankClick = 0;
+      window.cossAPI.createTerminal = (options) => {
+        window.__terminalCreateCallsAfterBlankClick += 1;
+        return originalCreateTerminal(options);
+      };
+    });
+
+    await page.locator(".desktop").click({ position: { x: 24, y: 24 } });
+    await page.waitForTimeout(350);
+
+    let createCalls = await page.evaluate(() => window.__terminalCreateCallsAfterBlankClick);
+    expect(createCalls).toBe(0);
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-stable-terminal"] .xterm')).toBeVisible();
+
+    await page.locator(".desktop").click({ button: "right", position: { x: 56, y: 56 } });
+    await expect(page.locator(".context-menu")).toBeVisible();
+    await page.waitForTimeout(350);
+    createCalls = await page.evaluate(() => window.__terminalCreateCallsAfterBlankClick);
+    expect(createCalls).toBe(0);
+
+    await page.locator(".desktop").click({ position: { x: 24, y: 420 } });
+    await expect(page.locator(".context-menu")).toHaveCount(0);
+    await page.waitForTimeout(350);
+    createCalls = await page.evaluate(() => window.__terminalCreateCallsAfterBlankClick);
+    expect(createCalls).toBe(0);
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-stable-terminal"] .xterm')).toBeVisible();
+  } finally {
+    await page.evaluate(() => window.cossAPI.disposeTerminal("agent-stable-terminal")).catch(() => {});
+    await app.close();
+  }
+});
+
+test("v0.5.5 replays terminal trace after switching conversations", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page } = await launchApp({
+    desktops: [
+      { id: "desktop-main", name: "主对话", createdAt },
+      { id: "desktop-second", name: "对话 2", createdAt }
+    ],
+    activeDesktopId: "desktop-main",
+    windows: [
+      {
+        id: "agent-trace-terminal",
+        type: "terminal",
+        roleId: "frontend-engineer",
+        title: "前端工程师 Agent(Codex)",
+        x: 260,
+        y: 110,
+        width: 520,
+        height: 340,
+        z: 100,
+        status: "idle",
+        terminalMode: "agent",
+        agentProvider: "codex",
+        minimized: false,
+        maximized: false,
+        restoreBounds: null,
+        desktopId: "desktop-main"
+      }
+    ]
+  });
+
+  try {
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-trace-terminal"] .xterm')).toBeVisible();
+    await page.evaluate(() => window.cossAPI.sendTerminalInput("agent-trace-terminal", "TRACE_MARKER_055\r"));
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-trace-terminal"]')).toContainText("TRACE_MARKER_055");
+
+    await page.locator(".dock .task-view-toggle").click();
+    await page.locator('.desktop-card[data-desktop-id="desktop-second"]').click();
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-trace-terminal"]')).toHaveCount(0);
+
+    await page.locator(".dock .task-view-toggle").click();
+    await page.locator('.desktop-card[data-desktop-id="desktop-main"]').click();
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-trace-terminal"] .xterm')).toBeVisible();
+    await expect(page.locator('.terminal-mount[data-terminal-id="agent-trace-terminal"]')).toContainText("TRACE_MARKER_055");
+  } finally {
+    await page.evaluate(() => window.cossAPI.disposeTerminal("agent-trace-terminal")).catch(() => {});
+    await app.close();
+  }
+});
+
+test("v0.5.5 appends multiple tasks to the active conversation and reuses role programs", async () => {
+  const mockPlan = {
+    summary: "Conversation task reuse plan.",
+    subtasks: [
+      {
+        roleId: "frontend-engineer",
+        title: "Build reusable frontend",
+        description: "Use the existing conversation frontend program."
+      },
+      {
+        roleId: "backend-engineer",
+        title: "Build reusable backend",
+        description: "Use the existing conversation backend program."
+      }
+    ],
+    messages: [
+      {
+        fromRoleId: "product-manager",
+        toRoleIds: ["frontend-engineer", "backend-engineer"],
+        content: "Continue in the same conversation desktop."
+      }
+    ]
+  };
+  const { app, page } = await launchApp(
+    {},
+    {
+      COSS_LLM_FORCE_ERROR: "0",
+      COSS_LLM_MOCK_RESPONSE: JSON.stringify(mockPlan)
+    }
+  );
+
+  try {
+    for (const goal of ["Build first conversation task", "Build second conversation task"]) {
+      await page.locator('.workspace-actions [data-action="show-create-task"]').click();
+      await page.locator("#taskGoal").fill(goal);
+      await page.locator('[data-action="create-task"]').click();
+      await expect(page.locator(".task-plan-modal")).toBeVisible();
+      await page.locator('[data-action="confirm-task-plan"]').click();
+      await expect(page.locator(".task-plan-modal")).toHaveCount(0);
+    }
+
+    await page.locator('.workspace-actions [data-action="open-task-list-window"]').click();
+    await expect(page.locator(".program-window.task-list")).toBeVisible();
+    await expect(page.locator(".task-list-program")).toContainText("Build first conversation task");
+    await expect(page.locator(".task-list-program")).toContainText("Build second conversation task");
+    await page.locator('.workspace-actions [data-action="open-task-list-window"]').click();
+    await expect(page.locator(".program-window.task-list")).toHaveCount(1);
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const project = savedState.projects[0];
+    const conversationId = project.activeDesktopId;
+    expect(project.desktops).toHaveLength(1);
+    expect(project.tasks).toHaveLength(2);
+    expect(project.tasks.every((task) => task.desktopId === conversationId && task.conversationId === conversationId)).toBe(true);
+    expect(project.desktops[0].taskIds).toEqual(expect.arrayContaining(project.tasks.map((task) => task.id)));
+    expect(project.windows.filter((win) => win.desktopId === conversationId && win.roleId === "frontend-engineer")).toHaveLength(1);
+    expect(project.windows.filter((win) => win.desktopId === conversationId && win.roleId === "backend-engineer")).toHaveLength(1);
+    expect(project.windows.filter((win) => win.desktopId === conversationId && win.type === "task-list")).toHaveLength(1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.7 filters archives and restores conversation tasks from the task list", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const updatedAt = "2026-01-01T00:10:00.000Z";
+  const { app, page, userDataDir } = await launchApp({
+    desktops: [
+      {
+        id: "desktop-main",
+        name: "Conversation Task List",
+        taskId: "task-frontend-list-e2e",
+        taskIds: ["task-frontend-list-e2e", "task-backend-list-e2e", "task-archived-list-e2e"],
+        lastTaskId: "task-backend-list-e2e",
+        createdAt
+      }
+    ],
+    activeDesktopId: "desktop-main",
+    tasks: [
+      {
+        id: "task-frontend-list-e2e",
+        title: "Frontend polished landing",
+        goal: "Create a refined homepage UI",
+        desktopId: "desktop-main",
+        conversationId: "desktop-main",
+        createdAt,
+        updatedAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "test", summary: "Frontend list summary", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: [
+          {
+            id: "subtask-frontend-list-e2e",
+            roleId: "frontend-engineer",
+            title: "Build homepage visuals",
+            description: "Make the research lab homepage polished.",
+            status: "done",
+            createdAt,
+            updatedAt
+          }
+        ]
+      },
+      {
+        id: "task-backend-list-e2e",
+        title: "Backend content API",
+        goal: "Expose lab content data",
+        desktopId: "desktop-main",
+        conversationId: "desktop-main",
+        createdAt,
+        updatedAt,
+        model: { provider: "deepseek", modelName: "deepseek-chat" },
+        planner: { status: "success", source: "test", summary: "Backend list summary", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: [
+          {
+            id: "subtask-backend-list-e2e",
+            roleId: "backend-engineer",
+            title: "Create content API",
+            description: "Return refractory material sections.",
+            status: "running",
+            createdAt,
+            updatedAt
+          }
+        ]
+      },
+      {
+        id: "task-archived-list-e2e",
+        title: "Archived deployment review",
+        goal: "Review deployment notes",
+        desktopId: "desktop-main",
+        conversationId: "desktop-main",
+        archived: true,
+        archivedAt: updatedAt,
+        createdAt,
+        updatedAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "test", summary: "Archived list summary", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: [
+          {
+            id: "subtask-devops-list-e2e",
+            roleId: "devops-engineer",
+            title: "Review deploy runbook",
+            description: "Keep archived task visible only when requested.",
+            status: "blocked",
+            createdAt,
+            updatedAt
+          }
+        ]
+      }
+    ],
+    messages: [
+      {
+        id: "message-backend-list-e2e",
+        type: "role-message",
+        channelType: "task",
+        channelId: "task:task-backend-list-e2e",
+        fromRoleId: "product-manager",
+        toRoleIds: ["backend-engineer"],
+        content: "API coordination message",
+        taskId: "task-backend-list-e2e",
+        source: "manual",
+        status: "sent",
+        readBy: ["product-manager"],
+        createdAt
+      }
+    ],
+    agentDeliveries: [
+      {
+        id: "delivery-backend-list-e2e",
+        messageId: "message-backend-list-e2e",
+        windowId: "terminal-backend-list-e2e",
+        roleId: "backend-engineer",
+        taskId: "task-backend-list-e2e",
+        status: "submitted",
+        attempts: 1,
+        submissionMethod: "file",
+        createdAt,
+        updatedAt,
+        submittedAt: updatedAt
+      }
+    ],
+    terminalOutputRefs: [
+      {
+        id: "output-backend-list-e2e",
+        windowId: "terminal-backend-list-e2e",
+        roleId: "backend-engineer",
+        taskId: "task-backend-list-e2e",
+        messageId: "message-backend-list-e2e",
+        label: "Codex terminal log",
+        createdAt
+      }
+    ]
+  });
+
+  try {
+    await page.locator('.workspace-actions [data-action="open-task-list-window"]').click();
+    const taskList = page.locator(".program-window.task-list");
+    await expect(taskList).toBeVisible();
+    await expect(taskList.locator(".task-list-items")).toContainText("Frontend polished landing");
+    await expect(taskList.locator(".task-list-items")).toContainText("Backend content API");
+    await expect(taskList.locator(".task-list-items")).not.toContainText("Archived deployment review");
+
+    await page.locator("#taskListSearch").fill("content API");
+    await expect(taskList.locator(".task-list-items")).toContainText("Backend content API");
+    await expect(taskList.locator(".task-list-items")).not.toContainText("Frontend polished landing");
+    await page.locator("#taskListSearch").fill("");
+
+    await page.locator("#taskListRoleFilter").selectOption("frontend-engineer");
+    await expect(taskList.locator(".task-list-items")).toContainText("Frontend polished landing");
+    await expect(taskList.locator(".task-list-items")).not.toContainText("Backend content API");
+    await page.locator("#taskListRoleFilter").selectOption("");
+
+    await page.locator("#taskListStatusFilter").selectOption("done");
+    await expect(taskList.locator(".task-list-items")).toContainText("Frontend polished landing");
+    await expect(taskList.locator(".task-list-items")).not.toContainText("Backend content API");
+    await page.locator("#taskListStatusFilter").selectOption("");
+
+    await page.locator("#taskListModelFilter").selectOption("deepseek-chat");
+    await expect(taskList.locator(".task-list-items")).toContainText("Backend content API");
+    await expect(taskList.locator(".task-list-items")).not.toContainText("Frontend polished landing");
+    await page.locator("#taskListModelFilter").selectOption("");
+
+    await taskList.locator('.task-list-item[data-task-id="task-backend-list-e2e"]').click();
+    await expect(taskList.locator(".task-list-detail")).toContainText("API coordination message");
+    await expect(taskList.locator(".task-list-detail")).toContainText("file");
+    await expect(taskList.locator(".task-list-detail")).toContainText("deepseek-chat");
+
+    await taskList.locator('[data-action="archive-task"][data-task-id="task-backend-list-e2e"]').click();
+    await expect(taskList.locator(".task-list-items")).not.toContainText("Backend content API");
+    let savedState = await waitForSavedState(userDataDir, (state) => (
+      state.projects[0].tasks.find((task) => task.id === "task-backend-list-e2e")?.archived === true
+    ));
+    expect(savedState.projects[0].tasks.find((task) => task.id === "task-backend-list-e2e").archivedAt).toBeTruthy();
+
+    await page.locator("#taskListIncludeArchived").check();
+    await expect(taskList.locator(".task-list-items")).toContainText("Backend content API");
+    await expect(taskList.locator(".task-list-items")).toContainText("Archived deployment review");
+    await taskList.locator('.task-list-item[data-task-id="task-backend-list-e2e"]').click();
+    await taskList.locator('[data-action="restore-task"][data-task-id="task-backend-list-e2e"]').click();
+    savedState = await waitForSavedState(userDataDir, (state) => (
+      state.projects[0].tasks.find((task) => task.id === "task-backend-list-e2e")?.archived === false
+    ));
+    expect(savedState.projects[0].tasks.find((task) => task.id === "task-backend-list-e2e").archivedAt).toBe("");
+
+    const logText = await waitForLogEvent(userDataDir, "task.restored");
+    expect(logText).toContain("task.archived");
+  } finally {
     await app.close();
   }
 });
@@ -1261,17 +1902,17 @@ test("v0.4.2 child windows support minimize maximize restore and resize", async 
   }
 });
 
-test("v0.4.2 task view switches isolated desktops", async () => {
+test("v0.5.5 conversation view switches isolated conversations", async () => {
   const { app, page } = await launchApp({
     desktops: [
       {
         id: "desktop-main",
-        name: "主桌面",
+        name: "主对话",
         createdAt: "2026-01-01T00:00:00.000Z"
       },
       {
         id: "desktop-review",
-        name: "评审桌面",
+        name: "评审对话",
         createdAt: "2026-01-01T00:00:00.000Z"
       }
     ],
@@ -1316,6 +1957,8 @@ test("v0.4.2 task view switches isolated desktops", async () => {
 
     await page.locator('.workspace-actions [data-action="show-task-view"]').click();
     await expect(page.locator(".task-view-panel")).toBeVisible();
+    await expect(page.locator(".task-view-panel")).toContainText("对话视图");
+    await expect(page.locator('[data-action="create-desktop"]')).toHaveText("新建对话");
     await expect(page.locator(".desktop-card")).toHaveCount(2);
 
     await page.locator('.desktop-card[data-desktop-id="desktop-review"]').click();
@@ -1333,12 +1976,12 @@ test("v0.4.2 task view switches isolated desktops", async () => {
   }
 });
 
-test("v0.4.2 task view layout presets arrange current desktop windows", async () => {
+test("v0.5.5 conversation view layout presets arrange current conversation windows", async () => {
   const { app, page } = await launchApp({
     desktops: [
       {
         id: "desktop-main",
-        name: "主桌面",
+        name: "主对话",
         layoutPreset: "split-two",
         createdAt: "2026-01-01T00:00:00.000Z"
       }
@@ -1379,6 +2022,7 @@ test("v0.4.2 task view layout presets arrange current desktop windows", async ()
 
   try {
     await page.locator('.workspace-actions [data-action="show-task-view"]').click();
+    await expect(page.locator(".task-view-panel")).toContainText("对话视图");
     await page.locator('.snap-layout-button[data-layout="main-narrow"]').click();
 
     await expect(page.locator('.snap-layout-button[data-layout="main-narrow"]')).toHaveClass(/active/);
@@ -1394,7 +2038,7 @@ test("v0.4.2 task view layout presets arrange current desktop windows", async ()
   }
 });
 
-test("v0.5.3 stores Agent prompt templates and shows Codex auth state on demand", async () => {
+test("v0.5.4 stores Agent prompt templates and shows Codex auth state on demand", async () => {
   const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-codex-auth-"));
   const codexAuthPath = path.join(authDir, "auth.json");
   fs.writeFileSync(
@@ -1432,7 +2076,99 @@ test("v0.5.3 stores Agent prompt templates and shows Codex auth state on demand"
   }
 });
 
-test("v0.5.3 syncs Codex Agent terminal events back to task state and timeline", async () => {
+test("v0.5.5 configures CodeBuddy Code backend and injects the API key", async () => {
+  const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codebuddy-"));
+  const fakeCodeBuddyPath = path.join(fakeCliDir, "codebuddy.cmd");
+  fs.writeFileSync(
+    fakeCodeBuddyPath,
+    [
+      "@echo off",
+      "if \"%~1\"==\"--version\" (",
+      "  echo codebuddy-code 0.5.5-e2e",
+      "  exit /b 0",
+      ")",
+      "if \"%CODEBUDDY_API_KEY%\"==\"\" (",
+      "  echo fake codebuddy key configured: no",
+      ") else (",
+      "  echo fake codebuddy key configured: yes",
+      ")",
+      "echo COSS_AGENT_STATUS:done",
+      "exit /b 0",
+      ""
+    ].join("\r\n"),
+    "utf8"
+  );
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page } = await launchApp(
+    {
+      desktops: [{ id: "desktop-main", name: "主对话", createdAt }],
+      activeDesktopId: "desktop-main",
+      windows: [
+        {
+          id: "window-codebuddy-e2e",
+          type: "terminal",
+          roleId: "tech-lead",
+          title: "技术负责人 Agent(CodeBuddy Code)",
+          x: 220,
+          y: 96,
+          width: 620,
+          height: 360,
+          z: 100,
+          status: "working",
+          terminalMode: "agent",
+          agentProvider: "codebuddy",
+          desktopId: "desktop-main",
+          minimized: false,
+          maximized: false,
+          restoreBounds: null
+        }
+      ]
+    },
+    {
+      COSS_DISABLE_TERMINAL_BACKEND: "0",
+      COSS_CODEBUDDY_COMMAND: fakeCodeBuddyPath,
+      COSS_DISABLE_CODEBUDDY_AUTO_INSTALL: "1"
+    },
+    {
+      settings: {
+        agentProvider: "codebuddy",
+        codeBuddyApiKey: "sk-codebuddy-e2e",
+        agentFallbackToShell: false,
+        modelProvider: "system"
+      }
+    }
+  );
+
+  try {
+    await expect(page.locator('[data-terminal-id="window-codebuddy-e2e"]')).toContainText("fake codebuddy key configured: yes", { timeout: 10000 });
+
+    await page.locator('.sidebar-footer [data-action="show-settings"]').click();
+    await page.locator('.settings-nav [data-action="set-settings-section"][data-section="agent"]').click();
+    await expect(page.locator('.agent-provider-option[data-provider="codebuddy"]')).toHaveClass(/active/);
+    await expect(page.locator("[data-codebuddy-api-key]")).toHaveValue("sk-codebuddy-e2e");
+    const providerTitleBox = await page.locator(".agent-provider-row strong", { hasText: "Agent 终端" }).boundingBox();
+    expect(providerTitleBox.width).toBeGreaterThan(60);
+    expect(providerTitleBox.height).toBeLessThan(30);
+
+    await page.locator('[data-action="check-codebuddy"]').click();
+    await expect(page.locator("[data-codebuddy-status]")).toContainText("CodeBuddy Code CLI 已可用");
+    await expect(page.locator("[data-codebuddy-status]")).toContainText("登录状态：已检测到登录凭据");
+
+    await page.locator("[data-codebuddy-api-key]").fill("sk-codebuddy-updated");
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    expect(savedState.settings.agentProvider).toBe("codebuddy");
+    expect(savedState.settings.codeBuddyApiKey).toBe("sk-codebuddy-updated");
+  } finally {
+    try {
+      await page.evaluate(() => window.cossAPI.disposeTerminal("window-codebuddy-e2e"));
+    } catch {
+      // Best-effort cleanup for terminal backend tests.
+    }
+    await app.close();
+  }
+});
+
+test("v0.5.4 syncs Codex Agent terminal events back to task state and timeline", async () => {
   const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codex-"));
   const fakeCodexPath = path.join(fakeCliDir, "codex.cmd");
   fs.writeFileSync(
@@ -1440,7 +2176,7 @@ test("v0.5.3 syncs Codex Agent terminal events back to task state and timeline",
     [
       "@echo off",
       "if \"%~1\"==\"--version\" (",
-      "  echo codex-cli 0.5.3-e2e",
+      "  echo codex-cli 0.5.4-e2e",
       "  exit /b 0",
       ")",
       "echo COSS_AGENT_STATUS:done",
@@ -1526,6 +2262,18 @@ test("v0.5.3 syncs Codex Agent terminal events back to task state and timeline",
     await page.locator('.workspace-actions [data-action="show-message-center"]').click();
     await expect(page.locator(".message-center-modal")).toBeVisible();
     await expect(page.locator(".agent-timeline-row", { hasText: "Frontend done from structured event" }).first()).toBeVisible();
+    const agentNodeBackground = await page
+      .locator(".message-timeline-node.agent-timeline-row", { hasText: "Frontend done from structured event" })
+      .first()
+      .evaluate((node) => getComputedStyle(node).backgroundColor);
+    expect(agentNodeBackground).toBe("rgba(0, 0, 0, 0)");
+    const dotCentersY = await page.locator(".message-timeline-node .message-node-dot").evaluateAll((dots) =>
+      dots.map((dot) => {
+        const box = dot.getBoundingClientRect();
+        return Math.round((box.top + box.height / 2) * 10) / 10;
+      })
+    );
+    expect(Math.max(...dotCentersY) - Math.min(...dotCentersY)).toBeLessThanOrEqual(1);
   } finally {
     try {
       await page.evaluate(async () => {
@@ -1543,7 +2291,432 @@ test("v0.5.3 syncs Codex Agent terminal events back to task state and timeline",
   }
 });
 
-test("v0.5.3 edits task plans before confirming assignment", async () => {
+test("v0.5.4 ignores echoed Agent marker examples from prompts and deliveries", async () => {
+  const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codex-echo-"));
+  const fakeCodexPath = path.join(fakeCliDir, "codex.cmd");
+  fs.writeFileSync(
+    fakeCodexPath,
+    [
+      "@echo off",
+      "if \"%~1\"==\"--version\" (",
+      "  echo codex-cli 0.5.4-marker-echo",
+      "  exit /b 0",
+      ")",
+      "echo Echoed status marker examples: COSS_AGENT_STATUS:done or COSS_AGENT_STATUS:blocked.",
+      "echo Echoed structured marker example: COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"example placeholder\",\"toRoleIds\":[\"product-manager\"]}.",
+      "echo no standalone agent marker was emitted",
+      "exit /b 0",
+      ""
+    ].join("\r\n"),
+    "utf8"
+  );
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page, userDataDir } = await launchApp(
+    {
+      desktops: [{ id: "desktop-main", name: "Main Desktop", createdAt }],
+      activeDesktopId: "desktop-main",
+      tasks: [
+        {
+          id: "task-marker-echo",
+          title: "Marker echo guard",
+          goal: "Guard Agent marker parsing",
+          status: "planned",
+          desktopId: "desktop-main",
+          createdAt,
+          updatedAt: createdAt,
+          model: { provider: "system", modelName: "agent-brain" },
+          planner: { status: "success", source: "test", summary: "Guard marker echoes", plannedAt: createdAt, confirmedAt: createdAt },
+          subtasks: [
+            {
+              id: "subtask-marker-echo",
+              roleId: "frontend-engineer",
+              title: "Keep echoed markers inert",
+              description: "Echoed prompt examples must not update task state.",
+              status: "pending",
+              createdAt,
+              updatedAt: createdAt
+            }
+          ]
+        }
+      ],
+      windows: [
+        {
+          id: "window-marker-echo",
+          type: "terminal",
+          roleId: "frontend-engineer",
+          title: "Frontend Agent(Codex)",
+          x: 220,
+          y: 96,
+          width: 620,
+          height: 360,
+          z: 100,
+          status: "waiting",
+          terminalMode: "agent",
+          agentProvider: "codex",
+          desktopId: "desktop-main",
+          minimized: false,
+          maximized: false,
+          restoreBounds: null
+        }
+      ]
+    },
+    {
+      COSS_DISABLE_TERMINAL_BACKEND: "0",
+      COSS_CODEX_COMMAND: fakeCodexPath,
+      COSS_DISABLE_CODEX_AUTO_INSTALL: "1"
+    },
+    {
+      settings: {
+        agentProvider: "codex",
+        agentFallbackToShell: true,
+        modelProvider: "system"
+      }
+    }
+  );
+
+  try {
+    await expect(page.locator('.program-window[data-window-id="window-marker-echo"]')).toBeVisible();
+    await expect(page.locator('[data-terminal-id="window-marker-echo"]')).toContainText("no standalone agent marker was emitted", { timeout: 10000 });
+    await page.waitForTimeout(500);
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const project = savedState.projects[0];
+    const task = project.tasks.find((item) => item.id === "task-marker-echo");
+    const terminalWindow = project.windows.find((item) => item.id === "window-marker-echo");
+    expect(project.agentEvents || []).toHaveLength(0);
+    expect(project.messages || []).not.toContainEqual(expect.objectContaining({ source: "agent-event" }));
+    expect(task.subtasks[0].status).toBe("pending");
+    expect(terminalWindow.status).toBe("waiting");
+
+    const logDir = path.join(userDataDir, "logs");
+    const logText = fs.existsSync(logDir)
+      ? fs.readdirSync(logDir).map((name) => fs.readFileSync(path.join(logDir, name), "utf8")).join("\n")
+      : "";
+    expect(logText).not.toContain('"event":"agent.output.event"');
+  } finally {
+    try {
+      await page.evaluate(() => window.cossAPI.disposeTerminal("window-marker-echo"));
+    } catch {
+      // Best-effort cleanup for terminal backend tests.
+    }
+    await app.close();
+  }
+});
+
+test("v0.5.4 marks Agent approval prompts as waiting and updates delivery state", async () => {
+  const fakeCliDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-fake-codex-approval-"));
+  const fakeCodexPath = path.join(fakeCliDir, "codex.cmd");
+  fs.writeFileSync(
+    fakeCodexPath,
+    [
+      "@echo off",
+      "if \"%~1\"==\"--version\" (",
+      "  echo codex-cli 0.5.4-approval",
+      "  exit /b 0",
+      ")",
+      "echo Do you want to create technical-architecture.md?",
+      "echo Yes, allow all edits",
+      "exit /b 0",
+      ""
+    ].join("\r\n"),
+    "utf8"
+  );
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page, userDataDir } = await launchApp(
+    {
+      desktops: [{ id: "desktop-main", name: "Main Desktop", taskId: "task-approval-e2e", createdAt }],
+      activeDesktopId: "desktop-main",
+      messages: [
+        {
+          id: "message-approval-e2e",
+          type: "role-message",
+          channelType: "task",
+          channelId: "task:task-approval-e2e",
+          fromRoleId: "product-manager",
+          toRoleIds: ["tech-lead"],
+          content: "Please write the architecture document.",
+          taskId: "task-approval-e2e",
+          source: "task-instruction",
+          status: "sent",
+          readBy: ["product-manager"],
+          createdAt
+        }
+      ],
+      agentDeliveries: [
+        {
+          id: "delivery-approval-e2e",
+          messageId: "message-approval-e2e",
+          windowId: "window-approval-e2e",
+          roleId: "tech-lead",
+          taskId: "task-approval-e2e",
+          status: "submitted",
+          attempts: 1,
+          createdAt,
+          updatedAt: createdAt,
+          submittedAt: createdAt
+        }
+      ],
+      tasks: [
+        {
+          id: "task-approval-e2e",
+          title: "Approval wait task",
+          goal: "Detect Claude approval waits",
+          status: "running",
+          desktopId: "desktop-main",
+          createdAt,
+          updatedAt: createdAt,
+          model: { provider: "system", modelName: "agent-brain" },
+          planner: { status: "success", source: "test", summary: "Approval wait", plannedAt: createdAt, confirmedAt: createdAt },
+          subtasks: [
+            {
+              id: "subtask-approval-e2e",
+              roleId: "tech-lead",
+              title: "Write architecture",
+              description: "Create the architecture document.",
+              status: "running",
+              createdAt,
+              updatedAt: createdAt
+            }
+          ]
+        }
+      ],
+      windows: [
+        {
+          id: "window-approval-e2e",
+          type: "terminal",
+          roleId: "tech-lead",
+          title: "Tech Lead Agent(Codex)",
+          x: 220,
+          y: 96,
+          width: 620,
+          height: 360,
+          z: 100,
+          status: "working",
+          terminalMode: "agent",
+          agentProvider: "codex",
+          desktopId: "desktop-main",
+          minimized: false,
+          maximized: false,
+          restoreBounds: null,
+          lastAgentDeliveryId: "delivery-approval-e2e",
+          agentSession: {
+            sessionId: "agent-session-approval-e2e",
+            provider: "codex",
+            roleId: "tech-lead",
+            roleName: "Tech Lead",
+            workspace: process.cwd(),
+            projectId: "project-e2e",
+            projectName: "E2E Project",
+            taskId: "task-approval-e2e",
+            subtaskId: "subtask-approval-e2e",
+            sessionName: "CosS-E2E-tech-codex",
+            promptTemplateVersion: "v0.5",
+            createdAt,
+            lastStartedAt: "",
+            resumeCount: 0,
+            lastActiveMode: "",
+            lastEventAt: ""
+          }
+        }
+      ]
+    },
+    {
+      COSS_DISABLE_TERMINAL_BACKEND: "0",
+      COSS_CODEX_COMMAND: fakeCodexPath,
+      COSS_DISABLE_CODEX_AUTO_INSTALL: "1"
+    },
+    {
+      settings: {
+        agentProvider: "codex",
+        agentFallbackToShell: true,
+        modelProvider: "system"
+      }
+    }
+  );
+
+  try {
+    const savedState = await waitForSavedState(userDataDir, (state) => {
+      const project = state.projects[0];
+      const task = project.tasks.find((item) => item.id === "task-approval-e2e");
+      const delivery = project.agentDeliveries.find((item) => item.id === "delivery-approval-e2e");
+      return Boolean(
+        project.agentEvents?.some((event) => event.type === "approval-wait" && event.status === "waiting")
+        && task?.subtasks?.[0]?.status === "waiting"
+        && delivery?.status === "waiting"
+      );
+    }, 10000);
+    const project = savedState.projects[0];
+    const task = project.tasks.find((item) => item.id === "task-approval-e2e");
+    const delivery = project.agentDeliveries.find((item) => item.id === "delivery-approval-e2e");
+    expect(task.subtasks[0].status).toBe("waiting");
+    expect(task.status).toBe("running");
+    expect(delivery.status).toBe("waiting");
+    expect(delivery.lastFeedback).toContain("等待人工确认");
+  } finally {
+    try {
+      await page.evaluate(() => window.cossAPI.disposeTerminal("window-approval-e2e"));
+    } catch {
+      // Best-effort cleanup for terminal backend tests.
+    }
+    await app.close();
+  }
+});
+
+test("v0.5.4 opens message center filtered to the current task", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page } = await launchApp({
+    desktops: [
+      { id: "desktop-old", name: "Old Task Desktop", taskId: "task-old-e2e", createdAt },
+      { id: "desktop-current", name: "Current Task Desktop", taskId: "task-current-e2e", createdAt }
+    ],
+    activeDesktopId: "desktop-current",
+    tasks: [
+      {
+        id: "task-old-e2e",
+        title: "Old task",
+        goal: "Old task",
+        status: "running",
+        desktopId: "desktop-old",
+        createdAt,
+        updatedAt: createdAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "test", summary: "Old", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: []
+      },
+      {
+        id: "task-current-e2e",
+        title: "Current task",
+        goal: "Current task",
+        status: "running",
+        desktopId: "desktop-current",
+        createdAt,
+        updatedAt: createdAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "test", summary: "Current", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: []
+      }
+    ],
+    messages: [
+      {
+        id: "message-old-e2e",
+        type: "role-message",
+        channelType: "task",
+        channelId: "task:task-old-e2e",
+        fromRoleId: "product-manager",
+        toRoleIds: ["tech-lead"],
+        content: "OLD_TASK_MESSAGE_SHOULD_HIDE",
+        taskId: "task-old-e2e",
+        source: "manual",
+        status: "sent",
+        readBy: ["product-manager"],
+        createdAt
+      },
+      {
+        id: "message-current-e2e",
+        type: "role-message",
+        channelType: "task",
+        channelId: "task:task-current-e2e",
+        fromRoleId: "product-manager",
+        toRoleIds: ["tech-lead"],
+        content: "CURRENT_TASK_MESSAGE_SHOULD_SHOW",
+        taskId: "task-current-e2e",
+        source: "manual",
+        status: "sent",
+        readBy: ["product-manager"],
+        createdAt
+      }
+    ]
+  });
+
+  try {
+    await page.locator('.workspace-actions [data-action="show-message-center"]').click();
+    await expect(page.locator(".message-center-modal")).toBeVisible();
+    await expect(page.locator("#messageTimelineTaskFilter")).toHaveValue("task-current-e2e");
+    await expect(page.locator(".message-center-modal")).toContainText("CURRENT_TASK_MESSAGE_SHOULD_SHOW");
+    await expect(page.locator(".message-center-modal")).not.toContainText("OLD_TASK_MESSAGE_SHOULD_HIDE");
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.4 filters task cards by role and guards accidental instant blocked clicks", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page } = await launchApp({
+    desktops: [{ id: "desktop-main", name: "Main Desktop", taskId: "task-filter-e2e", createdAt }],
+    activeDesktopId: "desktop-main",
+    windows: [
+      {
+        id: "task-window-e2e",
+        type: "task",
+        roleId: "product-manager",
+        title: "Task Board",
+        x: 250,
+        y: 96,
+        width: 560,
+        height: 430,
+        z: 100,
+        status: "idle",
+        desktopId: "desktop-main",
+        minimized: false,
+        maximized: false,
+        restoreBounds: null
+      }
+    ],
+    tasks: [
+      {
+        id: "task-filter-e2e",
+        title: "Task filter test",
+        goal: "Filter task cards",
+        status: "planned",
+        desktopId: "desktop-main",
+        createdAt,
+        updatedAt: createdAt,
+        model: { provider: "system", modelName: "agent-brain" },
+        planner: { status: "success", source: "test", summary: "Filter", plannedAt: createdAt, confirmedAt: createdAt },
+        subtasks: [
+          {
+            id: "subtask-frontend-filter-e2e",
+            roleId: "frontend-engineer",
+            title: "Build UI card",
+            description: "Frontend task",
+            status: "pending",
+            createdAt,
+            updatedAt: createdAt
+          },
+          {
+            id: "subtask-devops-filter-e2e",
+            roleId: "devops-engineer",
+            title: "Deploy pipeline card",
+            description: "DevOps task",
+            status: "pending",
+            createdAt,
+            updatedAt: createdAt
+          }
+        ]
+      }
+    ]
+  });
+
+  try {
+    await expect(page.locator('.program-window[data-window-id="task-window-e2e"]')).toBeVisible();
+    await page.locator("#taskRoleFilter").selectOption("devops-engineer");
+    await expect(page.locator(".task-card")).toHaveCount(1);
+    await expect(page.locator(".task-card")).toContainText("Deploy pipeline card");
+    await expect(page.locator(".task-card")).not.toContainText("Build UI card");
+
+    await page.locator("#taskRoleFilter").selectOption("frontend-engineer");
+    await page.locator('.task-card [data-status="running"]').click();
+    await page.evaluate(() => document.querySelector('.task-card [data-status="blocked"]')?.click());
+
+    const savedState = await page.evaluate(() => window.cossAPI.loadState());
+    const subtask = savedState.projects[0].tasks[0].subtasks.find((item) => item.id === "subtask-frontend-filter-e2e");
+    expect(subtask.status).toBe("running");
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.5.4 edits task plans before confirming assignment", async () => {
   const mockPlan = {
     summary: "Editable plan.",
     subtasks: [
@@ -1597,7 +2770,7 @@ test("v0.5.3 edits task plans before confirming assignment", async () => {
   }
 });
 
-test("v0.5.3 supports file tree folder create rename delete and save as", async () => {
+test("v0.5.4 supports file tree folder create rename delete and save as", async () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-file-crud-e2e-"));
   fs.writeFileSync(path.join(projectDir, "notes.md"), "# Initial\n", "utf8");
   const createdAt = "2026-01-01T00:00:00.000Z";
@@ -1664,7 +2837,7 @@ test("v0.5.3 supports file tree folder create rename delete and save as", async 
   }
 });
 
-test("v0.5.3 manages browser tabs bookmarks history and opens task URLs", async () => {
+test("v0.5.4 manages browser tabs bookmarks history and opens task URLs", async () => {
   const createdAt = "2026-01-01T00:00:00.000Z";
   const taskUrl = "https://example.com/coss-task-url";
   const { app, page, userDataDir } = await launchApp({
@@ -1740,7 +2913,7 @@ test("v0.5.3 manages browser tabs bookmarks history and opens task URLs", async 
   }
 });
 
-test("v0.5.3 runs manual Agent remote login tests", async () => {
+test("v0.5.4 runs manual Agent remote login tests", async () => {
   const server = http.createServer((request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ data: [{ id: "gpt-test" }], path: request.url }));
