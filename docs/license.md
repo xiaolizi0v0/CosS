@@ -1,0 +1,53 @@
+# 开源许可
+
+CosS（Code Orchestration System）采用 **MIT 许可证** 进行开源。
+
+## MIT 许可证
+
+```
+MIT License
+
+Copyright (c) 2026 xiaolizi0v0
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## 第三方依赖
+
+CosS 使用了多个开源第三方库，它们的许可信息如下：
+
+| 依赖 | 许可协议 |
+|------|----------|
+| Electron | MIT |
+| Node.js | MIT |
+| 其他 npm 依赖 | 详见各依赖的 LICENSE 文件 |
+
+## 贡献指南
+
+我们欢迎社区贡献！如果您想为 CosS 做出贡献：
+
+1. Fork 本仓库
+2. 创建您的特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交您的更改 (`git commit -m 'Add amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 提交 Pull Request
+
+## 鸣谢
+
+感谢所有开源社区成员的支持与贡献。

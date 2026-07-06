@@ -338,7 +338,10 @@ let zSeed = 20;
 const WINDOW_Z_BASE = 20;
 const WINDOW_Z_MAX = 9990;
 const DEFAULT_BROWSER_URL = "about:blank";
-const PRODUCT_HELP_URL = "https://xiaolizi0v0.github.io/";
+const PRODUCT_HELP_URL = "https://github.com/xiaolizi0v0/CosS";
+const PRODUCT_DOCS_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/help.md";
+const PRODUCT_PRIVACY_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/privacy.md";
+const PRODUCT_LICENSE_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/license.md";
 const DEFAULT_DESKTOP_ID = "desktop-main";
 const MAXIMIZED_WINDOW_STYLE = "left:16px; top:66px; width:calc(100% - 32px); height:calc(100% - 150px);";
 const terminalViews = new Map();
@@ -8207,12 +8210,12 @@ function renderHelpSettingsSection() {
   return `
     <div class="help-settings-panel">
       <div class="help-action-list">
-        ${renderHelpActionItem({ label: t("help.docs", "帮助文档"), action: "open-product-url", url: PRODUCT_HELP_URL, external: true })}
+        ${renderHelpActionItem({ label: t("help.docs", "帮助文档"), action: "open-product-url", url: PRODUCT_DOCS_URL, external: true })}
         ${renderHelpActionItem({ label: t("help.feedback", "意见反馈"), action: "show-feedback-modal" })}
         ${renderHelpActionItem({ label: t("help.contact", "联系我们"), action: "open-product-url", url: PRODUCT_HELP_URL, external: true })}
       </div>
       <div class="help-open-source-links">
-        <button data-action="open-product-url" data-url="${escapeHtml(PRODUCT_HELP_URL)}">${escapeHtml(t("help.license", "开源许可"))}</button>
+        <button data-action="open-product-url" data-url="${escapeHtml(PRODUCT_LICENSE_URL)}">${escapeHtml(t("help.license", "开源许可"))}</button>
         <span>|</span>
         <button data-action="open-product-url" data-url="${escapeHtml(PRODUCT_HELP_URL)}">${escapeHtml(t("help.home", "项目主页"))}</button>
       </div>
@@ -8247,7 +8250,7 @@ function showFeedbackModal() {
         <label class="feedback-log-consent">
           <input id="feedbackUploadLogs" type="checkbox" checked />
           <span class="feedback-checkbox" aria-hidden="true">${icon("check")}</span>
-          <span>${escapeHtml(t("feedback.uploadLogsConsent", "上传日志，仅用于排查问题，可能包含对话记录、设备信息等数据。详情请查阅"))} <button type="button" data-action="open-product-url" data-url="${escapeHtml(PRODUCT_HELP_URL)}">${escapeHtml(t("feedback.privacyStatement", "隐私保护声明"))}</button></span>
+          <span>${escapeHtml(t("feedback.uploadLogsConsent", "上传日志，仅用于排查问题，可能包含对话记录、设备信息等数据。详情请查阅"))} <button type="button" data-action="open-product-url" data-url="${escapeHtml(PRODUCT_PRIVACY_URL)}">${escapeHtml(t("feedback.privacyStatement", "隐私保护声明"))}</button></span>
         </label>
         <button class="feedback-submit-button" type="button" data-action="submit-feedback">${escapeHtml(t("feedback.submit", "提交"))}</button>
       </div>
