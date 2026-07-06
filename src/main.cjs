@@ -569,7 +569,7 @@ function normalizePlannerResult(payload, roles = []) {
   ])).slice(0, 9);
 
   if (effectiveFirstRoundRoleIds.length < 1 || subtasks.length < 1) {
-    throw new Error(`模型未返回有效的 Kernel Step 图。有效首轮 Agent 数：${effectiveFirstRoundRoleIds.length}，有效 Step 数：${subtasks.length}。`);
+    throw new Error(`模型未返回有效的任务步骤。有效首轮协作者数：${effectiveFirstRoundRoleIds.length}，有效步骤数：${subtasks.length}。`);
   }
 
   return {
@@ -698,7 +698,7 @@ async function requestJson(url, options) {
     }
   } catch (error) {
     if (timedOut || error?.name === "AbortError") {
-      throw new Error(`模型接口请求超时：${Math.round(timeoutMs / 1000)} 秒内没有返回。可稍后重试，或设置 COSS_LLM_TIMEOUT_MS 调大超时时间。`);
+      throw new Error(`模型接口请求超时：${Math.round(timeoutMs / 1000)} 秒内没有返回。请稍后重试，或在设置中调整模型服务超时时间。`);
     }
     throw error;
   } finally {
@@ -708,7 +708,7 @@ async function requestJson(url, options) {
 
 async function planTaskWithLlm(request = {}) {
   if (process.env.COSS_LLM_FORCE_ERROR === "1") {
-    throw new Error("测试环境强制模拟 Kernel Planner 失败。");
+    throw new Error("任务计划生成失败。请稍后重试或检查模型配置。");
   }
 
   const roles = Array.isArray(request.roles) ? request.roles : [];
@@ -761,7 +761,7 @@ async function planTaskWithLlm(request = {}) {
 
 async function testModelConnectivityWithLlm(request = {}) {
   if (process.env.COSS_LLM_FORCE_ERROR === "1") {
-    throw new Error("测试环境强制模拟 Kernel Planner 失败。");
+    throw new Error("任务计划生成失败。请稍后重试或检查模型配置。");
   }
 
   const model = request.model || {};
@@ -3024,7 +3024,7 @@ function getWingetStatus() {
     return {
       exists: false,
       usable: false,
-      detail: "winget is only supported on Windows in this installer flow."
+      detail: "当前安装流程仅支持 Windows 系统上的 winget。"
     };
   }
 
@@ -3575,9 +3575,9 @@ function getDefaultAgentPromptTemplate() {
     "子任务说明：{{subtaskDescription}}",
     "",
     "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。",
-    "CosS v0.10 使用中央 Kernel 线性调度。你不能直接给其他 Agent 分配任务，不能发明不存在的角色，也不能绕过共享任务板。",
-    "开始工作前优先使用 coss_get_task_board、coss_pool_claim、coss_claim_step；长任务中使用 coss_heartbeat_step；完成后必须使用 coss_submit_result({ status: \"done\" }) 提交结构化结果。",
-    "如果发现需要下游角色，只能把发现写入本 Step 的结果；CosS Kernel 会在当前 Step 完成后启动预先规划好的下一个 Step。"
+    "CosS 使用任务调度器按步骤推进协作。你不能直接给其他角色分配任务，不能发明不存在的角色，也不能绕过共享任务板。",
+    "开始工作前优先读取任务板并领取当前步骤；长任务中保持进度更新；完成后必须提交结果。",
+    "如果发现需要下游角色，只能把发现写入当前步骤的结果；当前步骤完成后，系统会启动预先规划好的下一步。"
     ,
     "",
     "CosS MCP is available for reliable automation. Prefer MCP tools over terminal paste when possible.",
@@ -3835,7 +3835,7 @@ function resolveTerminalLaunch(options) {
       if (!canAutoInstall && !fallbackToShell) {
         return buildStaticLogLaunch({
           env,
-          label: "Codex Agent Error",
+          label: "Codex Agent 错误",
           rolePrompt,
           warning: `${unavailableWarning}\r\n已关闭失败回退到普通 PowerShell，因此仅保留此日志窗口。`
         });
@@ -3856,7 +3856,7 @@ function resolveTerminalLaunch(options) {
       return {
         ...installerLaunch,
         env,
-        label: canAutoInstall ? "Codex CLI Installer" : "PowerShell",
+        label: canAutoInstall ? "Codex CLI 安装程序" : "PowerShell",
         requestedMode: "agent",
         activeMode: canAutoInstall ? "installing" : "shell",
         rolePrompt,
@@ -3914,12 +3914,12 @@ function resolveTerminalLaunch(options) {
 
     if (!hasCodeBuddyKeyForLaunch) {
       const warning =
-        "CodeBuddy Code API Key is not configured.\r\n" +
-        "Set CODEBUDDY_API_KEY in environment variables or configure it in Settings before starting a CodeBuddy Agent.";
+        "未配置 CodeBuddy Code API Key。\r\n" +
+        "请在设置中填写 CodeBuddy API Key，或通过环境变量 CODEBUDDY_API_KEY 提供。";
       if (!fallbackToShell) {
         return buildStaticLogLaunch({
           env,
-          label: "CodeBuddy Code Agent Error",
+          label: "CodeBuddy Code Agent 错误",
           rolePrompt,
           warning
         });
@@ -3983,7 +3983,7 @@ function resolveTerminalLaunch(options) {
       if (!canAutoInstall && !fallbackToShell) {
         return buildStaticLogLaunch({
           env,
-          label: "CodeBuddy Code Agent Error",
+          label: "CodeBuddy Code Agent 错误",
           rolePrompt,
           warning: `${unavailableWarning}\r\n已关闭失败回退到普通 PowerShell，因此仅保留此日志窗口。`
         });
@@ -4004,7 +4004,7 @@ function resolveTerminalLaunch(options) {
       return {
         ...installerLaunch,
         env,
-        label: canAutoInstall ? "CodeBuddy Code CLI Installer" : "PowerShell",
+        label: canAutoInstall ? "CodeBuddy Code CLI 安装程序" : "PowerShell",
         requestedMode: "agent",
         activeMode: canAutoInstall ? "installing" : "shell",
         rolePrompt,
@@ -4029,7 +4029,7 @@ function resolveTerminalLaunch(options) {
       if (!fallbackToShell) {
         return buildStaticLogLaunch({
           env,
-          label: "CodeBuddy Code Agent Error",
+          label: "CodeBuddy Code Agent 错误",
           rolePrompt,
           warning: `${warning}\r\n已关闭失败回退到普通 PowerShell，因此仅保留此日志窗口。`
         });
@@ -4090,7 +4090,7 @@ function resolveTerminalLaunch(options) {
     if (!hasWinget && !fallbackToShell) {
       return buildStaticLogLaunch({
         env,
-        label: "Claude Code Agent Error",
+        label: "Claude Code Agent 错误",
         rolePrompt,
         warning: `${unavailableWarning}\r\n已关闭失败回退到普通 PowerShell，因此仅保留此日志窗口。`
       });
@@ -4112,7 +4112,7 @@ function resolveTerminalLaunch(options) {
           )
         ],
         env,
-        label: "Claude Code Installer",
+        label: "Claude Code 安装程序",
         requestedMode: "agent",
         activeMode: "installing",
         rolePrompt,
@@ -4125,7 +4125,7 @@ function resolveTerminalLaunch(options) {
     return {
       ...shell,
       env,
-      label: hasWinget ? "Claude Code Installer" : "PowerShell",
+      label: hasWinget ? "Claude Code 安装程序" : "PowerShell",
       requestedMode: "agent",
       activeMode: hasWinget ? "installing" : "shell",
       rolePrompt,
@@ -5012,7 +5012,7 @@ function createTerminalSession(event, options = {}) {
       requestedMode: mockSession.launch.requestedMode,
       activeMode: "mock"
     }, "warn");
-    sendTerminalData(webContents, id, "\x1b[33m测试环境已禁用真实终端后端。\x1b[0m\r\n");
+    sendTerminalData(webContents, id, "\x1b[33m当前环境已关闭真实终端后端。\x1b[0m\r\n");
     return {
       id,
       mode: "mock",
@@ -5794,6 +5794,15 @@ app.whenReady().then(() => {
     userData: app.getPath("userData"),
     mcp: getMcpServerInfo()
   }));
+  ipcMain.handle("app:open-external-url", async (_event, url) => {
+    const targetUrl = new URL(String(url || ""));
+    if (!["http:", "https:"].includes(targetUrl.protocol)) {
+      throw new Error("仅支持打开 HTTP/HTTPS 链接。");
+    }
+    await shell.openExternal(targetUrl.toString());
+    appendLogEvent("app.open-external-url", { url: targetUrl.toString() });
+    return { ok: true };
+  });
   ipcMain.handle("app:log-event", (_event, eventName, payload = {}, level = "info") => appendLogEvent(eventName, payload, level));
   ipcMain.handle("logs:open-directory", () => openLogDirectory());
   ipcMain.handle("state:meta", () => getStateMeta());
@@ -5868,6 +5877,62 @@ app.whenReady().then(() => {
       errorDetail: sanitizeLogText(status.errorDetail, 300)
     }, status.runnable ? "info" : "warn");
     return status;
+  });
+  ipcMain.handle("agent:install-claude", async () => {
+    const env = getWindowsShellEnv();
+    const installCommand = `winget install ${claudeCodeWingetPackage} --silent --accept-package-agreements`;
+    try {
+      const result = childProcess.spawnSync("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", installCommand
+      ], { encoding: "utf8", env, timeout: 300000, windowsHide: true });
+      const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+      const ok = result.status === 0;
+      appendLogEvent("agent.install.claude", { ok, output: sanitizeLogText(output, 500) }, ok ? "info" : "warn");
+      return { ok, output, installCommand };
+    } catch (error) {
+      appendLogEvent("agent.install.claude", { ok: false, error: serializeError(error) }, "error");
+      return { ok: false, error: error.message, installCommand };
+    }
+  });
+  ipcMain.handle("agent:install-codex", async () => {
+    const env = getWindowsShellEnv();
+    const npmCommand = getNpmCommand();
+    const command = buildPowerShellInvocation(npmCommand, ["install", "-g", codexNpmPackage]);
+    try {
+      const result = childProcess.spawnSync("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", command
+      ], { encoding: "utf8", env, timeout: 300000, windowsHide: true });
+      const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+      const ok = result.status === 0;
+      appendLogEvent("agent.install.codex", { ok, output: sanitizeLogText(output, 500) }, ok ? "info" : "warn");
+      return { ok, output, installCommand: getCodexInstallCommand(npmCommand) };
+    } catch (error) {
+      appendLogEvent("agent.install.codex", { ok: false, error: serializeError(error) }, "error");
+      return { ok: false, error: error.message, installCommand: getCodexInstallCommand(npmCommand) };
+    }
+  });
+  ipcMain.handle("agent:install-codebuddy", async () => {
+    const env = getWindowsShellEnv();
+    const npmCommand = getNpmCommand();
+    const command = buildPowerShellInvocation(npmCommand, ["install", "-g", codeBuddyNpmPackage]);
+    try {
+      const result = childProcess.spawnSync("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", command
+      ], { encoding: "utf8", env, timeout: 300000, windowsHide: true });
+      const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+      const ok = result.status === 0;
+      appendLogEvent("agent.install.codebuddy", { ok, output: sanitizeLogText(output, 500) }, ok ? "info" : "warn");
+      return { ok, output, installCommand: getCodeBuddyInstallCommand(npmCommand) };
+    } catch (error) {
+      appendLogEvent("agent.install.codebuddy", { ok: false, error: serializeError(error) }, "error");
+      return { ok: false, error: error.message, installCommand: getCodeBuddyInstallCommand(npmCommand) };
+    }
   });
   ipcMain.handle("agent:login-test", testAgentRemoteLogin);
   ipcMain.handle("terminal:create", createTerminalSession);

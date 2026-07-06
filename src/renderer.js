@@ -1,81 +1,81 @@
 const ROLE_TEMPLATES = [
   {
     id: "product-manager",
-    name: "产品经理",
-    category: "规划",
-    description: "把用户需求转化为可开发、可验收的任务。",
+    get name() { return t("role.product-manager.name", "产品经理"); },
+    get category() { return t("role.product-manager.category", "规划"); },
+    get description() { return t("role.product-manager.description", "把用户需求转化为可开发、可验收的任务。"); },
     programs: ["terminal", "task", "file", "browser"],
     claude: true,
     collaborators: ["tech-lead", "frontend-engineer", "backend-engineer", "qa-engineer"]
   },
   {
     id: "tech-lead",
-    name: "技术负责人",
-    category: "规划",
-    description: "把控技术方案、代码质量和角色协作边界。",
+    get name() { return t("role.tech-lead.name", "技术负责人"); },
+    get category() { return t("role.tech-lead.category", "规划"); },
+    get description() { return t("role.tech-lead.description", "把控技术方案、代码质量和角色协作边界。"); },
     programs: ["terminal", "file", "task"],
     claude: true,
     collaborators: ["frontend-engineer", "backend-engineer", "qa-engineer", "ai-agent-engineer"]
   },
   {
     id: "frontend-engineer",
-    name: "前端工程师",
-    category: "开发",
-    description: "负责界面、交互、前端状态和前端工程化。",
+    get name() { return t("role.frontend-engineer.name", "前端工程师"); },
+    get category() { return t("role.frontend-engineer.category", "开发"); },
+    get description() { return t("role.frontend-engineer.description", "负责界面、交互、前端状态和前端工程化。"); },
     programs: ["terminal", "browser", "file"],
     claude: true,
     collaborators: ["backend-engineer", "qa-engineer", "product-manager"]
   },
   {
     id: "backend-engineer",
-    name: "后端工程师",
-    category: "开发",
-    description: "负责接口、业务逻辑、数据模型和权限控制。",
+    get name() { return t("role.backend-engineer.name", "后端工程师"); },
+    get category() { return t("role.backend-engineer.category", "开发"); },
+    get description() { return t("role.backend-engineer.description", "负责接口、业务逻辑、数据模型和权限控制。"); },
     programs: ["terminal", "file", "task"],
     claude: true,
     collaborators: ["frontend-engineer", "qa-engineer", "devops-engineer"]
   },
   {
     id: "qa-engineer",
-    name: "测试工程师",
-    category: "质量",
-    description: "验证功能是否符合需求和验收标准。",
+    get name() { return t("role.qa-engineer.name", "测试工程师"); },
+    get category() { return t("role.qa-engineer.category", "质量"); },
+    get description() { return t("role.qa-engineer.description", "验证功能是否符合需求和验收标准。"); },
     programs: ["browser", "terminal", "task"],
     claude: true,
     collaborators: ["frontend-engineer", "backend-engineer", "product-manager"]
   },
   {
     id: "ai-agent-engineer",
-    name: "AI/Agent 工程师",
-    category: "开发",
-    description: "负责模型、Agent、工具调用和任务编排能力。",
+    get name() { return t("role.ai-agent-engineer.name", "AI/Agent 工程师"); },
+    get category() { return t("role.ai-agent-engineer.category", "开发"); },
+    get description() { return t("role.ai-agent-engineer.description", "负责模型、Agent、工具调用和任务编排能力。"); },
     programs: ["terminal", "file", "task"],
     claude: true,
     collaborators: ["tech-lead", "backend-engineer", "security-engineer"]
   },
   {
     id: "devops-engineer",
-    name: "DevOps 工程师",
-    category: "基础设施",
-    description: "负责构建、部署、CI/CD、环境和发布流水线。",
+    get name() { return t("role.devops-engineer.name", "DevOps 工程师"); },
+    get category() { return t("role.devops-engineer.category", "基础设施"); },
+    get description() { return t("role.devops-engineer.description", "负责构建、部署、CI/CD、环境和发布流水线。"); },
     programs: ["terminal", "task"],
     claude: true,
     collaborators: ["backend-engineer", "qa-engineer", "tech-lead"]
   },
   {
     id: "technical-writer",
-    name: "技术文档工程师",
-    category: "文档",
-    description: "负责开发文档、API 文档和技术说明。",
+    get name() { return t("role.technical-writer.name", "技术文档工程师"); },
+    get category() { return t("role.technical-writer.category", "文档"); },
+    get description() { return t("role.technical-writer.description", "负责开发文档、API 文档和技术说明。"); },
     programs: ["terminal", "file", "browser", "task"],
     claude: true,
     collaborators: ["product-manager", "tech-lead", "backend-engineer"]
   },
   {
     id: "security-engineer",
-    name: "安全工程师",
-    category: "安全",
-    description: "识别权限边界、命令执行和敏感数据风险。",
+    get name() { return t("role.security-engineer.name", "安全工程师"); },
+    get category() { return t("role.security-engineer.category", "安全"); },
+    get description() { return t("role.security-engineer.description", "识别权限边界、命令执行和敏感数据风险。"); },
     programs: ["terminal", "file", "task"],
     claude: true,
     collaborators: ["backend-engineer", "devops-engineer", "ai-agent-engineer"]
@@ -84,9 +84,9 @@ const ROLE_TEMPLATES = [
 
 const SYSTEM_ROLE = {
   id: "system",
-  name: "系统",
-  category: "Kernel",
-  description: "CosS Kernel 系统调度器。",
+  get name() { return t("role.system.name", "系统"); },
+  get category() { return t("role.system.category", "系统"); },
+  get description() { return t("role.system.description", "CosS 系统调度器。"); },
   programs: [],
   claude: false,
   collaborators: []
@@ -119,11 +119,11 @@ const GLOBAL_ORCHESTRATOR_POLICY = {
 };
 
 const PROGRAMS = {
-  terminal: { label: "终端", icon: ">" },
-  browser: { label: "浏览器", icon: "◎" },
-  file: { label: "文件", icon: "□" },
-  task: { label: "任务", icon: "✓" },
-  "task-list": { label: "任务列表", icon: "☰" }
+  terminal: { get label() { return t("program.terminal", "终端"); }, icon: ">" },
+  browser: { get label() { return t("program.browser", "浏览器"); }, icon: "◎" },
+  file: { get label() { return t("program.file", "文件"); }, icon: "□" },
+  task: { get label() { return t("program.task", "任务"); }, icon: "✓" },
+  "task-list": { get label() { return t("program.task-list", "任务列表"); }, icon: "☰" }
 };
 
 const DEFAULT_TASK_ROLE_IDS = ["product-manager", "frontend-engineer", "backend-engineer", "qa-engineer", "tech-lead"];
@@ -152,17 +152,17 @@ const MCP_TOOL_NAMES = [
 const MODEL_PROVIDER_PRESETS = {
   system: {
     id: "system",
-    label: "系统默认",
-    description: "内网默认系统模型，无需 API key。",
-    baseUrl: "http://10.21.1.45:22845/v1",
-    modelName: "agent-brain",
-    apiKeyRequired: true,
+    get label() { return t("provider.system.label", "用户自定义"); },
+    get description() { return t("provider.system.description", "使用用户填写的 OpenAI 兼容模型服务。"); },
+    baseUrl: "",
+    modelName: "",
+    apiKeyRequired: false,
     locked: false
   },
   deepseek: {
     id: "deepseek",
     label: "DeepSeek API",
-    description: "使用 DeepSeek 兼容接口，需要用户填写 API key。",
+    get description() { return t("provider.deepseek.description", "使用 DeepSeek 兼容接口，需要用户填写 API key。"); },
     baseUrl: "https://api.deepseek.com/v1",
     modelName: "deepseek-chat",
     apiKeyRequired: true
@@ -170,7 +170,7 @@ const MODEL_PROVIDER_PRESETS = {
   glm: {
     id: "glm",
     label: "GLM",
-    description: "使用智谱 GLM 接口，需要用户填写 API key。",
+    get description() { return t("provider.glm.description", "使用智谱 GLM 接口，需要用户填写 API key。"); },
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     modelName: "glm-4-plus",
     apiKeyRequired: true
@@ -178,7 +178,7 @@ const MODEL_PROVIDER_PRESETS = {
   openai: {
     id: "openai",
     label: "OpenAI",
-    description: "使用 OpenAI 兼容接口，需要用户填写 API key。",
+    get description() { return t("provider.openai.description", "使用 OpenAI 兼容接口，需要用户填写 API key。"); },
     baseUrl: "https://api.openai.com/v1",
     modelName: "gpt-4.1",
     apiKeyRequired: true
@@ -186,7 +186,7 @@ const MODEL_PROVIDER_PRESETS = {
   "claude-code": {
     id: "claude-code",
     label: "Claude Code",
-    description: "用于后续 Claude Code/Claude API 编排，需要用户填写 API key。",
+    get description() { return t("provider.claude-code.description", "用于 Claude Code 或 Anthropic API 相关任务，需要用户填写 API key。"); },
     baseUrl: "https://api.anthropic.com/v1",
     modelName: "claude-sonnet-4-20250514",
     apiKeyRequired: true
@@ -196,42 +196,46 @@ const MODEL_PROVIDER_PRESETS = {
 const AGENT_PERMISSION_POLICIES = {
   readonly: {
     id: "readonly",
-    label: "只读模式",
-    description: "Agent 只能阅读、分析和给出建议，不应改文件、安装依赖或执行破坏性命令。",
-    instruction: "当前 CosS Agent 权限模式：只读模式。只能阅读和分析项目内容，不能创建、修改、删除文件，不能安装依赖，不能运行部署、格式化磁盘或其他写入/破坏性命令。如确需修改，请先说明原因并等待用户调整权限。"
+    get label() { return t("permission.readonly.label", "只读模式"); },
+    get description() { return t("permission.readonly.description", "Agent 只能阅读、分析和给出建议，不应改文件、安装依赖或执行破坏性命令。"); },
+    get instruction() { return t("permission.readonly.instruction", "当前 CosS Agent 权限模式：只读模式。只能阅读和分析项目内容，不能创建、修改、删除文件，不能安装依赖，不能运行部署、格式化磁盘或其他写入/破坏性命令。如确需修改，请先说明原因并等待用户调整权限。"); }
   },
   confirm: {
     id: "confirm",
-    label: "每次编辑确认",
-    description: "任何文件写入、依赖安装、删除、部署等操作都需要先说明风险并等待确认。",
-    instruction: "当前 CosS Agent 权限模式：每次编辑确认。执行任何文件写入、依赖安装、删除、部署、网络发布或高风险命令前，必须先说明计划、影响范围和风险，并等待用户确认。"
+    get label() { return t("permission.confirm.label", "每次编辑确认"); },
+    get description() { return t("permission.confirm.description", "任何文件写入、依赖安装、删除、部署等操作都需要先说明风险并等待确认。"); },
+    get instruction() { return t("permission.confirm.instruction", "当前 CosS Agent 权限模式：每次编辑确认。执行任何文件写入、依赖安装、删除、部署、网络发布或高风险命令前，必须先说明计划、影响范围和风险，并等待用户确认。"); }
   },
   sessionEdit: {
     id: "sessionEdit",
-    label: "本会话允许编辑",
-    description: "Agent 可在当前项目内创建和修改文件；安装依赖、删除、部署仍需确认。",
-    instruction: "当前 CosS Agent 权限模式：本会话允许编辑。可以在当前项目目录内创建和修改文件；安装依赖、删除文件、部署、格式化磁盘、访问敏感信息或其他高风险操作仍必须先等待用户确认。"
+    get label() { return t("permission.sessionEdit.label", "本会话允许编辑"); },
+    get description() { return t("permission.sessionEdit.description", "Agent 可在当前项目内创建和修改文件；安装依赖、删除、部署仍需确认。"); },
+    get instruction() { return t("permission.sessionEdit.instruction", "当前 CosS Agent 权限模式：本会话允许编辑。可以在当前项目目录内创建和修改文件；安装依赖、删除文件、部署、格式化磁盘、访问敏感信息或其他高风险操作仍必须先等待用户确认。"); }
   },
   sessionInstall: {
     id: "sessionInstall",
-    label: "本会话允许编辑与安装依赖",
-    description: "Agent 可在当前项目内编辑文件并安装依赖；删除、部署和破坏性命令仍需确认。",
-    instruction: "当前 CosS Agent 权限模式：本会话允许编辑与安装依赖。可以在当前项目目录内创建/修改文件并安装必要依赖；删除文件、部署、格式化磁盘、清理大范围目录、访问敏感信息或其他破坏性操作仍必须先等待用户确认。"
+    get label() { return t("permission.sessionInstall.label", "本会话允许编辑与安装依赖"); },
+    get description() { return t("permission.sessionInstall.description", "Agent 可在当前项目内编辑文件并安装依赖；删除、部署和破坏性命令仍需确认。"); },
+    get instruction() { return t("permission.sessionInstall.instruction", "当前 CosS Agent 权限模式：本会话允许编辑与安装依赖。可以在当前项目目录内创建/修改文件并安装必要依赖；删除文件、部署、格式化磁盘、清理大范围目录、访问敏感信息或其他破坏性操作仍必须先等待用户确认。"); }
   }
 };
 
 const SETTINGS_SECTIONS = [
-  { id: "account", label: "账户管理", icon: "user" },
-  { id: "system", label: "系统设置", icon: "gear" },
-  { id: "agent", label: "智能体设置", icon: "assistant" },
-  { id: "memory", label: "记忆", icon: "clock" },
-  { id: "model", label: "模型", icon: "cube" },
-  { id: "assistant", label: "助理设置", icon: "assistant" },
-  { id: "personalization", label: "个性化", icon: "sparkles" },
-  { id: "data", label: "数据管理", icon: "database" },
-  { id: "security", label: "安全中心", icon: "shield" },
-  { id: "help", label: "帮助与反馈", icon: "help" }
+  { id: "account", get label() { return t("settings.account", "账户管理"); }, icon: "user" },
+  { id: "system", get label() { return t("settings.system", "系统设置"); }, icon: "gear" },
+  { id: "agent", get label() { return t("settings.agent", "智能体设置"); }, icon: "assistant" },
+  { id: "memory", get label() { return t("settings.memory", "记忆"); }, icon: "clock" },
+  { id: "model", get label() { return t("settings.model", "模型"); }, icon: "cube" },
+  { id: "data", get label() { return t("settings.data", "数据管理"); }, icon: "database" },
+  { id: "security", get label() { return t("settings.security", "安全中心"); }, icon: "shield" },
+  { id: "help", get label() { return t("settings.help", "帮助与反馈"); }, icon: "help" }
 ];
+
+const LANGUAGE_OPTIONS = window.COSS_I18N?.languages || [
+  { id: "zh-CN", label: "中文简体" },
+  { id: "en-US", label: "English" }
+];
+const I18N_RESOURCES = window.COSS_I18N?.resources || {};
 
 const defaultState = {
   activeProjectId: null,
@@ -245,8 +249,13 @@ const defaultState = {
     agentAutoWorkflowPaused: false,
     agentMcpAutoConfigEnabled: false,
     codeBuddyApiKey: "",
+    language: "zh-CN",
+    userProfile: {
+      displayName: "本地用户",
+      avatarDataUrl: ""
+    },
     agentPromptTemplate:
-      "你是 CosS 类桌面工作区中的{{roleName}}。\n" +
+      "你是 CosS 工作区中的{{roleName}}。\n" +
       "角色 ID：{{roleId}}\n" +
       "角色职责：{{roleDescription}}\n" +
       "项目：{{projectName}}\n" +
@@ -257,9 +266,9 @@ const defaultState = {
       "子任务：{{subtaskTitle}}\n" +
       "子任务说明：{{subtaskDescription}}\n\n" +
       "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。\n" +
-      "CosS v0.10 使用中央 Kernel 线性调度。你不能直接给其他 Agent 分配任务，不能发明不存在的角色，也不能绕过共享任务板。\n" +
-      "开始工作前优先使用 coss_get_task_board、coss_pool_claim、coss_claim_step；长任务中使用 coss_heartbeat_step；完成后必须使用 coss_submit_result({ status: \"done\" }) 提交结构化结果。\n" +
-      "只完成当前 Step。Kernel 会在当前 Step 完成后启动预先规划好的下一个 Agent。",
+      "CosS 使用任务调度器按步骤推进协作。你不能直接给其他角色分配任务，不能发明不存在的角色，也不能绕过共享任务板。\n" +
+      "开始工作前优先读取任务板并领取当前步骤；长任务中保持进度更新；完成后必须提交结果。\n" +
+      "只完成当前步骤。当前步骤完成后，系统会启动预先规划好的下一位协作者。",
     modelProvider: "system",
     modelConfigs: createDefaultModelConfigs()
   }
@@ -269,6 +278,48 @@ const APP_VERSION = "v0.10.0";
 const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 let state = structuredClone(defaultState);
+
+function getAppLanguage() {
+  const language = state?.settings?.language || defaultState.settings.language;
+  return LANGUAGE_OPTIONS.some((item) => item.id === language) ? language : defaultState.settings.language;
+}
+
+function syncI18nLanguage(language = getAppLanguage()) {
+  if (!window.i18next) {
+    return;
+  }
+  if (!window.i18next.isInitialized) {
+    window.i18next.init({
+      lng: language,
+      fallbackLng: defaultState.settings.language,
+      resources: I18N_RESOURCES,
+      returnEmptyString: false
+    });
+    return;
+  }
+  window.i18next.changeLanguage(language);
+}
+
+function interpolateText(template, values = {}) {
+  return String(template || "").replace(/{{\s*(\w+)\s*}}/g, (_match, key) => (
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : ""
+  ));
+}
+
+function t(key, fallback = key, values = {}) {
+  if (window.i18next?.isInitialized) {
+    return window.i18next.t(key, { defaultValue: fallback, ...values });
+  }
+  const template = I18N_RESOURCES[getAppLanguage()]?.translation?.[key]
+    || I18N_RESOURCES[defaultState.settings.language]?.translation?.[key]
+    || fallback;
+  return interpolateText(template, values);
+}
+
+function getDefaultAgentPromptTemplate() {
+  return t("agent.prompt.default.template", I18N_RESOURCES[defaultState.settings.language]?.translation?.["agent.prompt.default.template"] || "");
+}
+
 let saveStateInFlight = false;
 let saveStateDirty = false;
 let saveStatePromise = Promise.resolve();
@@ -286,7 +337,8 @@ let dragState = null;
 let zSeed = 20;
 const WINDOW_Z_BASE = 20;
 const WINDOW_Z_MAX = 9990;
-const DEFAULT_BROWSER_URL = "https://example.com";
+const DEFAULT_BROWSER_URL = "about:blank";
+const PRODUCT_HELP_URL = "https://xiaolizi0v0.github.io/";
 const DEFAULT_DESKTOP_ID = "desktop-main";
 const MAXIMIZED_WINDOW_STYLE = "left:16px; top:66px; width:calc(100% - 32px); height:calc(100% - 150px);";
 const terminalViews = new Map();
@@ -342,21 +394,21 @@ const AGENT_POOL_CLEANUP_POLICY = {
 };
 
 const SUBTASK_STATUS_DEFS = {
-  idle: { label: "空闲", windowStatus: "idle" },
-  running: { label: "执行中", windowStatus: "working" },
-  done: { label: "完成", windowStatus: "done" }
+  idle: { get label() { return t("status.idle", "空闲"); }, windowStatus: "idle" },
+  running: { get label() { return t("status.running", "执行中"); }, windowStatus: "working" },
+  done: { get label() { return t("status.done", "完成"); }, windowStatus: "done" }
 };
 
 const AGENT_RELAY_STAGES = {
-  idle: { label: "空闲", symbol: "闲", className: "idle" },
-  running: { label: "执行中", symbol: "行", className: "executing" },
-  done: { label: "完成", symbol: "完", className: "completed" }
+  idle: { get label() { return t("status.idle", "空闲"); }, get symbol() { return t("relay.idle.symbol", "闲"); }, className: "idle" },
+  running: { get label() { return t("status.running", "执行中"); }, get symbol() { return t("relay.running.symbol", "行"); }, className: "executing" },
+  done: { get label() { return t("status.done", "完成"); }, get symbol() { return t("relay.done.symbol", "完"); }, className: "completed" }
 };
 
 const KERNEL_PHASE_DEFS = {
-  idle: { label: "空闲", status: "idle", relayStage: "idle" },
-  running: { label: "执行中", status: "running", relayStage: "running" },
-  done: { label: "完成", status: "done", relayStage: "done" }
+  idle: { get label() { return t("status.idle", "空闲"); }, status: "idle", relayStage: "idle" },
+  running: { get label() { return t("status.running", "执行中"); }, status: "running", relayStage: "running" },
+  done: { get label() { return t("status.done", "完成"); }, status: "done", relayStage: "done" }
 };
 
 const agentPoolCleanupTimers = new Map();
@@ -365,36 +417,36 @@ const COMMAND_RISK_RULES = [
   {
     id: "delete-files",
     severity: "high",
-    label: "文件删除",
-    description: "可能删除项目文件或系统文件。",
+    get label() { return t("risk.delete-files.label", "文件删除"); },
+    get description() { return t("risk.delete-files.description", "可能删除项目文件或系统文件。"); },
     pattern: /\b(remove-item|rm|del|erase|rmdir|rd)\b/i
   },
   {
     id: "dependency-install",
     severity: "medium",
-    label: "依赖或软件安装",
-    description: "会改变本机或项目依赖环境。",
+    get label() { return t("risk.dependency-install.label", "依赖或软件安装"); },
+    get description() { return t("risk.dependency-install.description", "会改变本机或项目依赖环境。"); },
     pattern: /\b(winget|npm|pnpm|yarn|pip|choco|scoop|cargo|dotnet)\s+(install|i|add|update|upgrade)\b/i
   },
   {
     id: "environment-change",
     severity: "high",
-    label: "环境变量或注册表修改",
-    description: "可能影响当前用户或系统环境。",
+    get label() { return t("risk.environment-change.label", "环境变量或注册表修改"); },
+    get description() { return t("risk.environment-change.description", "可能影响当前用户或系统环境。"); },
     pattern: /\b(setx|reg\s+add|\[environment\]::setenvironmentvariable)\b|\$env:[\w()\\.-]+\s*=/i
   },
   {
     id: "deployment",
     severity: "high",
-    label: "发布或部署",
-    description: "可能把本地变更发布到远程环境。",
+    get label() { return t("risk.deployment.label", "发布或部署"); },
+    get description() { return t("risk.deployment.description", "可能把本地变更发布到远程环境。"); },
     pattern: /\b(git\s+push|npm\s+publish|docker\s+push|kubectl\s+(apply|delete)|terraform\s+(apply|destroy))\b/i
   },
   {
     id: "script-execution",
     severity: "medium",
-    label: "动态脚本执行",
-    description: "可能执行下载或拼接生成的代码。",
+    get label() { return t("risk.script-execution.label", "动态脚本执行"); },
+    get description() { return t("risk.script-execution.description", "可能执行下载或拼接生成的代码。"); },
     pattern: /\b(iex|invoke-expression|powershell\s+-encodedcommand)\b|(\|\s*(powershell|pwsh|sh|bash)\b)/i
   }
 ];
@@ -453,10 +505,12 @@ function ensureModelSettings(settings) {
 
   Object.entries(MODEL_PROVIDER_PRESETS).forEach(([id, preset]) => {
     const current = settings.modelConfigs[id] || {};
+    const isLegacySystemDefault = id === "system"
+      && (current.baseUrl === "http://10.21.1.45:22845/v1" || current.modelName === "agent-brain");
     settings.modelConfigs[id] = {
-      baseUrl: preset.locked ? preset.baseUrl : (current.baseUrl || preset.baseUrl),
-      modelName: preset.locked ? preset.modelName : (current.modelName || preset.modelName),
-      apiKey: preset.locked ? "" : (current.apiKey || "")
+      baseUrl: preset.locked ? preset.baseUrl : (isLegacySystemDefault ? preset.baseUrl : (current.baseUrl || preset.baseUrl)),
+      modelName: preset.locked ? preset.modelName : (isLegacySystemDefault ? preset.modelName : (current.modelName || preset.modelName)),
+      apiKey: preset.locked || isLegacySystemDefault ? "" : (current.apiKey || "")
     };
   });
 
@@ -491,9 +545,25 @@ function getActiveModelConfig() {
   return getModelConfig(state.settings.modelProvider);
 }
 
+function getModelDisplayName(config) {
+  return config?.modelName || (config?.id === "system" ? t("model.displayName.empty", "未填写模型名称") : "");
+}
+
+function getModelEndpointDisplay(config) {
+  return config?.baseUrl || (config?.id === "system" ? t("model.baseUrl.empty", "未填写 Base URL") : "");
+}
+
+function getModelCredentialDisplay(config) {
+  if (config?.apiKeyRequired) {
+    return t("model.apiKey.status", "API key {{status}}", { status: config.apiKey ? t("model.apiKey.statusFilled", "已填写") : t("model.apiKey.statusEmpty", "未填写") });
+  }
+  return config?.apiKey ? t("model.apiKey.filled", "API key 已填写") : t("model.apiKey.empty", "API key 可选");
+}
+
 function canUseModelProvider(provider) {
   const config = getModelConfig(provider);
-  return !config.apiKeyRequired || Boolean(config.apiKey);
+  const hasRequiredEndpoint = Boolean(String(config.baseUrl || "").trim() && String(config.modelName || "").trim());
+  return hasRequiredEndpoint && (!config.apiKeyRequired || Boolean(config.apiKey));
 }
 
 function updateModelConfigField(provider, field, value) {
@@ -516,9 +586,9 @@ function updateModelConfigField(provider, field, value) {
 
 function renderMaskedSecret(value) {
   if (!value) {
-    return "未填写";
+    return t("model.secret.empty", "未填写");
   }
-  return value.length <= 6 ? "已填写" : `${value.slice(0, 3)}...${value.slice(-3)}`;
+  return value.length <= 6 ? t("model.secret.masked", "已填写") : `${value.slice(0, 3)}...${value.slice(-3)}`;
 }
 
 function getRole(roleId) {
@@ -528,28 +598,47 @@ function getRole(roleId) {
   return ROLE_TEMPLATES.find((role) => role.id === roleId) || ROLE_TEMPLATES[0];
 }
 
+function trRoleName(role) {
+  return role ? t(`role.${role.id}.name`, role.name) : "";
+}
+function trRoleCategory(role) {
+  return role ? t(`role.${role.id}.category`, role.category) : "";
+}
+function trRoleDescription(role) {
+  return role ? t(`role.${role.id}.description`, role.description) : "";
+}
+function getRoleName(roleId) {
+  const role = getRole(roleId);
+  return role ? trRoleName(role) : String(roleId || "");
+}
+function getRoleCategoryLabel(roleId) {
+  const role = getRole(roleId);
+  return role ? trRoleCategory(role) : "";
+}
+
 function getProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
 }
 
 const TASK_LAYOUT_PRESETS = [
-  { id: "split-two", label: "两列" },
-  { id: "main-narrow", label: "主列加窄列" },
-  { id: "main-stack", label: "主列加上下分割" },
-  { id: "four-grid", label: "四宫格" },
-  { id: "three-columns", label: "三列" },
-  { id: "center-focus", label: "中间主列" }
+  { id: "split-two", label: t("layout.split-two", "两列") },
+  { id: "main-narrow", label: t("layout.main-narrow", "主列加窄列") },
+  { id: "main-stack", label: t("layout.main-stack", "主列加上下分割") },
+  { id: "four-grid", label: t("layout.four-grid", "四宫格") },
+  { id: "three-columns", label: t("layout.three-columns", "三列") },
+  { id: "center-focus", label: t("layout.center-focus", "中间主列") }
 ];
 
 function normalizeLayoutPreset(value) {
   return TASK_LAYOUT_PRESETS.some((preset) => preset.id === value) ? value : "split-two";
 }
 
-function createDesktopState(name = "主对话", options = {}) {
+function createDesktopState(name, options = {}) {
+  const desktopName = name || t("desktop.defaultName", "主对话");
   const taskIds = uniqueStrings([...(options.taskIds || []), options.taskId || ""]);
   return {
     id: options.id || uid("desktop"),
-    name,
+    name: desktopName,
     taskId: options.taskId || "",
     taskIds,
     lastTaskId: options.lastTaskId || options.taskId || taskIds[0] || "",
@@ -565,7 +654,7 @@ function ensureProjectDesktops(project) {
 
   if (!Array.isArray(project.desktops) || project.desktops.length === 0) {
     project.desktops = [
-      createDesktopState("主对话", {
+      createDesktopState(t("desktop.defaultName", "主对话"), {
         id: DEFAULT_DESKTOP_ID,
         createdAt: project.createdAt || new Date().toISOString()
       })
@@ -574,7 +663,7 @@ function ensureProjectDesktops(project) {
 
   project.desktops = project.desktops.map((desktop, index) => ({
     id: desktop.id || (index === 0 ? DEFAULT_DESKTOP_ID : uid("desktop")),
-    name: desktop.name || (index === 0 ? "主对话" : `对话 ${index + 1}`),
+    name: desktop.name || (index === 0 ? t("desktop.defaultName", "主对话") : t("desktop.conversationIndex", "对话 {{index}}", { index: index + 1 })),
     taskId: desktop.taskId || "",
     taskIds: uniqueStrings([...(desktop.taskIds || []), desktop.taskId || ""]),
     lastTaskId: desktop.lastTaskId || desktop.taskId || desktop.taskIds?.[0] || "",
@@ -641,7 +730,8 @@ function getTaskStatusValue(task) {
 }
 
 function getTaskModelName(task) {
-  return String(task?.model?.modelName || task?.model?.provider || "agent-brain");
+  const modelName = String(task?.model?.modelName || task?.model?.provider || "");
+  return modelName === "agent-brain" || modelName === "system" || !modelName ? t("model.userCustom", "用户自定义模型") : modelName;
 }
 
 function getFilteredConversationTasks(project, desktopId = getActiveDesktopId(project)) {
@@ -670,7 +760,7 @@ function getFilteredConversationTasks(project, desktopId = getActiveDesktopId(pr
       task.goal,
       task.planner?.summary,
       getTaskModelName(task),
-      ...getTaskSubtaskPairs(task).flatMap(({ subtask }) => [getRole(subtask.roleId).name, subtask.title, subtask.description])
+      ...getTaskSubtaskPairs(task).flatMap(({ subtask }) => [getRoleName(subtask.roleId), subtask.title, subtask.description])
     ].join(" ").toLowerCase();
     return searchable.includes(query);
   });
@@ -831,7 +921,7 @@ function getTaskKernelSteps(task) {
       ...step,
       subtask,
       roleId: getRole(step.roleId || subtask.roleId).id,
-      title: step.title || subtask.title || `Step ${index + 1}`,
+      title: step.title || subtask.title || t("common.step", "步骤 {{index}}", { index: index + 1 }),
       description: step.description || subtask.description || "",
       phase: expiredLease && phase === "running" ? "idle" : phase,
       status: expiredLease ? "idle" : kernelPhaseToStatus(phase),
@@ -1063,7 +1153,7 @@ function ensureTaskOrchestrator(task) {
       id: current.id || `step-${subtask.id}`,
       subtaskId: subtask.id,
       roleId,
-      title: subtask.title || current.title || `步骤 ${index + 1}`,
+      title: subtask.title || current.title || t("common.step", "步骤 {{index}}", { index: index + 1 }),
       description: subtask.description || current.description || "",
       status: normalizeSubtaskStatus(current.status || subtask.status),
       phase: normalizeKernelPhase(current.phase || normalizeSubtaskStatus(subtask.status), subtask.status),
@@ -1103,9 +1193,9 @@ function ensureTaskOrchestrator(task) {
       currentStep: existing.sharedState?.currentStep || "",
       artifacts: Array.isArray(existing.sharedState?.artifacts) ? existing.sharedState.artifacts : [],
       constraints: uniqueStrings([
-        "不允许 Agent 直接给其他 Agent 分配任务",
-        "所有结果必须写回共享任务板",
-        "中高风险动作必须等待用户或调度器确认",
+        t("policy.rule.noDirectAssign", "不允许 Agent 直接给其他 Agent 分配任务"),
+        t("policy.rule.sharedTaskBoard", "所有结果必须写回共享任务板"),
+        t("policy.rule.confirmHighRisk", "中高风险动作必须等待用户或调度器确认"),
         ...(existing.sharedState?.constraints || [])
       ]),
       decisions: Array.isArray(existing.sharedState?.decisions) ? existing.sharedState.decisions : []
@@ -1198,12 +1288,12 @@ function summarizeProjectTaskForMemory(task) {
     totalCount: subtasks.length,
     roles: roleIds.map((roleId) => ({
       id: roleId,
-      name: getRole(roleId).name
+      name: getRoleName(roleId)
     })),
     subtasks: subtasks.slice(0, 12).map((subtask) => ({
       id: subtask.id || "",
       roleId: subtask.roleId || "",
-      roleName: getRole(subtask.roleId).name,
+      roleName: getRoleName(subtask.roleId),
       title: compactMemoryText(subtask.title, 100),
       description: compactMemoryText(subtask.description, 260),
       status: normalizeSubtaskStatus(subtask.status)
@@ -1219,7 +1309,7 @@ function collectProjectMemoryArtifacts(project) {
         taskId: task.id || "",
         taskTitle: compactMemoryText(task.title || task.goal, 80),
         roleId: artifact.roleId || "",
-        roleName: artifact.roleId ? getRole(artifact.roleId).name : "",
+        roleName: artifact.roleId ? getRoleName(artifact.roleId) : "",
         stepId: artifact.stepId || "",
         path: compactMemoryText(artifact.path || artifact.url, 260),
         type: compactMemoryText(artifact.type || "file", 40),
@@ -1241,7 +1331,7 @@ function collectProjectMemoryDecisions(project) {
         taskId: task.id || "",
         taskTitle: compactMemoryText(task.title || task.goal, 80),
         roleId: decision.roleId || "",
-        roleName: decision.roleId ? getRole(decision.roleId).name : "",
+        roleName: decision.roleId ? getRoleName(decision.roleId) : "",
         stepId: decision.stepId || "",
         summary: compactMemoryText(decision.summary || decision.message, 500),
         createdAt: decision.createdAt || task.updatedAt || task.createdAt || ""
@@ -1339,7 +1429,7 @@ function formatProjectMemoryForPrompt(projectMemory = {}) {
 
 function formatProjectMemoryForDisplay(memory = {}) {
   const body = formatProjectMemoryForPrompt(memory);
-  return body || "暂无项目记忆。点击“刷新记忆”会根据当前项目任务、产物和决策生成摘要。";
+  return body || t("memory.empty", "暂无项目记忆。点击“刷新记忆”会根据当前项目任务、产物和决策生成摘要。");
 }
 
 function uniqueRoleIds(roleIds = []) {
@@ -1393,7 +1483,7 @@ function ensureMessageShape(message) {
 }
 
 function getRoleNameSafe(roleId) {
-  return getRole(roleId).name || roleId;
+  return getRoleName(roleId) || roleId;
 }
 
 function firstMeaningfulLine(value, fallback = "") {
@@ -1935,8 +2025,13 @@ function ensureStateShape(nextState) {
     nextState.settings.agentAutoWorkflowPaused = false;
   }
   nextState.settings.codeBuddyApiKey ||= "";
+  nextState.settings.language = LANGUAGE_OPTIONS.some((item) => item.id === nextState.settings.language) ? nextState.settings.language : "zh-CN";
+  nextState.settings.userProfile = {
+    displayName: String(nextState.settings.userProfile?.displayName || t("account.defaultName", "本地用户")).trim().slice(0, 32) || t("account.defaultName", "本地用户"),
+    avatarDataUrl: String(nextState.settings.userProfile?.avatarDataUrl || "")
+  };
   nextState.settings.agentPromptTemplate = ensureAgentPromptMcpInstructions(
-    ensureAgentPromptPermissionPlaceholders(nextState.settings.agentPromptTemplate || defaultState.settings.agentPromptTemplate)
+    ensureAgentPromptPermissionPlaceholders(nextState.settings.agentPromptTemplate || getDefaultAgentPromptTemplate())
   );
   ensureModelSettings(nextState.settings);
   (nextState.projects || []).forEach(ensureProjectShape);
@@ -1980,8 +2075,8 @@ function assessCommandRisk(command) {
     return {
       requiresApproval: false,
       severity: "low",
-      label: "空命令",
-      description: "未输入可执行命令。"
+      get label() { return t("risk.command.empty.label", "空命令"); },
+      get description() { return t("risk.command.empty.description", "未输入可执行命令。"); }
     };
   }
 
@@ -1990,8 +2085,8 @@ function assessCommandRisk(command) {
     return {
       requiresApproval: false,
       severity: "low",
-      label: "普通命令",
-      description: "未命中当前高风险规则。"
+      get label() { return t("risk.command.normal.label", "普通命令"); },
+      get description() { return t("risk.command.normal.description", "未命中当前高风险规则。"); }
     };
   }
 
@@ -2147,7 +2242,11 @@ function markCommandApprovalGrantUsed(grant, win, assessment, command) {
 }
 
 function getProgramLabel(programType) {
-  return PROGRAMS[programType]?.label || "程序";
+  const program = PROGRAMS[programType];
+  if (!program) {
+    return t("program.default", "程序");
+  }
+  return t(`program.${programType}`, program.label);
 }
 
 function normalizeZIndex(value) {
@@ -2517,7 +2616,7 @@ function getAgentPermissionPolicy(value = state.settings.agentPermissionMode) {
 }
 
 function ensureAgentPromptPermissionPlaceholders(template) {
-  const source = String(template || defaultState.settings.agentPromptTemplate);
+  const source = String(template || getDefaultAgentPromptTemplate());
   if (source.includes("{{agentPermissionInstructions}}")) {
     return source;
   }
@@ -2525,13 +2624,13 @@ function ensureAgentPromptPermissionPlaceholders(template) {
 }
 
 function ensureAgentPromptMcpInstructions(template) {
-  const source = String(template || defaultState.settings.agentPromptTemplate)
+  const source = String(template || getDefaultAgentPromptTemplate())
     .replace(/\n*当系统提示 `mcp__coss: Still connecting; call WaitForMcpServers to wait for it` 时，必须先调用 WaitForMcpServers 等待 mcp__coss 连接完成。/g, "")
     .replace(/\n*If the agent runtime says `mcp__coss: Still connecting; call WaitForMcpServers to wait for it`, call WaitForMcpServers first and wait for mcp__coss to become ready\./g, "")
     .trim();
   const waitInstructions =
-    "\n\n当系统提示 `mcp__coss: Still connecting` 时，请等待几秒后重新搜索或直接重试 coss 工具；只有当前 Agent 后端明确提供等待工具时才调用该工具。" +
-    "\n不要因为 ToolSearch 暂时找不到 coss_get_context、coss_list_roles 或 coss_pool_read 就停止工作；至少等待并重试 3 次。无法继续时输出 COSS_AGENT_STATUS:running 并说明原因，完成时输出 COSS_AGENT_STATUS:done。";
+    t("agent.prompt.mcpRetry.notice", "\n\n当系统提示 `mcp__coss: Still connecting` 时，请等待几秒后重新搜索或直接重试 coss 工具；只有当前 Agent 后端明确提供等待工具时才调用该工具。") +
+    t("agent.prompt.mcpRetry.retry", "\n不要因为 ToolSearch 暂时找不到 coss_get_context、coss_list_roles 或 coss_pool_read 就停止工作；至少等待并重试 3 次。无法继续时输出 COSS_AGENT_STATUS:running 并说明原因，完成时输出 COSS_AGENT_STATUS:done。");
   if (source.includes("mcp__coss: Still connecting") && source.includes("至少等待并重试 3 次")) {
     return source;
   }
@@ -2698,21 +2797,21 @@ function buildOrchestratorDispatchContent(task, step) {
     ? ["", "Project memory for this task:", memoryText]
     : [];
   const lines = [
-    `CosS Kernel 调度任务板：${task.title || task.goal}`,
-    `任务ID：${task.id}`,
-    `步骤ID：${step.id}`,
-    `目标角色：${role.name} (${role.id})`,
-    `步骤标题：${step.title}`,
-    `步骤说明：${step.description}`,
+    t("kernel.dispatch.title", "CosS Kernel 调度任务板：{{title}}", { title: task.title || task.goal }),
+    t("kernel.dispatch.taskId", "任务ID：{{taskId}}", { taskId: task.id }),
+    t("kernel.dispatch.stepId", "步骤ID：{{stepId}}", { stepId: step.id }),
+    t("kernel.dispatch.targetRole", "目标角色：{{name}} ({{id}})", { name: role.name, id: role.id }),
+    t("kernel.dispatch.stepTitle", "步骤标题：{{title}}", { title: step.title }),
+    t("kernel.dispatch.stepDesc", "步骤说明：{{description}}", { description: step.description }),
     "",
-    "中央线性调度规则：",
-    "1. 不要直接把任务分配给其他 Agent，不要自行创建不存在的角色。",
-    "2. 只能使用 coss_get_task_board、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval 等 CosS MCP 工具回写结果。",
-    "3. 只处理当前 Step；完成后调用 coss_submit_result({ status: \"done\" })，Kernel 会自动启动预先规划好的下一步。",
-    "4. 高风险动作、发出邮件、删除文件、支付、系统设置修改等必须走 coss_request_approval 或等待用户确认。",
-    "5. 输出必须结构化；不要只在终端自然语言回复。",
+    t("kernel.dispatch.rules.title", "中央线性调度规则："),
+    t("kernel.dispatch.rule1", "1. 不要直接把任务分配给其他 Agent，不要自行创建不存在的角色。"),
+    t("kernel.dispatch.rule2", "2. 只能使用 coss_get_task_board、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval 等 CosS MCP 工具回写结果。"),
+    t("kernel.dispatch.rule3", "3. 只处理当前 Step；完成后调用 coss_submit_result({ status: \"done\" })，Kernel 会自动启动预先规划好的下一步。"),
+    t("kernel.dispatch.rule4", "4. 高风险动作、发出邮件、删除文件、支付、系统设置修改等必须走 coss_request_approval 或等待用户确认。"),
+    t("kernel.dispatch.rule5", "5. 输出必须结构化；不要只在终端自然语言回复。"),
     "",
-    `允许能力：${step.allowedCapabilities.join(", ") || "none"}`
+    t("kernel.dispatch.allowedCapabilities", "允许能力：{{capabilities}}", { capabilities: step.allowedCapabilities.join(", ") || "none" })
   ];
   return lines.concat(memoryLines).join("\n");
 }
@@ -2866,24 +2965,24 @@ function buildInitialCoordinatorContent(task, roleId, subtask = null) {
   const role = getRole(roleId);
   const downstreamRoleNames = uniqueRoleIds([...(task.planner?.neededAgentRoleIds || []), ...task.subtasks.map((item) => item.roleId)])
     .filter((item) => item !== roleId)
-    .map((item) => getRole(item).name)
-    .join("、") || "下游角色";
+    .map((item) => getRoleName(item))
+    .join("、") || t("planning.downstreamFallback", "下游角色");
   return [
-    `任务ID：${task.id}`,
-    `任务目标：${task.goal || task.title}`,
-    `${role.name} Kernel Step：${subtask?.title || "请先梳理需求、验收标准和协作边界。"}`,
-    `执行说明：${subtask?.description || "请先输出 PRD、字段约束、验收标准、角色分工和需要下游角色确认的问题。"}`,
-    `后续预规划角色：${downstreamRoleNames}`,
+    t("kernel.dispatch.taskId", "任务ID：{{taskId}}", { taskId: task.id }),
+    t("planning.goal", "任务目标：{{goal}}", { goal: task.goal || task.title }),
+    t("planning.currentStep", "{{role}} 当前步骤：{{step}}", { role: role.name, step: subtask?.title || t("planning.defaultStepTitle", "请先梳理需求、验收标准和协作边界。") }),
+    t("planning.executionDesc", "执行说明：{{description}}", { description: subtask?.description || t("planning.defaultExecDesc", "请先输出 PRD、字段约束、验收标准、角色分工和需要下游角色确认的问题。") }),
+    t("planning.downstreamRoles", "后续预规划角色：{{roles}}", { roles: downstreamRoleNames }),
     "",
-    `请先作为 ${role.name} Agent 开始工作，不要直接跳过到下游实现角色。`,
-    "请优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。",
-    "CosS v0.10 使用中央 Kernel 线性调度，Agent 不能直接给其他 Agent 分配任务。",
-    "必须优先尝试工具：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result。",
-    "开始工作前，请通过 MCP 读取共享任务板和自己的角色消息池，开始自己的 Kernel Step；处理过程中通过 MCP 提交结构化结果。",
-    "如果看到系统提示 `mcp__coss: Still connecting`，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试，或直接重试 mcp__coss__coss_get_context。",
-    "不要因为 ToolSearch 暂时找不到 coss_get_context、coss_list_roles、coss_pool_read 等工具就停止；至少等待并重试 3 次。",
-    "推荐顺序：coss_get_context -> coss_get_task_board -> coss_pool_read -> coss_pool_claim -> coss_claim_step -> coss_heartbeat_step -> coss_submit_result。",
-    `完成 ${role.name} 阶段后，请写清楚结构化结果、产物、风险和交付说明；是否启动 ${downstreamRoleNames} 由 CosS Kernel 根据预规划步骤决定。`
+    t("planning.startAsRole", "请先作为 {{role}} Agent 开始工作，不要直接跳过到下游实现角色。", { role: role.name }),
+    t("planning.preferMcp", "请优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。"),
+    t("planning.schedulerRule", "CosS 使用任务调度器按步骤推进协作，Agent 不能直接给其他 Agent 分配任务。"),
+    t("planning.requiredTools", "必须优先尝试工具：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result。"),
+    t("planning.beforeWork", "开始工作前，请读取共享任务板和自己的角色消息池，开始当前步骤；处理过程中及时提交进度和结果。"),
+    t("planning.mcpRetry", "如果看到系统提示 `mcp__coss: Still connecting`，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试，或直接重试 mcp__coss__coss_get_context。"),
+    t("planning.toolSearchRetry", "不要因为 ToolSearch 暂时找不到 coss_get_context、coss_list_roles、coss_pool_read 等工具就停止；至少等待并重试 3 次。"),
+    t("planning.recommendedOrder", "推荐顺序：coss_get_context -> coss_get_task_board -> coss_pool_read -> coss_pool_claim -> coss_claim_step -> coss_heartbeat_step -> coss_submit_result。"),
+    t("planning.completeRole", "完成 {{role}} 阶段后，请写清楚结果、产物、风险和交付说明；是否启动 {{downstream}} 由系统根据预规划步骤决定。", { role: role.name, downstream: downstreamRoleNames })
   ].join("\n");
 }
 
@@ -2949,31 +3048,31 @@ async function chooseProjectDirectoryFromModal() {
   const input = document.getElementById("projectPath");
   const button = document.querySelector('[data-action="choose-project-directory"]');
   if (!input || !window.cossAPI?.selectProjectDirectory) {
-    setProjectModalStatus("当前运行环境无法打开文件夹选择器。");
+    setProjectModalStatus(t("project.create.status.pickerUnavailable", "当前运行环境无法打开文件夹选择器。"));
     return;
   }
 
   if (button) {
     button.disabled = true;
-    button.textContent = "选择中...";
+    button.textContent = t("project.create.status.choosing", "选择中...");
   }
 
   try {
     const result = await window.cossAPI.selectProjectDirectory(input.value.trim());
     if (result?.ok && result.path) {
       input.value = result.path;
-      setProjectModalStatus("已选择项目保存路径。", "ready");
+      setProjectModalStatus(t("project.create.status.pathSelected", "已选择项目保存路径。"), "ready");
     } else if (result?.canceled) {
-      setProjectModalStatus("已取消选择文件夹。", "muted");
+      setProjectModalStatus(t("project.create.status.chooseCanceled", "已取消选择文件夹。"), "muted");
     } else {
-      setProjectModalStatus(result?.error || "未能选择项目保存路径。");
+      setProjectModalStatus(result?.error || t("project.create.status.pathFailed", "未能选择项目保存路径。"));
     }
   } catch (error) {
     setProjectModalStatus(error.message);
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "选择文件夹";
+      button.textContent = t("project.create.chooseFolder", "选择文件夹");
     }
   }
 }
@@ -2982,12 +3081,12 @@ function createProjectFromModal() {
   const name = document.getElementById("projectName")?.value.trim();
   const projectPath = document.getElementById("projectPath")?.value.trim();
   if (!name) {
-    setProjectModalStatus("请填写项目名称。");
+    setProjectModalStatus(t("project.create.validation.nameRequired", "请填写项目名称。"));
     return;
   }
 
   if (!projectPath) {
-    setProjectModalStatus("请先指定项目保存路径。");
+    setProjectModalStatus(t("project.create.validation.pathRequired", "请先指定项目保存路径。"));
     return;
   }
 
@@ -3009,15 +3108,15 @@ function showDeleteProjectModal(projectId) {
 
   renderModal(`
     <div class="modal">
-      <h2>删除项目</h2>
-      <p>这会从 CosS 项目列表中移除「${escapeHtml(project.name)}」，并关闭该项目的所有程序窗口。项目文件夹不会被删除。</p>
+      <h2>${escapeHtml(t("project.delete.title", "删除项目"))}</h2>
+      <p>${escapeHtml(t("project.delete.desc", "这会从 CosS 项目列表中移除该项目，项目文件夹不会被删除。"))}</p>
       <div class="message-empty">
         <strong>${escapeHtml(project.name)}</strong>
         <p>${escapeHtml(project.path || "")}</p>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
-        <button class="secondary-button danger" data-action="confirm-delete-project" data-project-id="${escapeHtml(project.id)}">删除项目</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="secondary-button danger" data-action="confirm-delete-project" data-project-id="${escapeHtml(project.id)}">${escapeHtml(t("project.delete.confirm", "删除项目"))}</button>
       </div>
     </div>
   `);
@@ -3113,7 +3212,7 @@ function openTaskListWindow() {
   const activeConversation = getActiveDesktop(project);
   const win = createProgram("task-list", "product-manager", {
     desktopId,
-    title: `${activeConversation?.name || "当前对话"}任务列表`
+    title: t("taskList.title", "{{name}}任务列表", { name: activeConversation?.name || t("taskList.currentConversation", "当前对话") })
   });
   recordAppLog("task-list.opened", {
     projectId: project.id,
@@ -3333,7 +3432,7 @@ function createProjectDesktop(name = "") {
     return;
   }
 
-  const desktop = createDesktopState(name || `对话 ${getProjectDesktops(project).length + 1}`);
+  const desktop = createDesktopState(name || t("desktop.conversationIndex", "对话 {{index}}", { index: getProjectDesktops(project).length + 1 }));
   project.desktops.push(desktop);
   project.activeDesktopId = desktop.id;
   focusedWindowId = null;
@@ -3358,7 +3457,7 @@ function createFallbackTaskPlan(activeModel, error = "") {
   return {
     ok: false,
     source: "local-fallback",
-    summary: "使用本地规则生成 Kernel Step 图。",
+    summary: t("task.plan.fallback.summary", "使用本地规则生成任务步骤。"),
     error,
     neededAgentRoleIds: ["product-manager", "tech-lead"],
     firstRoundRoleIds: ["product-manager"],
@@ -3366,8 +3465,8 @@ function createFallbackTaskPlan(activeModel, error = "") {
       {
         id: "step-1",
         roleId: "product-manager",
-        title: "确认需求和验收标准",
-        description: "先把用户目标整理成可执行的需求、验收标准、协作边界和需要交接给下游 Agent 的问题。",
+        title: t("task.plan.fallback.step1.title", "确认需求和验收标准"),
+        description: t("task.plan.fallback.step1.description", "先把用户目标整理成可执行需求、边界和验收标准。"),
         dependsOn: [],
         status: "idle",
         riskLevel: "low",
@@ -3377,8 +3476,8 @@ function createFallbackTaskPlan(activeModel, error = "") {
       {
         id: "step-2",
         roleId: "tech-lead",
-        title: "制定技术方案和执行边界",
-        description: "基于需求文档制定架构、接口、依赖、资源锁和下游执行顺序。",
+        title: t("task.plan.fallback.step2.title", "制定技术方案和执行边界"),
+        description: t("task.plan.fallback.step2.description", "基于需求文档制定实现方案、影响范围和交付顺序。"),
         dependsOn: ["step-1"],
         status: "idle",
         riskLevel: "low",
@@ -3472,7 +3571,10 @@ function getRoleIdsFromTaskPlan(plan) {
 
 async function requestTaskPlan(goal, project, activeModel, projectMemory = null) {
   if (!window.cossAPI?.planTask) {
-    return { ok: false, error: "当前运行环境未暴露 Kernel Planner。" };
+    return { ok: false, error: t("task.plan.error.serviceUnavailable", "当前运行环境未提供任务规划服务。") };
+  }
+  if (!String(activeModel.baseUrl || "").trim() || !String(activeModel.modelName || "").trim()) {
+    return { ok: false, error: t("task.plan.error.modelConfigRequired", "请先在模型设置中填写用户自定义模型的 Base URL 和模型名称。") };
   }
 
   return window.cossAPI.planTask({
@@ -3504,7 +3606,7 @@ async function createTaskFromModal() {
   const submitButton = document.querySelector('[data-action="create-task"]');
   if (submitButton) {
     submitButton.disabled = true;
-    submitButton.textContent = "正在生成计划...";
+    submitButton.textContent = t("task.create.generating", "正在生成计划...");
   }
 
   const activeModel = getActiveModelConfig();
@@ -3556,8 +3658,8 @@ function buildTaskFromDraft(draft) {
   const subtasks = taskPlan.subtasks.map((subtask, index) => ({
     ...subtask,
     roleId: getRole(subtask.roleId).id,
-    title: String(subtask.title || `子任务 ${index + 1}`).trim() || `子任务 ${index + 1}`,
-    description: String(subtask.description || "请根据任务目标补充执行步骤。").trim() || "请根据任务目标补充执行步骤。",
+    title: String(subtask.title || t("task.subtask.defaultTitle", "子任务 {{index}}", { index: index + 1 })).trim() || t("task.subtask.defaultTitle", "子任务 {{index}}", { index: index + 1 }),
+    description: String(subtask.description || t("task.subtask.defaultDescription", "请根据任务目标补充执行步骤。")).trim() || t("task.subtask.defaultDescription", "请根据任务目标补充执行步骤。"),
     dependsOn: uniqueStrings(subtask.dependsOn || []),
     riskLevel: normalizeRiskLevel(subtask.riskLevel),
     order: Number(subtask.order) || index + 1,
@@ -3586,7 +3688,7 @@ function buildTaskFromDraft(draft) {
       status: llmResult?.ok ? "success" : "fallback",
       source: taskPlan.source,
       summary: taskPlan.summary,
-      error: llmResult?.ok ? "" : (llmResult?.error || "模型规划失败。"),
+      error: llmResult?.ok ? "" : (llmResult?.error || t("task.plan.error.modelFailed", "模型规划失败。")),
       plannedAt: llmResult?.plannedAt || draft.createdAt || createdAt,
       confirmedAt: createdAt,
       usage: taskPlan.usage || null,
@@ -3609,7 +3711,7 @@ async function confirmTaskPlan() {
   const taskPlan = draft.taskPlan;
   const selectedRoles = getRoleIdsFromTaskPlan(taskPlan);
   const task = buildTaskFromDraft(draft);
-  const taskDesktop = createDesktopState(task.title || "任务桌面", {
+  const taskDesktop = createDesktopState(task.title || t("desktop.taskDesktop", "任务桌面"), {
     taskId: task.id
   });
   task.desktopId = taskDesktop.id;
@@ -3879,7 +3981,7 @@ function updateSubtaskStatus(taskId, subtaskId, nextStatus) {
     const statusMessage = createMessage(
       subtask.roleId,
       statusMessageTargets,
-      `${getRole(subtask.roleId).name} 将子任务「${subtask.title}」更新为：${SUBTASK_STATUS_DEFS[status].label}。`,
+      t("subtask.statusUpdate", "{{role}} 将子任务「{{title}}」更新为：{{status}}。", { role: getRoleName(subtask.roleId), title: subtask.title, status: SUBTASK_STATUS_DEFS[status].label }),
       task.id,
       {
         source: "task-status",
@@ -4094,16 +4196,16 @@ function getAgentRelayStageForWindow(win) {
 function renderRelayStageChips(project, message) {
   const targetChips = uniqueRoleIds(message.toRoleIds || []).map((roleId) => {
     const stage = getMessageRelayStageForRole(project, message, roleId);
-    return `<span class="relay-stage-chip ${escapeHtml(getRelayStageClass(stage))}">${escapeHtml(getRole(roleId).name)} · ${escapeHtml(getRelayStageLabel(stage))}</span>`;
+    return `<span class="relay-stage-chip ${escapeHtml(getRelayStageClass(stage))}">${escapeHtml(getRoleName(roleId))} · ${escapeHtml(getRelayStageLabel(stage))}</span>`;
   });
   const sourceChip = message.fromRoleId && message.toRoleIds?.length
-    ? `<span class="relay-stage-chip delegated">${escapeHtml(getRole(message.fromRoleId).name)} · ${escapeHtml(getRelayStageLabel("delegated"))}</span>`
+    ? `<span class="relay-stage-chip delegated">${escapeHtml(getRoleName(message.fromRoleId))} · ${escapeHtml(getRelayStageLabel("delegated"))}</span>`
     : "";
   return `<div class="relay-stage-list">${sourceChip}${targetChips.join("")}</div>`;
 }
 
 function getFlowRoleLabel(roleId) {
-  return roleId === "human" ? "人工" : getRole(roleId).name;
+  return roleId === "human" ? t("role.human.label", "人工") : getRoleName(roleId);
 }
 
 function getFlowMessageFromId(message) {
@@ -4282,7 +4384,7 @@ function applyAgentEventToState(event) {
     if (status === "waiting") {
       activeDelivery.status = "waiting";
       activeDelivery.waitingAt = storedEvent.receivedAt;
-      activeDelivery.lastFeedback = "Agent 正在等待人工确认。";
+      activeDelivery.lastFeedback = t("delivery.feedback.waitingConfirm", "Agent 正在等待人工确认。");
     } else if (status === "done") {
       activeDelivery.status = "completed";
       activeDelivery.completedAt = storedEvent.receivedAt;
@@ -4301,7 +4403,7 @@ function applyAgentEventToState(event) {
     } else if (["running"].includes(status) && activeDelivery.status !== "responded") {
       activeDelivery.status = "responded";
       activeDelivery.respondedAt = storedEvent.receivedAt;
-      activeDelivery.lastFeedback = "Agent 已产生结构化事件。";
+      activeDelivery.lastFeedback = t("delivery.feedback.structuredEvent", "Agent 已产生结构化事件。");
     }
     activeDelivery.updatedAt = storedEvent.receivedAt;
     if (activeDelivery.status !== previousDeliveryStatus) {
@@ -4360,15 +4462,15 @@ function applyAgentEventToState(event) {
 
 function getStatusLabel(status) {
   return {
-    idle: "空闲",
-    thinking: "分析",
-    working: "执行",
-    talking: "协作",
-    waiting: "等待",
-    blocked: "阻塞",
-    done: "完成",
-    failed: "失败"
-  }[status] || "空闲";
+    idle: t("status.idle", "空闲"),
+    thinking: t("status.thinking", "分析"),
+    working: t("status.working", "执行"),
+    talking: t("status.talking", "协作"),
+    waiting: t("status.waiting", "等待"),
+    blocked: t("status.blocked", "阻塞"),
+    done: t("status.done", "完成"),
+    failed: t("status.failed", "失败")
+  }[status] || t("status.idle", "空闲");
 }
 
 function openContextMenu(event) {
@@ -4415,28 +4517,28 @@ function refreshFloatingMenus() {
 
 function showCreateProjectModal() {
   closeMenus();
-  const defaultPath = getProject()?.path || "D:\\CosS";
+  const defaultPath = getProject()?.path || "";
   renderModal(`
     <div class="modal">
-      <h2>新建项目</h2>
-      <p>每个项目都会启动一个独立的类桌面工作区，保存自己的程序、角色和任务状态。</p>
+      <h2>${escapeHtml(t("project.create.title", "新建项目"))}</h2>
+      <p>${escapeHtml(t("project.create.desc", "每个项目都会启动一个独立工作区，保存自己的程序、角色和任务状态。"))}</p>
       <div class="form-grid">
         <div class="field">
-          <label for="projectName">项目名称</label>
-          <input id="projectName" value="新项目" />
+          <label for="projectName">${escapeHtml(t("project.create.name.label", "项目名称"))}</label>
+          <input id="projectName" value="${escapeHtml(t("project.create.name.default", "新项目"))}" />
         </div>
         <div class="field">
-          <label for="projectPath">项目路径</label>
+          <label for="projectPath">${escapeHtml(t("project.create.path.label", "项目路径"))}</label>
           <div class="path-picker-row">
-            <input id="projectPath" value="${escapeHtml(defaultPath)}" />
-            <button class="secondary-button" data-action="choose-project-directory">选择文件夹</button>
+            <input id="projectPath" value="${escapeHtml(defaultPath)}" placeholder="${escapeHtml(t("project.create.path.placeholder", "请选择项目保存路径"))}" />
+            <button class="secondary-button" data-action="choose-project-directory">${escapeHtml(t("project.create.chooseFolder", "选择文件夹"))}</button>
           </div>
-          <div id="projectPathStatus" class="form-status muted">请选择项目保存路径，CosS 会在该路径启动对应工作区。</div>
+          <div id="projectPathStatus" class="form-status muted">${escapeHtml(t("project.create.path.placeholder", "请选择项目保存路径"))}</div>
         </div>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
-        <button class="primary-button" data-action="create-project">创建并开机</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="primary-button" data-action="create-project">${escapeHtml(t("project.create.submit", "创建并打开"))}</button>
       </div>
     </div>
   `);
@@ -4448,15 +4550,15 @@ function showCreateTaskModal() {
   pendingTaskPlanDraft = null;
   renderModal(`
     <div class="modal">
-      <h2>新建任务</h2>
-      <p>系统会先生成任务计划，确认后才会分派给角色。当前模型：${escapeHtml(activeModel.label)} / ${escapeHtml(activeModel.modelName)}。</p>
+      <h2>${escapeHtml(t("task.create.title", "新建任务"))}</h2>
+      <p>${escapeHtml(t("task.create.desc", "系统会先生成任务计划，确认后才会分派给角色。当前模型：{{model}}。", { model: `${activeModel.label} / ${getModelDisplayName(activeModel)}` }))}</p>
       <div class="field">
-        <label for="taskGoal">任务目标</label>
-        <textarea id="taskGoal">实现用户登录页面，并接入后端登录接口。</textarea>
+        <label for="taskGoal">${escapeHtml(t("task.create.goal.label", "任务目标"))}</label>
+        <textarea id="taskGoal" placeholder="${escapeHtml(t("task.create.goal.placeholder", "请输入任务目标，例如：优化首页加载速度"))}"></textarea>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
-        <button class="primary-button" data-action="create-task">生成计划</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="primary-button" data-action="create-task">${escapeHtml(t("task.create.generatePlan", "生成计划"))}</button>
       </div>
     </div>
   `);
@@ -4464,21 +4566,21 @@ function showCreateTaskModal() {
 
 function renderTaskPlanPreviewModal(draft) {
   const plan = draft.taskPlan;
-  const sourceLabel = draft.llmResult?.ok ? "Kernel Planner" : "本地降级";
+  const sourceLabel = draft.llmResult?.ok ? t("task.plan.source.ai", "智能规划") : t("task.plan.source.local", "本地规则");
   const neededAgentRoleIds = uniqueRoleIds(plan.neededAgentRoleIds || []);
   const firstRoundRoleIds = getInitialCoordinatorRoleIds(plan, { subtasks: plan.subtasks || [] });
-  const neededAgentLabel = neededAgentRoleIds.map((roleId) => getRole(roleId).name).join("、");
-  const firstRoundLabel = firstRoundRoleIds.map((roleId) => getRole(roleId).name).join("、");
+  const neededAgentLabel = neededAgentRoleIds.map((roleId) => getRoleName(roleId)).join("、");
+  const firstRoundLabel = firstRoundRoleIds.map((roleId) => getRoleName(roleId)).join("、");
   renderModal(`
     <div class="modal task-plan-modal">
-      <h2>确认 Kernel 线性工作流</h2>
-      <p>Kernel Planner 会在创建任务时生成完整线性 Step；CosS 每次只投递一个 Step，当前 Agent 完成后再启动下一步。</p>
+      <h2>${escapeHtml(t("task.plan.confirm.title", "确认任务计划"))}</h2>
+      <p>${escapeHtml(t("task.plan.confirm.desc", "系统会按步骤执行任务。每一步完成后，再自动开始下一步。"))}</p>
       <div class="task-plan-summary">
-        <strong>${escapeHtml(sourceLabel)} · ${escapeHtml(draft.activeModel.label)} / ${escapeHtml(draft.activeModel.modelName)}</strong>
-        <span>${escapeHtml(plan.summary || "模型已生成任务计划。")}</span>
-        <span>需要 Agent：${escapeHtml(neededAgentLabel || "系统自动选择")}</span>
-        <span>入口 Agent：${escapeHtml(firstRoundLabel || "系统自动选择")}</span>
-        ${draft.llmResult?.ok ? "" : `<em>${escapeHtml(draft.llmResult?.error || "模型规划失败，已使用本地规则。")}</em>`}
+        <strong>${escapeHtml(sourceLabel)} · ${escapeHtml(draft.activeModel.label)} / ${escapeHtml(getModelDisplayName(draft.activeModel))}</strong>
+        <span>${escapeHtml(plan.summary || t("task.plan.summary.default", "模型已生成任务计划。"))}</span>
+        <span>${escapeHtml(t("task.plan.neededAgents", "需要 Agent：{{agents}}", { agents: neededAgentLabel || t("task.plan.autoSelect", "系统自动选择") }))}</span>
+        <span>${escapeHtml(t("task.plan.entryAgents", "入口 Agent：{{agents}}", { agents: firstRoundLabel || t("task.plan.autoSelect", "系统自动选择") }))}</span>
+        ${draft.llmResult?.ok ? "" : `<em>${escapeHtml(draft.llmResult?.error || t("task.plan.fallbackNotice", "模型规划失败，已使用本地规则。"))}</em>`}
       </div>
       <div class="task-plan-list">
         ${plan.subtasks.map((subtask, index) => `
@@ -4487,36 +4589,36 @@ function renderTaskPlanPreviewModal(draft) {
             <div>
               <div class="task-plan-edit-grid">
                 <label>
-                  <span>角色</span>
+                  <span>${escapeHtml(t("task.plan.role.label", "角色"))}</span>
                   <select data-plan-field="roleId" data-plan-index="${index}">
                     ${ROLE_TEMPLATES.map((role) => `<option value="${escapeHtml(role.id)}" ${role.id === subtask.roleId ? "selected" : ""}>${escapeHtml(role.name)}</option>`).join("")}
                   </select>
                 </label>
                 <label>
-                  <span>子任务标题</span>
+                  <span>${escapeHtml(t("task.plan.subtaskTitle.label", "子任务标题"))}</span>
                   <input value="${escapeHtml(subtask.title)}" data-plan-field="title" data-plan-index="${index}" />
                 </label>
               </div>
               <label class="task-plan-description">
-                <span>子任务描述</span>
+                <span>${escapeHtml(t("task.plan.subtaskDescription.label", "子任务描述"))}</span>
                 <textarea data-plan-field="description" data-plan-index="${index}">${escapeHtml(subtask.description)}</textarea>
               </label>
               <div class="task-plan-dependency">
-                依赖：${subtask.dependsOn?.length ? escapeHtml(subtask.dependsOn.join("、")) : "入口 Step"}
+                ${escapeHtml(t("task.plan.dependency.label", "依赖：{{deps}}", { deps: subtask.dependsOn?.length ? subtask.dependsOn.join("、") : t("task.plan.dependency.firstStep", "第一步") }))}
               </div>
               <div class="task-plan-item-actions">
-                <button class="secondary-button compact" data-action="delete-task-plan-subtask" data-plan-index="${index}" ${plan.subtasks.length <= 1 ? "disabled" : ""}>删除子任务</button>
+                <button class="secondary-button compact" data-action="delete-task-plan-subtask" data-plan-index="${index}" ${plan.subtasks.length <= 1 ? "disabled" : ""}>${escapeHtml(t("task.plan.deleteSubtask", "删除子任务"))}</button>
               </div>
             </div>
           </div>
         `).join("")}
       </div>
       <div class="task-plan-edit-actions">
-        <button class="secondary-button" data-action="add-task-plan-subtask">新增子任务</button>
+        <button class="secondary-button" data-action="add-task-plan-subtask">${escapeHtml(t("task.plan.addSubtask", "新增子任务"))}</button>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="show-create-task">返回修改</button>
-        <button class="primary-button" data-action="confirm-task-plan">确认并分派</button>
+        <button class="secondary-button" data-action="show-create-task">${escapeHtml(t("task.plan.back", "返回修改"))}</button>
+        <button class="primary-button" data-action="confirm-task-plan">${escapeHtml(t("task.plan.confirmDispatch", "确认并分派"))}</button>
       </div>
     </div>
   `);
@@ -4547,8 +4649,8 @@ function addPendingTaskPlanSubtask() {
   const roleId = ROLE_TEMPLATES.find((role) => role.id !== "product-manager")?.id || "frontend-engineer";
   pendingTaskPlanDraft.taskPlan.subtasks.push({
     roleId,
-    title: "新子任务",
-    description: "请补充该子任务的执行说明。"
+    title: t("taskList.untitledStep", "待命名步骤"),
+    description: t("taskList.stepDesc", "请填写该步骤的执行说明。")
   });
   recordAppLog("task.plan.subtask.added", {
     projectId: pendingTaskPlanDraft.projectId,
@@ -4573,7 +4675,7 @@ function deletePendingTaskPlanSubtask(index) {
 }
 
 function getMessageTaskLabel(taskId) {
-  return taskId ? `任务ID：${taskId}` : "私聊";
+  return taskId ? t("taskList.taskId", "任务ID：{{taskId}}", { taskId }) : t("taskList.noTask", "未关联任务");
 }
 
 function getCurrentTaskFilterId(project = getProject()) {
@@ -4813,9 +4915,9 @@ function isAgentAutoWorkflowActive() {
 
 function getAgentAutoWorkflowStatusLabel() {
   if (!state.settings.agentAutoWorkflowEnabled) {
-    return "未开启";
+    return t("kernel.autoWorkflow.off", "未开启");
   }
-  return state.settings.agentAutoWorkflowPaused ? "已中止" : "运行中";
+  return state.settings.agentAutoWorkflowPaused ? t("kernel.autoWorkflow.paused", "已中止") : t("kernel.autoWorkflow.running", "运行中");
 }
 
 function ensureAgentAutoWorkflowRunning(reason = "auto-start") {
@@ -4891,7 +4993,7 @@ async function ensureAutoWorkflowAgentTargets(message) {
       terminalMode: "agent",
       agentProvider: state.settings.agentProvider,
       desktopId,
-      title: `${getRole(roleId).name} Agent(${getAgentProviderLabel(state.settings.agentProvider)})`
+      title: `${getRoleName(roleId)} Agent(${getAgentProviderLabel(state.settings.agentProvider)})`
     });
     if (win) {
       createdWindowIds.push(win.id);
@@ -4928,7 +5030,7 @@ function stopAgentAutoWorkflow(reason = "user-stop") {
         delivery.status = "canceled";
         delivery.canceledAt = now;
         delivery.updatedAt = now;
-        delivery.lastFeedback = "用户已暂停 Kernel 自动调度。";
+        delivery.lastFeedback = t("kernel.autoWorkflow.userPaused", "用户已暂停 Kernel 自动调度。");
         canceledCount += 1;
       }
     });
@@ -5380,37 +5482,37 @@ function buildTerminalInstructionPayload(message, targetWindow) {
   const projectMemoryLines = taskContext.projectMemorySummary
     ? ["Project memory:", taskContext.projectMemorySummary, ""]
     : [];
-  const taskLabel = message.taskId ? getMessageTaskLabel(message.taskId) : "私聊";
+  const taskLabel = message.taskId ? getMessageTaskLabel(message.taskId) : t("taskList.privateChat", "私聊");
   const agentProvider = normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider);
   const provider = getAgentProviderLabel(agentProvider);
   const permissionPolicy = getAgentPermissionPolicy();
   const poolPath = message.agentPoolPaths?.[targetWindow.roleId] || getAgentPoolMessagePath(targetWindow.roleId, message.id);
   const mcpRetryLines = agentProvider === "codebuddy"
     ? [
-        "CodeBuddy Code 后端如果显示 `mcp__coss: Still connecting` 或 `/mcp` 中 coss 为 Disconnected，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试；不要搜索或调用当前后端不存在的等待工具。",
-        "如果 coss 工具仍未暴露，请继续完成当前角色工作并输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"MCP disconnected; 当前进度说明\",\"toRoleIds\":[]} 作为降级留痕。"
+        t("delivery.prompt.mcpRetryCodebuddy1", "CodeBuddy Code 后端如果显示 `mcp__coss: Still connecting` 或 `/mcp` 中 coss 为 Disconnected，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试；不要搜索或调用当前后端不存在的等待工具。"),
+        t("delivery.prompt.mcpRetryCodebuddy2", "如果 coss 工具仍未暴露，请继续完成当前角色工作并输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"MCP disconnected; 当前进度说明\",\"toRoleIds\":[]} 作为降级留痕。")
       ]
     : [
-        "如果系统提示 `mcp__coss: Still connecting`，请等待几秒后重新搜索或调用 coss 工具；只有当前后端明确提供等待工具时才调用该工具。",
-        "不要因为 ToolSearch 暂时没有找到 coss 工具就停止；请至少等待并重试 3 次。"
+        t("delivery.prompt.mcpRetryOther1", "如果系统提示 `mcp__coss: Still connecting`，请等待几秒后重新搜索或调用 coss 工具；只有当前后端明确提供等待工具时才调用该工具。"),
+        t("delivery.prompt.mcpRetryOther2", "不要因为 ToolSearch 暂时没有找到 coss 工具就停止；请至少等待并重试 3 次。")
       ];
   const autoWorkflowLines = message.autoWorkflow || message.source === "agent-event"
     ? [
-        "这是 CosS Kernel 分配的上游任务上下文。",
-        "请先阅读消息中提到的交接文档、产物路径或注意事项，再继续你的角色工作。",
-        "完成自己的部分后，请通过 coss_submit_result({ status: \"done\" }) 提交结果，由 Kernel 启动下一步。"
+        t("delivery.prompt.autoWorkflow1", "这是 CosS Kernel 分配的上游任务上下文。"),
+        t("delivery.prompt.autoWorkflow2", "请先阅读消息中提到的交接文档、产物路径或注意事项，再继续你的角色工作。"),
+        t("delivery.prompt.autoWorkflow3", "完成自己的部分后，请通过 coss_submit_result({ status: \"done\" }) 提交结果，由 Kernel 启动下一步。")
       ]
     : [];
   return stripTerminalControlChars([
-    "请处理来自 CosS 协作时间线的指令。",
-    `目标角色：${toRole.name}`,
-    `发送角色：${fromRole.name}`,
-    `Agent 后端：${provider}`,
-    `Agent 权限模式：${permissionPolicy.label}`,
-    `频道：${taskLabel}`,
-    `消息ID：${message.id}`,
-    `角色消息池：${poolPath}`,
-    `消息来源：${message.source || "manual"}`,
+    t("delivery.prompt.title", "请处理来自 CosS 协作时间线的指令。"),
+    t("delivery.prompt.targetRole", "目标角色：{{name}}", { name: toRole.name }),
+    t("delivery.prompt.fromRole", "发送角色：{{name}}", { name: fromRole.name }),
+    t("delivery.prompt.agentProvider", "Agent 后端：{{provider}}", { provider }),
+    t("delivery.prompt.permissionMode", "Agent 权限模式：{{label}}", { label: permissionPolicy.label }),
+    t("delivery.prompt.channel", "频道：{{label}}", { label: taskLabel }),
+    t("delivery.prompt.messageId", "消息ID：{{id}}", { id: message.id }),
+    t("delivery.prompt.poolPath", "角色消息池：{{path}}", { path: poolPath }),
+    t("delivery.prompt.messageSource", "消息来源：{{source}}", { source: message.source || "manual" }),
     "",
     permissionPolicy.instruction,
     "",
@@ -5427,13 +5529,13 @@ function buildTerminalInstructionPayload(message, targetWindow) {
     ...projectMemoryLines,
     message.content,
     "",
-    "必须优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。",
-    "请按需调用：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_release_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval。",
+    t("delivery.prompt.preferMcp", "必须优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。"),
+    t("delivery.prompt.requiredTools", "请按需调用：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_release_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval。"),
     ...mcpRetryLines,
-    "推荐开始顺序：先 coss_get_context，再 coss_get_task_board，再 coss_pool_read，处理本条消息前调用 coss_pool_claim，开始执行子任务时调用 coss_claim_step。",
-    "完成自己的 Step 时优先调用 coss_submit_result({ status: \"done\" })；不要直接发给其他角色，也不要创建未在任务板中的角色。",
-    "如果当前 Agent 后端暂时无法使用 MCP，再输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"你的结构化进度或无法继续的原因\",\"toRoleIds\":[]}。",
-    "Agent 只能使用三种状态：COSS_AGENT_STATUS:running 或 COSS_AGENT_STATUS:done；默认未开始就是 idle。"
+    t("delivery.prompt.recommendedOrder", "推荐开始顺序：先 coss_get_context，再 coss_get_task_board，再 coss_pool_read，处理本条消息前调用 coss_pool_claim，开始执行子任务时调用 coss_claim_step。"),
+    t("delivery.prompt.submitResult", "完成自己的 Step 时优先调用 coss_submit_result({ status: \"done\" })；不要直接发给其他角色，也不要创建未在任务板中的角色。"),
+    t("delivery.prompt.fallbackEvent", "如果当前 Agent 后端暂时无法使用 MCP，再输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"你的结构化进度或无法继续的原因\",\"toRoleIds\":[]}。"),
+    t("delivery.prompt.agentStates", "Agent 只能使用三种状态：COSS_AGENT_STATUS:running 或 COSS_AGENT_STATUS:done；默认未开始就是 idle。")
   ].join("\n"));
 }
 
@@ -5474,9 +5576,9 @@ async function writeAgentDeliveryInstructionFile(project, delivery, content) {
     projectPath: project.path,
     filePath,
     content: [
-      "# CosS Agent 投递指令",
+      t("delivery.file.title", "# CosS Agent 投递指令"),
       "",
-      "请把本文档作为本次投递的唯一新增任务上下文。不要把终端输入框中的提示、示例或残留文字当成用户指令。",
+      t("delivery.file.intro", "请把本文档作为本次投递的唯一新增任务上下文。不要把终端输入框中的提示、示例或残留文字当成用户指令。"),
       "",
       content,
       ""
@@ -5669,7 +5771,7 @@ function markDeliveryIfStuck(deliveryId) {
   delivery.stuckCheckAt = now;
   delivery.stuckDetectedAt = now;
   delivery.updatedAt = now;
-  delivery.lastFeedback = "已提交但尚未检测到 Agent 响应，可重试投递或查看终端。";
+  delivery.lastFeedback = t("delivery.feedback.submittedNoResponse", "已提交但尚未检测到 Agent 响应，可重试投递或查看终端。");
   recordAppLog("agent.delivery.stuck.detected", {
     projectId: project.id,
     deliveryId: delivery.id,
@@ -5697,21 +5799,21 @@ function isAgentApprovalPromptOutput(excerpt) {
 
 function getDeliveryStatusLabel(status) {
   return {
-    pending: "待调度",
-    sent: "已提交",
-    submitted: "已提交",
-    responded: "Agent 已响应",
-    waiting: "等待人工确认",
-    failed: "调度失败",
-    canceled: "已取消"
+    pending: t("delivery.status.pending", "待调度"),
+    sent: t("delivery.status.sent", "已提交"),
+    submitted: t("delivery.status.submitted", "已提交"),
+    responded: t("delivery.status.responded", "Agent 已响应"),
+    waiting: t("delivery.status.waiting", "等待人工确认"),
+    failed: t("delivery.status.failed", "调度失败"),
+    canceled: t("delivery.status.canceled", "已取消")
   }[normalizeDeliveryStatus(status)] || status;
 }
 
 function getDeliveryMethodLabel(method) {
   return {
     "bracketed-paste": "Bracketed Paste",
-    "delivery-file-interactive": "任务文件 + 交互提交"
-  }[method] || method || "未提交";
+    "delivery-file-interactive": t("delivery.method.delivery-file-interactive", "任务文件 + 交互提交")
+  }[method] || method || t("delivery.status.notSent", "未提交");
 }
 
 function queueAgentDeliveriesForMessage(messageId, options = {}) {
@@ -5915,8 +6017,8 @@ async function confirmAgentDelivery(deliveryId, options = {}) {
   delivery.stuckCheckAt = "";
   delivery.stuckDetectedAt = "";
   delivery.lastFeedback = isCodeBuddyAgentWindow(targetWindow)
-    ? "指令文件已生成并提交给 CodeBuddy，等待 Agent 输出。"
-    : "指令已写入终端，等待 Agent 输出。";
+    ? t("delivery.feedback.fileSubmitted", "指令文件已生成并提交给 CodeBuddy，等待 Agent 输出。")
+    : t("delivery.feedback.terminalSubmitted", "指令已写入终端，等待 Agent 输出。");
   delivery.lastError = "";
   message.injectedWindowIds = uniqueStrings([...(message.injectedWindowIds || []), targetWindow.id]);
   message.injectedAt = now;
@@ -5934,7 +6036,7 @@ async function confirmAgentDelivery(deliveryId, options = {}) {
       windowId: targetWindow.id,
       roleId: targetWindow.roleId,
       taskId: message.taskId || "",
-      excerpt: "CosS 已调度任务，等待终端输出。",
+      excerpt: t("delivery.feedback.dispatched", "CosS 已调度任务，等待终端输出。"),
       createdAt: now,
       updatedAt: now
     }));
@@ -6062,7 +6164,7 @@ function recordTerminalOutputReference(windowId, data) {
       clearTimeout(deliveryStuckTimers.get(delivery.id));
       deliveryStuckTimers.delete(delivery.id);
     }
-    delivery.lastFeedback = "Agent 正在等待人工确认。";
+    delivery.lastFeedback = t("delivery.feedback.waitingConfirm", "Agent 正在等待人工确认。");
   } else if (!isStartupOutputForExistingDelivery && !isDeliverySystemFeedback(excerpt) && !["responded", "waiting"].includes(delivery.status)) {
     delivery.status = "responded";
     delivery.respondedAt = now;
@@ -6071,11 +6173,11 @@ function recordTerminalOutputReference(windowId, data) {
       clearTimeout(deliveryStuckTimers.get(delivery.id));
       deliveryStuckTimers.delete(delivery.id);
     }
-    delivery.lastFeedback = "Agent 已产生终端输出。";
+    delivery.lastFeedback = t("delivery.feedback.terminalOutput", "Agent 已产生终端输出。");
   } else if (isDeliveryInstructionEcho(excerpt)) {
     delivery.lastFeedback = "CodeBuddy delivery instruction entered; waiting for Agent output.";
   } else if (isPasteOnlyTerminalFeedback(excerpt)) {
-    delivery.lastFeedback = "终端已接收粘贴文本，尚未检测到 Agent 输出。";
+    delivery.lastFeedback = t("delivery.feedback.pastedNoOutput", "终端已接收粘贴文本，尚未检测到 Agent 输出。");
   }
   delivery.updatedAt = now;
 
@@ -6130,8 +6232,8 @@ function getProjectTimelineEvents(project) {
       if (item.kind === "message") {
         const message = item.message;
         return [
-          getRole(message.fromRoleId).name,
-          ...message.toRoleIds.map((roleId) => getRole(roleId).name),
+          getRoleName(message.fromRoleId),
+          ...message.toRoleIds.map((roleId) => getRoleName(roleId)),
           message.content,
           message.source,
           getMessageTaskLabel(message.taskId)
@@ -6139,7 +6241,7 @@ function getProjectTimelineEvents(project) {
       }
       const event = item.event;
       return [
-        getRole(event.roleId).name,
+        getRoleName(event.roleId),
         event.provider,
         event.status,
         event.type,
@@ -6165,16 +6267,16 @@ function getTimelineItemLabel(item) {
     const event = item.event;
     const toolSuffix = event.toolName ? ` · ${event.toolName}` : "";
     return {
-      title: `Agent · ${getRole(event.roleId).name}`,
+      title: `Agent · ${getRoleName(event.roleId)}`,
       subtitle: `${event.status || event.type || "event"}${toolSuffix}`,
-      summary: event.message || event.sessionId || "Agent 输出了状态事件。"
+      summary: event.message || event.sessionId || t("delivery.event.default", "Agent 输出了状态事件。")
     };
   }
 
   const message = item.message;
   return {
-    title: getRole(message.fromRoleId).name,
-    subtitle: message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"),
+    title: getRoleName(message.fromRoleId),
+    subtitle: message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、"),
     summary: message.content
   };
 }
@@ -6196,8 +6298,8 @@ function renderTimelineNode(item, isSelected, index, total) {
   const timeLabel = formatDateTime(item.time);
   const branchTargets = item.kind === "message" && item.message.toRoleIds.length > 1
     ? `
-      <div class="message-branch-targets" aria-label="分叉接收角色">
-        ${item.message.toRoleIds.map((roleId) => `<span>${escapeHtml(getRole(roleId).name)}</span>`).join("")}
+      <div class="message-branch-targets" aria-label="${escapeHtml(t("nav.branchTargets", "分叉接收角色"))}">
+        ${item.message.toRoleIds.map((roleId) => `<span>${escapeHtml(getRoleName(roleId))}</span>`).join("")}
       </div>
     `
     : "";
@@ -6223,38 +6325,38 @@ function renderTimelineNode(item, isSelected, index, total) {
 
 function renderTimelineDetail(project, item) {
   if (!item) {
-    return `<div class="message-empty">请选择时间轴节点查看详情。</div>`;
+    return `<div class="message-empty">${escapeHtml(t("nav.selectTimelineNode", "请选择时间轴节点查看详情。"))}</div>`;
   }
 
   if (item.kind === "agent-event") {
     const event = item.event;
     const toNames = event.toRoleIds.length > 0
-      ? ` → ${event.toRoleIds.map((roleId) => getRole(roleId).name).join("、")}`
+      ? ` → ${event.toRoleIds.map((roleId) => getRoleName(roleId)).join("、")}`
       : "";
     return `
       <div class="message-row timeline-row agent-timeline-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}" data-agent-event-id="${escapeHtml(event.id)}">
         <div class="message-row-head">
-          <strong>Agent 事件 · ${escapeHtml(getRole(event.roleId).name)}${escapeHtml(toNames)}</strong>
+          <strong>${escapeHtml(t("timeline.agentEvent", "Agent 事件"))} · ${escapeHtml(getRoleName(event.roleId))}${escapeHtml(toNames)}</strong>
           <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
         </div>
         <div class="message-meta">
-          <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : "会话事件")}</span>
+          <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : t("taskList.sessionEvent", "会话事件"))}</span>
           <span>${escapeHtml(event.status || "event")}</span>
           <span>${escapeHtml(event.structured ? "structured-event" : event.type || "status")}</span>
           ${event.toolName ? `<span>${escapeHtml(event.toolName)}</span>` : ""}
         </div>
-        <p>${escapeHtml(event.message || event.sessionId || "Agent 输出了状态事件。")}</p>
+        <p>${escapeHtml(event.message || event.sessionId || t("delivery.event.default", "Agent 输出了状态事件。"))}</p>
       </div>
     `;
   }
 
   const message = item.message;
   const fromRole = getRole(message.fromRoleId);
-  const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
-  const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
+  const toNames = message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、");
+  const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : t("taskList.privateChat", "私聊");
   const refs = getOutputRefsForMessage(project, message.id);
   const injectedLabel = message.injectedWindowIds?.length
-    ? `<span>已注入 ${message.injectedWindowIds.length} 个终端</span>`
+    ? `<span>${escapeHtml(t("taskList.injected", "已注入 {{count}} 个终端", { count: message.injectedWindowIds.length }))}</span>`
     : "";
 
   return `
@@ -6267,12 +6369,12 @@ function renderTimelineDetail(project, item) {
         <span>${escapeHtml(channelLabel)}</span>
         <span>${escapeHtml(message.source || "manual")}</span>
         ${injectedLabel}
-        ${refs.length ? `<span>${refs.length} 条输出引用</span>` : ""}
+        ${refs.length ? `<span>${escapeHtml(t("taskList.outputRefs", "{{count}} 条输出引用", { count: refs.length }))}</span>` : ""}
       </div>
       ${renderRelayStageChips(project, message)}
       <p>${escapeHtml(message.content)}</p>
       <div class="message-row-actions">
-        ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">查看输出</button>` : ""}
+        ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">${escapeHtml(t("taskList.viewOutput", "查看输出"))}</button>` : ""}
       </div>
     </div>
   `;
@@ -6299,7 +6401,7 @@ function renderMessageRows(project) {
     selectedTimelineItemId = "";
     return `
       ${renderAgentFlowGraph(project)}
-      <div class="message-empty">暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。</div>
+      <div class="message-empty">${escapeHtml(t("nav.noEvents", "暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。"))}</div>
     `;
   }
 
@@ -6314,7 +6416,7 @@ function renderMessageRows(project) {
   return `
     ${renderAgentFlowGraph(project)}
     <div class="message-timeline-shell">
-      <div class="message-timeline-scroll" aria-label="协作横向时间轴">
+      <div class="message-timeline-scroll" aria-label="${escapeHtml(t("nav.timelineAria", "协作横向时间轴"))}">
         <div class="message-timeline-track" style="--timeline-count:${chronological.length};">
           ${chronological.map((item, index) => renderTimelineNode(item, getTimelineItemKey(item) === selectedTimelineItemId, index, chronological.length)).join("")}
         </div>
@@ -6352,8 +6454,8 @@ function getAgentFlowGraph(project) {
         return true;
       }
       return [
-        getRole(message.fromRoleId).name,
-        ...(message.toRoleIds || []).map((roleId) => getRole(roleId).name),
+        getRoleName(message.fromRoleId),
+        ...(message.toRoleIds || []).map((roleId) => getRoleName(roleId)),
         message.content,
         message.source
       ].join(" ").toLowerCase().includes(query);
@@ -6428,20 +6530,20 @@ function renderAgentFlowSelection(project, graph) {
     : getVisibleFlowMessages(graph).filter((message) => messageMatchesFlowRole(message, selectedRole.id));
   const title = selectedEdge
     ? `${getFlowRoleLabel(selectedEdge.fromId)} -> ${getFlowRoleLabel(selectedEdge.toId)}`
-    : `${selectedRole.label} 相关消息`;
+    : t("agent.flow.relatedMessages", "{{role}} 相关消息", { role: selectedRole.label });
   const hint = selectedEdge
-    ? "点击边后显示该角色流向上的消息列表。"
-    : "点击节点后，时间线已筛选为该角色相关消息。";
+    ? t("agent.flow.hint.edge", "点击边后显示该角色流向上的消息列表。")
+    : t("agent.flow.hint.node", "点击节点后，时间线已筛选为该角色相关消息。");
   const messageRows = messages.length
     ? messages.slice(-8).reverse().map((message) => `
       <button class="agent-flow-message-item" data-action="select-message-timeline-node" data-timeline-item-id="message:${escapeHtml(message.id)}">
-        <strong>${escapeHtml(getFlowRoleLabel(getFlowMessageFromId(message)))} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</strong>
+        <strong>${escapeHtml(getFlowRoleLabel(getFlowMessageFromId(message)))} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、"))}</strong>
         <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
         <p>${escapeHtml(message.content)}</p>
-        <small>${escapeHtml(message.taskId ? getMessageTaskLabel(message.taskId) : "私聊")} · ${escapeHtml(message.source || "manual")}</small>
+        <small>${escapeHtml(message.taskId ? getMessageTaskLabel(message.taskId) : t("taskList.privateChat", "私聊"))} · ${escapeHtml(message.source || "manual")}</small>
       </button>
     `).join("")
-    : `<div class="agent-flow-empty">当前筛选下暂无消息。</div>`;
+    : `<div class="agent-flow-empty">${escapeHtml(t("agent.flow.empty.noMessages", "当前筛选下暂无消息。"))}</div>`;
 
   return `
     <div class="agent-flow-selection">
@@ -6450,7 +6552,7 @@ function renderAgentFlowSelection(project, graph) {
           <strong>${escapeHtml(title)}</strong>
           <span>${escapeHtml(hint)}</span>
         </div>
-        <button class="secondary-button compact" data-action="clear-agent-flow-selection">清除筛选</button>
+        <button class="secondary-button compact" data-action="clear-agent-flow-selection">${escapeHtml(t("agent.flow.clearFilter", "清除筛选"))}</button>
       </div>
       <div class="agent-flow-message-list">${messageRows}</div>
     </div>
@@ -6895,8 +6997,8 @@ function renderAgentFlowGraph(project) {
     return `
       <div class="agent-flow-panel agent-blueprint-panel">
         <div class="agent-flow-header">
-          <strong>角色消息池蓝图</strong>
-          <span>等待首条角色消息写入消息池</span>
+          <strong>${escapeHtml(t("agent.flow.blueprint.title", "角色消息池蓝图"))}</strong>
+          <span>${escapeHtml(t("agent.flow.blueprint.waiting", "等待首条角色消息写入消息池"))}</span>
         </div>
       </div>
     `;
@@ -6963,7 +7065,7 @@ function renderAgentFlowGraph(project) {
         <span class="agent-blueprint-port in" aria-hidden="true"></span>
         <span class="agent-blueprint-port out" aria-hidden="true"></span>
         <strong>${escapeHtml(node.label)}</strong>
-        <small><span>发 ${node.sent}</span><span>收 ${node.received}</span></small>
+        <small><span>${escapeHtml(t("agent.flow.sent", "发 {{count}}", { count: node.sent }))}</span><span>${escapeHtml(t("agent.flow.received", "收 {{count}}", { count: node.received }))}</span></small>
       </button>
     `;
   }).join("");
@@ -6975,14 +7077,14 @@ function renderAgentFlowGraph(project) {
         ${escapeHtml(getFlowRoleLabel(edge.fromId))} → ${escapeHtml(getFlowRoleLabel(edge.toId))}<span>${edge.count}</span>
       </button>
     `).join("")
-    : `<div class="agent-flow-empty">已有角色节点，暂无角色之间的交接消息。</div>`;
+    : `<div class="agent-flow-empty">${escapeHtml(t("agent.flow.empty.noNodes", "已有角色节点，暂无角色之间的交接消息。"))}</div>`;
   return `
     <div class="agent-flow-panel agent-blueprint-panel">
       <div class="agent-flow-header">
-        <strong>角色消息池蓝图</strong>
-        <span>${graph.nodes.length} 个节点 · ${graph.edges.length} 条连接${hasSelection ? " · 已筛选" : ""}</span>
-        <button class="secondary-button compact" data-action="auto-layout-agent-blueprint">自动整理</button>
-        ${hasSelection ? `<button class="secondary-button compact" data-action="clear-agent-flow-selection">清除</button>` : ""}
+        <strong>${escapeHtml(t("agent.flow.blueprint.title", "角色消息池蓝图"))}</strong>
+        <span>${escapeHtml(t("agent.flow.blueprint.summary", "{{nodes}} 个节点 · {{edges}} 条连接{{filtered}}", { nodes: graph.nodes.length, edges: graph.edges.length, filtered: hasSelection ? t("agent.flow.blueprint.filtered", " · 已筛选") : "" }))}</span>
+        <button class="secondary-button compact" data-action="auto-layout-agent-blueprint">${escapeHtml(t("agent.flow.autoLayout", "自动整理"))}</button>
+        ${hasSelection ? `<button class="secondary-button compact" data-action="clear-agent-flow-selection">${escapeHtml(t("agent.flow.clear", "清除"))}</button>` : ""}
       </div>
       <div class="agent-blueprint-wrap">
         <div class="agent-blueprint-canvas" data-project-id="${escapeHtml(project.id)}" style="width:${blueprintWidth}px; height:${blueprintHeight}px;">
@@ -7124,10 +7226,10 @@ function showMessageCenterModal(defaults = {}) {
   if (!project) {
     renderModal(`
       <div class="modal message-center-modal">
-        <h2>消息中心</h2>
-        <p>请先创建或选择一个项目。</p>
+        <h2>${escapeHtml(t("nav.messageCenter", "消息中心"))}</h2>
+        <p>${escapeHtml(t("nav.noProject.title", "请先创建或选择一个项目。"))}</p>
         <div class="modal-actions">
-          <button class="primary-button" data-action="close-modal">确定</button>
+          <button class="primary-button" data-action="close-modal">${escapeHtml(t("common.ok", "确定"))}</button>
         </div>
       </div>
     `);
@@ -7150,20 +7252,20 @@ function showMessageCenterModal(defaults = {}) {
 
   renderModal(`
     <div class="modal message-center-modal">
-      <h2>v0.10 Kernel 时间线</h2>
-      <p>这里只展示中央调度器、Agent 结构化结果、资源锁、审批和任务板事件。</p>
+      <h2>${escapeHtml(t("nav.timeline", "任务协作时间线"))}</h2>
+      <p>${escapeHtml(t("nav.timeline.desc", "这里展示任务进展、协作者状态、审批记录和系统事件。"))}</p>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">关闭</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button>
       </div>
       <div class="message-filterbar">
         <label>
-          <span>搜索</span>
-          <input id="messageTimelineSearch" value="${escapeHtml(messageTimelineFilters.query || "")}" placeholder="搜索角色、消息、状态">
+          <span>${escapeHtml(t("nav.search", "搜索"))}</span>
+          <input id="messageTimelineSearch" value="${escapeHtml(messageTimelineFilters.query || "")}" placeholder="${escapeHtml(t("nav.search.placeholder", "搜索角色、消息、状态"))}">
         </label>
         <label>
-          <span>任务筛选</span>
+          <span>${escapeHtml(t("nav.taskFilter", "任务筛选"))}</span>
           <select id="messageTimelineTaskFilter">
-            <option value="">全部</option>
+            <option value="">${escapeHtml(t("nav.taskFilter.all", "全部"))}</option>
             ${filterTaskOptions}
           </select>
         </label>
@@ -7190,26 +7292,26 @@ function showTerminalOutputRefsModal(messageId) {
 
   renderModal(`
     <div class="modal terminal-output-ref-modal">
-      <h2>终端输出引用</h2>
-      <p>这些输出来自 Kernel 调度的 Agent 终端，点击对应窗口可回到角色程序继续查看。</p>
+      <h2>${escapeHtml(t("nav.terminalOutputRefs", "终端输出引用"))}</h2>
+      <p>${escapeHtml(t("nav.terminalOutputRefs.desc", "这些输出来自 Kernel 调度的 Agent 终端，点击对应窗口可回到角色程序继续查看。"))}</p>
       <div class="task-plan-summary">
-        <strong>${escapeHtml(getRole(message.fromRoleId).name)} → ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</strong>
+        <strong>${escapeHtml(getRoleName(message.fromRoleId))} → ${escapeHtml(message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、"))}</strong>
         <span>${escapeHtml(message.content)}</span>
       </div>
       <div class="terminal-ref-list">
         ${refs.length ? refs.map((ref) => `
           <div class="terminal-ref-row">
             <div class="message-row-head">
-              <strong>${escapeHtml(getRole(ref.roleId).name)} · ${escapeHtml(formatDateTime(ref.updatedAt))}</strong>
-              <button class="secondary-button compact" data-action="focus-terminal-ref-window" data-window-id="${escapeHtml(ref.windowId)}">定位窗口</button>
+              <strong>${escapeHtml(getRoleName(ref.roleId))} · ${escapeHtml(formatDateTime(ref.updatedAt))}</strong>
+              <button class="secondary-button compact" data-action="focus-terminal-ref-window" data-window-id="${escapeHtml(ref.windowId)}">${escapeHtml(t("nav.locateWindow", "定位窗口"))}</button>
             </div>
             <pre>${escapeHtml(ref.excerpt)}</pre>
           </div>
-        `).join("") : `<div class="message-empty">暂无终端输出引用。</div>`}
+        `).join("") : `<div class="message-empty">${escapeHtml(t("nav.terminalOutputRefs.empty", "暂无终端输出引用。"))}</div>`}
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="show-message-center">返回时间线</button>
-        <button class="primary-button" data-action="close-modal">关闭</button>
+        <button class="secondary-button" data-action="show-message-center">${escapeHtml(t("nav.backToTimeline", "返回时间线"))}</button>
+        <button class="primary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button>
       </div>
     </div>
   `);
@@ -7225,22 +7327,22 @@ async function showAboutModal() {
   }
 
   renderModal(`
-    <div class="modal about-modal" role="dialog" aria-label="关于 CosS">
+    <div class="modal about-modal" role="dialog" aria-label="${escapeHtml(t("about.title", "关于 CosS"))}">
       <div class="about-titlebar">
         <div class="about-titlebar-title">
           <img class="about-titlebar-icon" src="./Logo.png" alt="" aria-hidden="true" draggable="false" />
-          <span>关于 CosS</span>
+          <span>${escapeHtml(t("about.title", "关于 CosS"))}</span>
         </div>
-        <button class="about-close-button" type="button" data-action="close-modal" aria-label="关闭">×</button>
+        <button class="about-close-button" type="button" data-action="close-modal" aria-label="${escapeHtml(t("common.close", "关闭"))}">×</button>
       </div>
       <div class="about-main">
         <img class="about-main-logo" src="./Logo.png" alt="CosS" draggable="false" />
         <h2>CosS</h2>
-        <p class="about-version">版本 ${escapeHtml(appInfo.version || APP_VERSION.replace(/^v/, ""))} · 发布于 2026年7月1日</p>
+        <p class="about-version">${escapeHtml(t("about.version", "版本 {{version}}", { version: appInfo.version || APP_VERSION.replace(/^v/, "") }))}</p>
         <p class="about-copyright">© CosS</p>
       </div>
       <div class="about-footer">
-        <button class="about-ok-button" type="button" data-action="close-modal">确定</button>
+        <button class="about-ok-button" type="button" data-action="close-modal">${escapeHtml(t("common.ok", "确定"))}</button>
       </div>
     </div>
   `);
@@ -7269,18 +7371,18 @@ function showRolePicker(type) {
       if (type !== "terminal") {
         return `
           <button class="role-card" data-action="select-role" data-type="${type}" data-role-id="${role.id}">
-            <strong>${role.name}</strong>
-            <span>${role.description}</span>
-            <div class="role-meta">${role.category} · ${role.claude ? "可使用 Claude Code" : "无需终端"}</div>
+            <strong>${escapeHtml(trRoleName(role))}</strong>
+            <span>${escapeHtml(trRoleDescription(role))}</span>
+            <div class="role-meta">${escapeHtml(trRoleCategory(role))} · ${role.claude ? escapeHtml(t("role.meta.claudeEnabled", "可使用 Claude Code")) : escapeHtml(t("role.meta.noTerminal", "无需终端"))}</div>
           </button>
         `;
       }
 
       return `
         <div class="role-card terminal-role-card">
-          <strong>${role.name}</strong>
-          <span>${role.description}</span>
-          <div class="role-meta">${role.category} · Agent 当前使用 ${getAgentProviderLabel(state.settings.agentProvider)}</div>
+          <strong>${escapeHtml(trRoleName(role))}</strong>
+          <span>${escapeHtml(trRoleDescription(role))}</span>
+          <div class="role-meta">${escapeHtml(trRoleCategory(role))} · ${escapeHtml(t("role.meta.agentProvider", "Agent 当前使用 {{provider}}", { provider: getAgentProviderLabel(state.settings.agentProvider) }))}</div>
           <div class="role-card-actions">
             <button class="secondary-button" data-action="select-role" data-type="terminal" data-role-id="${role.id}" data-terminal-mode="shell">
               PowerShell
@@ -7296,11 +7398,11 @@ function showRolePicker(type) {
 
   renderModal(`
     <div class="modal">
-      <h2>选择${getProgramLabel(type)}角色</h2>
-      <p>${type === "terminal" ? `终端会以角色身份运行，可选择普通 PowerShell 或 Agent。Agent 当前使用 ${getAgentProviderLabel(state.settings.agentProvider)}，可在系统设置中切换。` : "程序会以角色身份运行，后续任务分派和协作状态都绑定到这个角色。"}</p>
+      <h2>${escapeHtml(t("programPicker.title", "选择{{program}}角色", { program: getProgramLabel(type) }))}</h2>
+      <p>${type === "terminal" ? escapeHtml(t("programPicker.desc.terminal", "终端会以角色身份运行，可选择普通 PowerShell 或 Agent。Agent 当前使用 {{provider}}，可在系统设置中切换。", { provider: getAgentProviderLabel(state.settings.agentProvider) })) : escapeHtml(t("programPicker.desc.other", "程序会以角色身份运行，任务分派和协作状态都会绑定到这个角色。"))}</p>
       <div class="role-grid">${cards}</div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
       </div>
     </div>
   `);
@@ -7319,7 +7421,12 @@ function renderModal(content) {
 function closeModal() {
   pendingTaskPlanDraft = null;
   pendingFileOperation = null;
+  closeFeedbackModal();
   document.querySelector(".modal-backdrop")?.remove();
+}
+
+function closeFeedbackModal() {
+  document.querySelector(".feedback-modal-backdrop")?.remove();
 }
 
 function normalizeSearchText(value) {
@@ -7368,10 +7475,10 @@ function buildGlobalSearchResults(query = globalSearchQuery) {
     pushResult({
       kind: "project",
       projectId: project.id,
-      title: project.name || "未命名项目",
-      subtitle: project.path || "未设置项目路径",
-      meta: `${project.tasks.length} 个任务 · ${project.windows.length} 个窗口`,
-      actionLabel: "打开项目"
+      title: project.name || t("search.result.untitledProject", "未命名项目"),
+      subtitle: project.path || t("search.result.noPath", "未设置项目路径"),
+      meta: `${t("search.result.taskCount", "{{count}} 个任务", { count: project.tasks.length })} · ${t("search.result.windowCount", "{{count}} 个窗口", { count: project.windows.length })}`,
+      actionLabel: t("search.result.openProject", "打开项目")
     }, [project.name, project.path, project.id]);
 
     project.windows.forEach((win) => {
@@ -7381,30 +7488,30 @@ function buildGlobalSearchResults(query = globalSearchQuery) {
         projectId: project.id,
         windowId: win.id,
         desktopId: win.desktopId || "",
-        title: win.title || PROGRAMS[win.type]?.label || "窗口",
+        title: win.title || PROGRAMS[win.type]?.label || t("search.result.window", "窗口"),
         subtitle: `${project.name} · ${role.name} · ${PROGRAMS[win.type]?.label || win.type}`,
-        meta: win.minimized ? "已最小化" : "运行中",
-        actionLabel: "定位窗口"
+        meta: win.minimized ? t("search.result.minimized", "已最小化") : t("search.result.running", "运行中"),
+        actionLabel: t("search.result.locateWindow", "定位窗口")
       }, [project.name, project.path, win.title, win.type, role.name, win.filePath, win.url, win.browserTabs?.map((tab) => `${tab.title} ${tab.url}`).join(" ")]);
     });
 
     project.tasks.forEach((task) => {
-      const roleNames = getTaskRoleIds(task).map((roleId) => getRole(roleId).name).join("、");
+      const roleNames = getTaskRoleIds(task).map((roleId) => getRoleName(roleId)).join("、");
       pushResult({
         kind: "task",
         projectId: project.id,
         taskId: task.id,
         desktopId: getTaskConversationId(task),
-        title: task.title || "未命名任务",
-        subtitle: task.goal || "无任务目标",
-        meta: `${project.name} · ${roleNames || "未分配角色"} · ${SUBTASK_STATUS_DEFS[getTaskStatusValue(task)]?.label || getTaskStatusValue(task)}`,
-        actionLabel: "查看任务"
-      }, [project.name, project.path, task.title, task.goal, task.model?.modelName, roleNames, ...(task.subtasks || []).flatMap((subtask) => [subtask.title, subtask.description, getRole(subtask.roleId).name])]);
+        title: task.title || t("search.result.untitledTask", "未命名任务"),
+        subtitle: task.goal || t("search.result.noGoal", "无任务目标"),
+        meta: `${project.name} · ${roleNames || t("search.result.unassigned", "未分配角色")} · ${SUBTASK_STATUS_DEFS[getTaskStatusValue(task)]?.label || getTaskStatusValue(task)}`,
+        actionLabel: t("search.result.viewTask", "查看任务")
+      }, [project.name, project.path, task.title, task.goal, task.model?.modelName, roleNames, ...(task.subtasks || []).flatMap((subtask) => [subtask.title, subtask.description, getRoleName(subtask.roleId)])]);
     });
 
     project.messages.forEach((message) => {
-      const fromRole = getRole(message.fromRoleId).name;
-      const toRoles = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
+      const fromRole = getRoleName(message.fromRoleId);
+      const toRoles = message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、");
       pushResult({
         kind: "message",
         timelineKind: "message",
@@ -7412,24 +7519,24 @@ function buildGlobalSearchResults(query = globalSearchQuery) {
         itemId: message.id,
         taskId: message.taskId || "",
         title: `${fromRole} → ${toRoles}`,
-        subtitle: message.content || "空消息",
+        subtitle: message.content || t("search.result.emptyMessage", "空消息"),
         meta: `${project.name} · ${getMessageTaskLabel(message.taskId)} · ${formatDateTime(message.createdAt)}`,
-        actionLabel: "查看消息"
+        actionLabel: t("search.result.viewMessage", "查看消息")
       }, [project.name, project.path, fromRole, toRoles, message.content, message.source, getMessageTaskLabel(message.taskId)]);
     });
 
     project.agentEvents.forEach((event) => {
-      const roleName = getRole(event.roleId).name;
+      const roleName = getRoleName(event.roleId);
       pushResult({
         kind: "event",
         timelineKind: "agent-event",
         projectId: project.id,
         itemId: event.id,
         taskId: event.taskId || "",
-        title: `Agent 事件 · ${roleName}`,
-        subtitle: event.message || event.sessionId || event.status || "状态事件",
+        title: t("search.result.agentEvent", "Agent 事件 · {{name}}", { name: roleName }),
+        subtitle: event.message || event.sessionId || event.status || t("search.result.statusEvent", "状态事件"),
         meta: `${project.name} · ${event.provider || "agent"} · ${formatDateTime(event.receivedAt)}`,
-        actionLabel: "查看事件"
+        actionLabel: t("search.result.viewEvent", "查看事件")
       }, [project.name, project.path, roleName, event.provider, event.status, event.type, event.toolName, event.message, event.sessionId, getMessageTaskLabel(event.taskId)]);
     });
   });
@@ -7443,9 +7550,16 @@ function renderGlobalSearchResults(query = globalSearchQuery) {
   const results = buildGlobalSearchResults(query);
   const normalizedQuery = normalizeSearchText(query);
   if (results.length === 0) {
-    return `<div class="global-search-empty">${normalizedQuery ? "没有找到匹配结果。可以搜索项目、任务、消息、角色、窗口标题或文件路径。" : "输入关键词后搜索项目、任务、消息、事件和窗口。"}</div>`;
+    return `<div class="global-search-empty">${escapeHtml(normalizedQuery ? t("search.empty.withQuery", "没有找到匹配结果。可以搜索项目、任务、消息、角色、窗口标题或文件路径。") : t("search.empty.noQuery", "输入关键词后搜索项目、任务、消息、事件和窗口。"))}</div>`;
   }
 
+  const kindLabels = {
+    project: t("search.kind.project", "项目"),
+    task: t("search.kind.task", "任务"),
+    message: t("search.kind.message", "消息"),
+    event: t("search.kind.event", "事件"),
+    window: t("search.kind.window", "窗口")
+  };
   return results.map((item) => `
     <button class="global-search-result" data-action="open-search-result"
       data-result-kind="${escapeHtml(item.kind)}"
@@ -7455,13 +7569,13 @@ function renderGlobalSearchResults(query = globalSearchQuery) {
       data-desktop-id="${escapeHtml(item.desktopId || "")}"
       data-item-id="${escapeHtml(item.itemId || "")}"
       data-timeline-kind="${escapeHtml(item.timelineKind || "")}">
-      <span class="global-search-kind">${escapeHtml({ project: "项目", task: "任务", message: "消息", event: "事件", window: "窗口" }[item.kind] || "结果")}</span>
+      <span class="global-search-kind">${escapeHtml(kindLabels[item.kind] || t("search.kind.result", "结果"))}</span>
       <span class="global-search-main">
         <strong>${escapeHtml(item.title)}</strong>
         <span>${escapeHtml(item.subtitle)}</span>
         <em>${escapeHtml(item.meta || "")}</em>
       </span>
-      <span class="global-search-action">${escapeHtml(item.actionLabel || "打开")}</span>
+      <span class="global-search-action">${escapeHtml(item.actionLabel || t("search.action.open", "打开"))}</span>
     </button>
   `).join("");
 }
@@ -7474,7 +7588,7 @@ function refreshGlobalSearchResults() {
     list.innerHTML = renderGlobalSearchResults(globalSearchQuery);
   }
   if (count) {
-    count.textContent = `${results.length} 个结果`;
+    count.textContent = t("search.count", "{{count}} 个结果", { count: results.length });
   }
 }
 
@@ -7485,16 +7599,16 @@ function showSearchModal() {
     <div class="modal global-search-modal">
       <div class="global-search-head">
         <div>
-          <h2>搜索</h2>
-          <p>搜索项目、任务、消息、Agent 事件、窗口标题和文件路径。</p>
+          <h2>${escapeHtml(t("search.title", "搜索"))}</h2>
+          <p>${escapeHtml(t("search.desc", "搜索项目、任务、消息、Agent 事件、窗口标题和文件路径。"))}</p>
         </div>
-        <button class="settings-close" title="关闭" data-action="close-modal">×</button>
+        <button class="settings-close" title="${escapeHtml(t("common.close", "关闭"))}" data-action="close-modal">×</button>
       </div>
       <label class="global-search-box">
         <span>${icon("search")}</span>
-        <input id="globalSearchInput" value="${escapeHtml(globalSearchQuery)}" placeholder="输入关键词，例如任务标题、角色、路径或消息内容" autocomplete="off" />
+        <input id="globalSearchInput" value="${escapeHtml(globalSearchQuery)}" placeholder="${escapeHtml(t("search.placeholder", "输入关键词，例如任务标题、角色、路径或消息内容"))}" autocomplete="off" />
       </label>
-      <div class="global-search-summary" data-global-search-count>${results.length} 个结果</div>
+      <div class="global-search-summary" data-global-search-count>${escapeHtml(t("search.count", "{{count}} 个结果", { count: results.length }))}</div>
       <div class="global-search-results" data-global-search-results>
         ${renderGlobalSearchResults(globalSearchQuery)}
       </div>
@@ -7561,18 +7675,18 @@ function openSearchResult(target) {
 
 function renderSeverityLabel(severity) {
   return {
-    high: "高风险",
-    medium: "需确认",
-    low: "低风险"
-  }[severity] || "未知";
+    high: t("risk.severity.high", "高风险"),
+    medium: t("risk.severity.medium", "需确认"),
+    low: t("risk.severity.low", "低风险")
+  }[severity] || t("risk.severity.unknown", "未知");
 }
 
 function renderCommandStatus(status) {
   return {
-    pending: "等待确认",
-    approved: "已确认执行",
-    executed: "已执行",
-    rejected: "已拒绝"
+    pending: t("risk.status.pending", "等待确认"),
+    approved: t("risk.status.approved", "已确认执行"),
+    executed: t("risk.status.executed", "已执行"),
+    rejected: t("risk.status.rejected", "已拒绝")
   }[status] || status;
 }
 
@@ -7585,16 +7699,16 @@ function showCommandApprovalModal() {
   const assessment = pendingCommandApproval.assessment;
   renderModal(`
     <div class="modal command-approval">
-      <h2>命令执行需要确认</h2>
-      <p>${escapeHtml(role.name)} 即将执行一个 ${renderSeverityLabel(assessment.severity)} 命令。请确认它符合当前项目目标。</p>
+      <h2>${escapeHtml(t("risk.command.title", "命令执行需要确认"))}</h2>
+      <p>${escapeHtml(t("risk.command.desc", "{{role}} 即将执行一个 {{severity}} 命令。请确认它符合当前项目目标。", { role: role.name, severity: renderSeverityLabel(assessment.severity) }))}</p>
       <div class="risk-summary ${assessment.severity}">
         <strong>${escapeHtml(assessment.label)}</strong>
         <span>${escapeHtml(assessment.description)}</span>
       </div>
       <pre class="command-preview">${escapeHtml(pendingCommandApproval.command)}</pre>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="reject-command">拒绝执行</button>
-        <button class="primary-button" data-action="approve-command">确认执行</button>
+        <button class="secondary-button" data-action="reject-command">${escapeHtml(t("risk.command.reject", "拒绝执行"))}</button>
+        <button class="primary-button" data-action="approve-command">${escapeHtml(t("risk.command.approve", "确认执行"))}</button>
       </div>
     </div>
   `);
@@ -7628,7 +7742,7 @@ function rejectPendingCommand() {
     reason: "renderer-rejected"
   });
   view?.term?.writeln("");
-  view?.term?.writeln("\x1b[33mCosS 已阻止该命令，未发送 Enter 执行。\x1b[0m");
+  view?.term?.writeln(`\x1b[33m${t("risk.command.blocked", "CosS 已阻止该命令，未发送 Enter 执行。")}\x1b[0m`);
   updateCommandLog(pendingCommandApproval.logId, "rejected");
   pendingCommandApproval = null;
   closeModal();
@@ -7636,12 +7750,12 @@ function rejectPendingCommand() {
 
 function renderCommandStatus(status) {
   return {
-    pending: "等待确认",
-    approved: "已确认执行",
-    "session-approved": "本会话已授权",
-    "approved-by-grant": "会话授权执行",
-    executed: "已执行",
-    rejected: "已拒绝"
+    pending: t("risk.status.pending", "等待确认"),
+    approved: t("risk.status.approved", "已确认执行"),
+    "session-approved": t("risk.status.session-approved", "本会话已授权"),
+    "approved-by-grant": t("risk.status.approved-by-grant", "会话授权执行"),
+    executed: t("risk.status.executed", "已执行"),
+    rejected: t("risk.status.rejected", "已拒绝")
   }[status] || status;
 }
 
@@ -7654,17 +7768,17 @@ function showCommandApprovalModal() {
   const assessment = pendingCommandApproval.assessment;
   renderModal(`
     <div class="modal command-approval">
-      <h2>命令执行需要确认</h2>
-      <p>${escapeHtml(role.name)} 即将执行一个 ${renderSeverityLabel(assessment.severity)} 命令。你可以只允许本次执行，也可以在当前会话内允许同一角色执行同类命令。</p>
+      <h2>${escapeHtml(t("risk.command.title", "命令执行需要确认"))}</h2>
+      <p>${escapeHtml(t("risk.command.descExtended", "{{role}} 即将执行一个 {{severity}} 命令。你可以只允许本次执行，也可以在当前会话内允许同一角色执行同类命令。", { role: role.name, severity: renderSeverityLabel(assessment.severity) }))}</p>
       <div class="risk-summary ${assessment.severity}">
         <strong>${escapeHtml(assessment.label)}</strong>
         <span>${escapeHtml(assessment.description)}</span>
       </div>
       <pre class="command-preview">${escapeHtml(pendingCommandApproval.command)}</pre>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="reject-command">拒绝执行</button>
-        <button class="secondary-button" data-action="approve-command-session">本会话允许同类命令</button>
-        <button class="primary-button" data-action="approve-command">允许一次</button>
+        <button class="secondary-button" data-action="reject-command">${escapeHtml(t("risk.command.reject", "拒绝执行"))}</button>
+        <button class="secondary-button" data-action="approve-command-session">${escapeHtml(t("risk.command.approveSession", "本会话允许同类命令"))}</button>
+        <button class="primary-button" data-action="approve-command">${escapeHtml(t("risk.command.approveOnce", "允许一次"))}</button>
       </div>
     </div>
   `);
@@ -7700,23 +7814,23 @@ function renderClaudeStatus(status) {
   if (!status) {
     return `
       <div class="claude-status empty" data-claude-status>
-        尚未检测 Claude Code 环境。
+        ${escapeHtml(t("claudeCode.notTested", "尚未检测 Claude Code 环境。"))}
       </div>
     `;
   }
 
-  const headline = status.installed ? "Claude Code 已可用" : "未检测到 Claude Code";
+  const headline = status.installed ? t("claudeCode.available", "Claude Code 已可用") : t("claudeCode.notFound", "未检测到 Claude Code");
   const detail = status.installed
-    ? (status.version || status.versionError || "claude 命令存在，但未返回版本信息。")
-    : `${status.autoInstallDisabled ? "当前测试环境禁用了自动安装。" : "创建 Claude Code 角色终端时会尝试自动安装。"} 推荐命令：${status.installCommand}`;
+    ? (status.version || status.versionError || t("claudeCode.versionPresent", "claude 命令存在，但未返回版本信息。"))
+    : `${status.autoInstallDisabled ? t("claudeCode.autoInstall.off", "当前环境已关闭自动安装。") : t("claudeCode.autoInstall.on", "创建 Claude Code 角色终端时会尝试自动安装。")} ${t("claudeCode.recommended", "推荐命令：{{command}}", { command: status.installCommand })}`;
 
   return `
     <div class="claude-status ${status.installed ? "ready" : "missing"}" data-claude-status>
       <strong>${escapeHtml(headline)}</strong>
-      <span>命令：${escapeHtml(status.command)}</span>
+      <span>${escapeHtml(t("claudeCode.command", "命令：{{command}}", { command: status.command }))}</span>
       <span>${escapeHtml(detail)}</span>
       ${renderAgentAuthLines(status.auth)}
-      <span>检测时间：${escapeHtml(formatDateTime(status.checkedAt))}</span>
+      <span>${escapeHtml(t("claudeCode.checkedAt", "检测时间：{{time}}", { time: formatDateTime(status.checkedAt) }))}</span>
     </div>
   `;
 }
@@ -7725,37 +7839,37 @@ function renderCodexStatus(status) {
   if (!status) {
     return `
       <div class="claude-status empty" data-codex-status>
-        尚未检测 Codex CLI 环境。
+        ${escapeHtml(t("codex.notTested", "尚未检测 Codex CLI 环境。"))}
       </div>
     `;
   }
 
-  const headline = status.runnable ? "Codex CLI 已可用" : "未检测到可运行的 Codex CLI";
+  const headline = status.runnable ? t("codex.available", "Codex CLI 已可用") : t("codex.notFound", "未检测到可运行的 Codex CLI");
   const npmDetail = status.npm?.usable
-    ? `npm 可用：${status.npm.version || "已检测"}（${status.npm.command || "npm"}）`
-    : `npm 不可用：${status.npm?.errorDetail || "未返回版本信息"}`;
+    ? t("codex.npm.ok", "npm 可用：{{version}}（{{command}}）", { version: status.npm.version || t("model.secret.masked", "已检测"), command: status.npm.command || "npm" })
+    : t("codex.npm.fail", "npm 不可用：{{error}}", { error: status.npm?.errorDetail || t("model.secret.empty", "未返回版本信息") });
   const npmCandidates = status.npm?.candidates?.length
-    ? `npm 候选：${status.npm.candidates.join(" | ")}`
+    ? t("codex.npm.candidates", "npm 候选：{{candidates}}", { candidates: status.npm.candidates.join(" | ") })
     : "";
   const lookupDetail = status.lookupPaths?.length
-    ? `PATH 命中：${status.lookupPaths.join(" | ")}`
-    : "PATH 未命中 codex。";
+    ? t("codex.path.hit", "PATH 命中：{{paths}}", { paths: status.lookupPaths.join(" | ") })
+    : t("codex.path.miss", "PATH 未命中 codex。");
   const detail = status.runnable
-    ? (status.version || "codex 命令存在，但未返回版本信息。")
-    : `${status.autoInstallDisabled ? "当前环境禁用了 Codex 自动安装。" : "创建 Codex Agent 时会尝试自动安装。"} 推荐命令：${status.installCommand}`;
+    ? (status.version || t("codex.versionPresent", "codex 命令存在，但未返回版本信息。"))
+    : `${status.autoInstallDisabled ? t("codex.autoInstall.off", "当前已关闭 Codex 自动安装。") : t("codex.autoInstall.on", "创建 Codex Agent 时会尝试自动安装。")} ${t("codex.recommended", "推荐命令：{{command}}", { command: status.installCommand })}`;
 
   return `
     <div class="claude-status ${status.runnable ? "ready" : "missing"}" data-codex-status>
       <strong>${escapeHtml(headline)}</strong>
-      <span>命令：${escapeHtml(status.command || "codex")}</span>
+      <span>${escapeHtml(t("codex.command", "命令：{{command}}", { command: status.command || "codex" }))}</span>
       <span>${escapeHtml(detail)}</span>
       <span>${escapeHtml(npmDetail)}</span>
       ${npmCandidates ? `<span>${escapeHtml(npmCandidates)}</span>` : ""}
       <span>${escapeHtml(lookupDetail)}</span>
-      ${status.hasWindowsAppsPackagePath ? `<span>${escapeHtml("检测到 WindowsApps 中的 OpenAI Codex 应用包路径，它可能不能作为 CLI 直接启动。")}</span>` : ""}
-      ${status.errorDetail ? `<span>${escapeHtml(`错误：${status.errorDetail}`)}</span>` : ""}
+      ${status.hasWindowsAppsPackagePath ? `<span>${escapeHtml(t("codex.windowsApps", "检测到 WindowsApps 中的 OpenAI Codex 应用包路径，它可能不能作为 CLI 直接启动。"))}</span>` : ""}
+      ${status.errorDetail ? `<span>${escapeHtml(t("common.error", "错误：{{error}}", { error: status.errorDetail }))}</span>` : ""}
       ${renderAgentAuthLines(status.auth)}
-      <span>检测时间：${escapeHtml(formatDateTime(status.checkedAt))}</span>
+      <span>${escapeHtml(t("codex.checkedAt", "检测时间：{{time}}", { time: formatDateTime(status.checkedAt) }))}</span>
     </div>
   `;
 }
@@ -7764,36 +7878,36 @@ function renderCodeBuddyStatus(status) {
   if (!status) {
     return `
       <div class="claude-status empty" data-codebuddy-status>
-        尚未检测 CodeBuddy Code CLI 环境。
+        ${escapeHtml(t("codeBuddy.notTested", "尚未检测 CodeBuddy Code CLI 环境。"))}
       </div>
     `;
   }
 
-  const headline = status.runnable ? "CodeBuddy Code CLI 已可用" : "未检测到可运行的 CodeBuddy Code CLI";
+  const headline = status.runnable ? t("codeBuddy.available", "CodeBuddy Code CLI 已可用") : t("codeBuddy.notFound", "未检测到可运行的 CodeBuddy Code CLI");
   const npmDetail = status.npm?.usable
-    ? `npm 可用：${status.npm.version || "已检测"}（${status.npm.command || "npm"}）`
-    : `npm 不可用：${status.npm?.errorDetail || "未返回版本信息"}`;
+    ? t("codeBuddy.npm.ok", "npm 可用：{{version}}（{{command}}）", { version: status.npm.version || t("model.secret.masked", "已检测"), command: status.npm.command || "npm" })
+    : t("codeBuddy.npm.fail", "npm 不可用：{{error}}", { error: status.npm?.errorDetail || t("model.secret.empty", "未返回版本信息") });
   const npmCandidates = status.npm?.candidates?.length
-    ? `npm 候选：${status.npm.candidates.join(" | ")}`
+    ? t("codeBuddy.npm.candidates", "npm 候选：{{candidates}}", { candidates: status.npm.candidates.join(" | ") })
     : "";
   const lookupDetail = status.lookupPaths?.length
-    ? `PATH 命中：${status.lookupPaths.join(" | ")}`
-    : "PATH 未命中 codebuddy 或 cbc。";
+    ? t("codeBuddy.path.hit", "PATH 命中：{{paths}}", { paths: status.lookupPaths.join(" | ") })
+    : t("codeBuddy.path.miss", "PATH 未命中 codebuddy 或 cbc。");
   const detail = status.runnable
-    ? (status.version || "codebuddy 命令存在，但未返回版本信息。")
-    : `${status.autoInstallDisabled ? "当前环境禁用了 CodeBuddy Code 自动安装。" : "创建 CodeBuddy Agent 时会尝试自动安装。"} 推荐命令：${status.installCommand}`;
+    ? (status.version || t("codeBuddy.versionPresent", "codebuddy 命令存在，但未返回版本信息。"))
+    : `${status.autoInstallDisabled ? t("codeBuddy.autoInstall.off", "当前已关闭 CodeBuddy Code 自动安装。") : t("codeBuddy.autoInstall.on", "创建 CodeBuddy Agent 时会尝试自动安装。")} ${t("codeBuddy.recommended", "推荐命令：{{command}}", { command: status.installCommand })}`;
 
   return `
     <div class="claude-status ${status.runnable ? "ready" : "missing"}" data-codebuddy-status>
       <strong>${escapeHtml(headline)}</strong>
-      <span>命令：${escapeHtml(status.command || "codebuddy")}</span>
+      <span>${escapeHtml(t("codeBuddy.command", "命令：{{command}}", { command: status.command || "codebuddy" }))}</span>
       <span>${escapeHtml(detail)}</span>
       <span>${escapeHtml(npmDetail)}</span>
       ${npmCandidates ? `<span>${escapeHtml(npmCandidates)}</span>` : ""}
       <span>${escapeHtml(lookupDetail)}</span>
-      ${status.errorDetail ? `<span>${escapeHtml(`错误：${status.errorDetail}`)}</span>` : ""}
+      ${status.errorDetail ? `<span>${escapeHtml(t("common.error", "错误：{{error}}", { error: status.errorDetail }))}</span>` : ""}
       ${renderAgentAuthLines(status.auth)}
-      <span>检测时间：${escapeHtml(formatDateTime(status.checkedAt))}</span>
+      <span>${escapeHtml(t("codeBuddy.checkedAt", "检测时间：{{time}}", { time: formatDateTime(status.checkedAt) }))}</span>
     </div>
   `;
 }
@@ -7804,18 +7918,18 @@ function renderAgentAuthLines(auth) {
   }
 
   const sourceLabels = {
-    env: "环境变量",
-    config: "配置文件",
-    "config-present": "配置文件存在但未发现登录凭据",
-    missing: "未发现配置"
+    env: t("agentLogin.source.env", "环境变量"),
+    config: t("agentLogin.source.config", "配置文件"),
+    "config-present": t("agentLogin.source.configPresent", "配置文件存在但未发现登录凭据"),
+    missing: t("agentLogin.source.missing", "未发现配置")
   };
   const credentialPath = auth.authPath || auth.configPath || "";
   const lines = [
-    `登录状态：${auth.loggedIn ? "已检测到登录凭据" : "未检测到登录凭据"} · ${sourceLabels[auth.source] || auth.source || "未知来源"}`,
-    credentialPath ? `凭据路径：${credentialPath}${auth.configExists === false ? "（不存在）" : ""}` : "",
-    auth.homePath ? `主目录：${auth.homePath}` : "",
-    Array.isArray(auth.envKeys) && auth.envKeys.length ? `命中环境变量：${auth.envKeys.join(", ")}` : "",
-    auth.configError ? `配置读取错误：${auth.configError}` : ""
+    t("agentLogin.summary", "登录状态：{{status}} · {{source}}", { status: auth.loggedIn ? t("agentLogin.status.loggedIn", "已检测到登录凭据") : t("agentLogin.status.loggedOut", "未检测到登录凭据"), source: sourceLabels[auth.source] || auth.source || t("agentLogin.source.unknown", "未知来源") }),
+    credentialPath ? t("agentLogin.credentialPath", "凭据路径：{{path}}", { path: credentialPath }) + (auth.configExists === false ? t("agentLogin.credentialPath.missing.suffix", "（不存在）") : "") : "",
+    auth.homePath ? t("agentLogin.homePath", "主目录：{{path}}", { path: auth.homePath }) : "",
+    Array.isArray(auth.envKeys) && auth.envKeys.length ? t("agentLogin.envKeys", "命中环境变量：{{keys}}", { keys: auth.envKeys.join(", ") }) : "",
+    auth.configError ? t("agentLogin.configError", "配置读取错误：{{error}}", { error: auth.configError }) : ""
   ].filter(Boolean);
 
   return lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("");
@@ -7826,23 +7940,23 @@ function renderAgentLoginTestStatus(provider) {
   const status = agentLoginTestStatuses[normalized];
   const attr = `data-agent-login-status="${escapeHtml(normalized)}"`;
   if (!status) {
-    return `<div class="model-connectivity-status idle" ${attr}>尚未测试 ${getAgentProviderLabel(normalized)} 远程登录态。</div>`;
+    return `<div class="model-connectivity-status idle" ${attr}>${escapeHtml(t("agentLogin.notTested", "尚未测试 {{provider}} 远程登录态。", { provider: getAgentProviderLabel(normalized) }))}</div>`;
   }
   if (status.state === "testing") {
-    return `<div class="model-connectivity-status testing" ${attr}>正在测试远程登录态...</div>`;
+    return `<div class="model-connectivity-status testing" ${attr}>${escapeHtml(t("agentLogin.testing", "正在测试远程登录态..."))}</div>`;
   }
   if (status.ok) {
     return `
       <div class="model-connectivity-status ready" ${attr}>
-        <strong>远程登录态可用</strong>
-        <span>${escapeHtml(status.message || "远程 API 校验通过。")} · ${escapeHtml(formatDateTime(status.checkedAt))}</span>
+        <strong>${escapeHtml(t("agentLogin.ok", "远程登录态可用"))}</strong>
+        <span>${escapeHtml(status.message || t("agentLogin.ok.default", "远程 API 校验通过。"))} · ${escapeHtml(formatDateTime(status.checkedAt))}</span>
       </div>
     `;
   }
   return `
     <div class="model-connectivity-status missing" ${attr}>
-      <strong>${status.skipped ? "远程登录态未测试" : "远程登录态不可用"}</strong>
-      <span>${escapeHtml(status.message || status.error || "远程 API 校验失败。")}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
+      <strong>${escapeHtml(status.skipped ? t("agentLogin.skipped", "远程登录态未测试") : t("agentLogin.failed", "远程登录态不可用"))}</strong>
+      <span>${escapeHtml(status.message || status.error || t("agentLogin.failed.default", "远程 API 校验失败。"))}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
     </div>
   `;
 }
@@ -7850,7 +7964,7 @@ function renderAgentLoginTestStatus(provider) {
 function renderLogRows() {
   const logs = getProjectCommandLogs().slice(0, 60);
   if (logs.length === 0) {
-    return `<div class="empty-log">暂无命令日志。角色终端执行命令后会在这里记录。</div>`;
+    return `<div class="empty-log">${escapeHtml(t("commandAudit.empty", "暂无命令日志。角色终端执行命令后会在这里记录。"))}</div>`;
   }
 
   return logs
@@ -7869,24 +7983,24 @@ function renderLogRows() {
 function showLogsModal() {
   renderModal(`
     <div class="modal log-panel">
-      <h2>命令审计与环境</h2>
-      <p>这里记录角色终端执行过的命令，并提供 Claude Code 环境重新检测。</p>
+      <h2>${escapeHtml(t("commandAudit.title", "命令审计与运行环境"))}</h2>
+      <p>${escapeHtml(t("commandAudit.desc", "这里记录角色终端执行过的命令，并提供 Agent 运行环境检测。"))}</p>
       <section class="log-section">
         <div class="log-section-title">
-          <strong>Claude Code 环境</strong>
-          <button class="secondary-button" data-action="check-claude">重新检测</button>
+          <strong>${escapeHtml(t("commandAudit.claudeEnv", "Claude Code 环境"))}</strong>
+          <button class="secondary-button" data-action="check-claude">${escapeHtml(t("commandAudit.recheck", "重新检测"))}</button>
         </div>
         <div id="claudeStatusMount">${renderClaudeStatus(latestClaudeStatus)}</div>
       </section>
       <section class="log-section">
         <div class="log-section-title">
-          <strong>终端命令日志</strong>
-          <span>${getProjectCommandLogs().length} 条</span>
+          <strong>${escapeHtml(t("commandAudit.commandLog", "终端命令日志"))}</strong>
+          <span>${escapeHtml(t("common.count.items", "{{count}} 条", { count: getProjectCommandLogs().length }))}</span>
         </div>
         <div class="log-list">${renderLogRows()}</div>
       </section>
       <div class="modal-actions">
-        <button class="primary-button" data-action="close-modal">关闭</button>
+        <button class="primary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button>
       </div>
     </div>
   `);
@@ -7920,9 +8034,9 @@ function renderModelProviderOption(provider) {
   return `
     <button class="model-provider-option ${active ? "active" : ""} ${editing ? "editing" : ""}" data-action="edit-model-provider" data-provider="${config.id}">
       <strong>${escapeHtml(config.label)}</strong>
-      <span>${escapeHtml(config.modelName)}</span>
-      <small>${config.locked ? "无需 API key" : `API key：${escapeHtml(renderMaskedSecret(config.apiKey))}`}</small>
-      <em>${active ? "当前使用" : usable ? "可切换" : "需填写 API key"}</em>
+      <span>${escapeHtml(getModelDisplayName(config))}</span>
+      <small>${config.locked ? escapeHtml(t("model.noApiKey", "无需 API key")) : config.apiKeyRequired ? `${escapeHtml(t("model.field.apiKey", "API key"))}：${escapeHtml(renderMaskedSecret(config.apiKey))}` : `${escapeHtml(t("model.field.apiKey", "API key"))}：${config.apiKey ? escapeHtml(renderMaskedSecret(config.apiKey)) : escapeHtml(t("common.optional", "可选"))}`}</small>
+      <em>${active ? escapeHtml(t("model.currentlyUsed", "当前使用")) : usable ? escapeHtml(t("model.switchable", "可切换")) : escapeHtml(t("model.needApiKey", "需填写 API key"))}</em>
     </button>
   `;
 }
@@ -7931,18 +8045,18 @@ function renderModelConnectivityStatus(provider) {
   const id = normalizeModelProvider(provider);
   const status = modelConnectivityStatuses[id];
   if (!status) {
-    return `<div class="model-connectivity-status idle" data-model-connectivity-status="${escapeHtml(id)}">尚未测试连通性。</div>`;
+    return `<div class="model-connectivity-status idle" data-model-connectivity-status="${escapeHtml(id)}">${escapeHtml(t("model.connectivity.idle", "尚未测试连通性。"))}</div>`;
   }
 
   if (status.state === "testing") {
-    return `<div class="model-connectivity-status testing" data-model-connectivity-status="${escapeHtml(id)}">正在测试连通性...</div>`;
+    return `<div class="model-connectivity-status testing" data-model-connectivity-status="${escapeHtml(id)}">${escapeHtml(t("model.connectivity.testing", "正在测试连通性..."))}</div>`;
   }
 
   if (status.ok) {
     const latencyText = Number.isFinite(status.latencyMs) ? ` · ${status.latencyMs}ms` : "";
     return `
       <div class="model-connectivity-status ready" data-model-connectivity-status="${escapeHtml(id)}">
-        <strong>连通性正常</strong>
+        <strong>${escapeHtml(t("model.connectivity.ok", "连通性正常"))}</strong>
         <span>${escapeHtml(status.modelName || "")}${latencyText} · ${escapeHtml(formatDateTime(status.checkedAt))}</span>
       </div>
     `;
@@ -7950,8 +8064,8 @@ function renderModelConnectivityStatus(provider) {
 
   return `
     <div class="model-connectivity-status missing" data-model-connectivity-status="${escapeHtml(id)}">
-      <strong>连通性失败</strong>
-      <span>${escapeHtml(status.error || "模型接口不可用。")}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
+      <strong>${escapeHtml(t("model.connectivity.failed", "连通性失败"))}</strong>
+      <span>${escapeHtml(status.error || t("model.connectivity.unavailable", "模型接口不可用。"))}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
     </div>
   `;
 }
@@ -7960,26 +8074,31 @@ function renderModelSettingsSection() {
   const activeModel = getActiveModelConfig();
   const editingModel = getModelConfig(modelEditorProvider);
   const canActivateEditingModel = canUseModelProvider(editingModel.id);
+  const modelConfigMissingReason = !String(editingModel.baseUrl || "").trim() || !String(editingModel.modelName || "").trim()
+    ? t("model.config.needBaseUrl", "该模型需要先填写 Base URL 和模型名称，才允许切换为当前模型。")
+    : t("model.config.needApiKey", "该模型需要先填写 API key，才允许切换为当前模型。");
+  const modelFieldReadonly = editingModel.locked ? "readonly" : "";
+  const apiKeyPlaceholder = editingModel.apiKeyRequired ? t("model.apiKey.placeholder.required", "填写后才可以切换到该模型") : t("model.apiKey.placeholder.optional", "可选，按模型服务要求填写");
   const apiKeyField = editingModel.locked
-    ? `<div class="field"><label>API Key</label><input value="系统模型无需 API key" readonly /></div>`
+    ? `<div class="field"><label>API Key</label><input value="${escapeHtml(t("model.apiKey.noKey", "该模型无需 API key"))}" readonly /></div>`
     : `
       <div class="field">
         <label for="modelApiKey">API Key</label>
-        <input id="modelApiKey" type="password" autocomplete="off" placeholder="填写后才可以切换到该模型" value="${escapeHtml(editingModel.apiKey)}" data-model-provider="${editingModel.id}" data-model-field="apiKey" />
+        <input id="modelApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(editingModel.apiKey)}" data-model-provider="${editingModel.id}" data-model-field="apiKey" />
       </div>
     `;
 
   return `
     <div class="settings-section-title">
-      <strong>模型配置</strong>
-      <span>默认系统模型固定为 ${escapeHtml(MODEL_PROVIDER_PRESETS.system.baseUrl)} / ${escapeHtml(MODEL_PROVIDER_PRESETS.system.modelName)}。</span>
+      <strong>${escapeHtml(t("model.config.title", "模型配置"))}</strong>
+      <span>${escapeHtml(t("model.config.desc", "可填写用户自定义模型服务，也可以切换到下方预设模型。"))}</span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>当前系统模型</strong>
-        <span>${escapeHtml(activeModel.label)} · ${escapeHtml(activeModel.baseUrl)} · ${escapeHtml(activeModel.modelName)}${activeModel.apiKeyRequired ? ` · API key ${activeModel.apiKey ? "已填写" : "未填写"}` : " · 无需 API key"}</span>
+        <strong>${escapeHtml(t("model.current.title", "当前模型"))}</strong>
+        <span>${escapeHtml(activeModel.label)} · ${escapeHtml(getModelEndpointDisplay(activeModel))} · ${escapeHtml(getModelDisplayName(activeModel))} · ${escapeHtml(getModelCredentialDisplay(activeModel))}</span>
       </div>
-      <span class="settings-value">${escapeHtml(activeModel.modelName)}</span>
+      <span class="settings-value">${escapeHtml(getModelDisplayName(activeModel))}</span>
     </div>
     <div class="model-provider-grid">
       ${Object.keys(MODEL_PROVIDER_PRESETS).map(renderModelProviderOption).join("")}
@@ -7991,23 +8110,23 @@ function renderModelSettingsSection() {
           <span>${escapeHtml(editingModel.description)}</span>
         </div>
         <div class="model-config-actions">
-          <button class="secondary-button" data-action="test-model-connectivity" data-provider="${editingModel.id}">测试连通性</button>
-          <button class="primary-button" data-action="set-model-provider" data-provider="${editingModel.id}">${state.settings.modelProvider === editingModel.id ? "当前模型" : "设为当前模型"}</button>
+          <button class="secondary-button" data-action="test-model-connectivity" data-provider="${editingModel.id}">${escapeHtml(t("model.action.test", "测试连通性"))}</button>
+          <button class="primary-button" data-action="set-model-provider" data-provider="${editingModel.id}">${escapeHtml(state.settings.modelProvider === editingModel.id ? t("model.current.title", "当前模型") : t("model.action.set", "设为当前模型"))}</button>
         </div>
       </div>
       <div class="model-config-grid">
         <div class="field">
           <label for="modelBaseUrl">Base URL</label>
-          <input id="modelBaseUrl" value="${escapeHtml(editingModel.baseUrl)}" ${editingModel.locked ? "readonly" : ""} data-model-provider="${editingModel.id}" data-model-field="baseUrl" />
+          <input id="modelBaseUrl" value="${escapeHtml(getModelEndpointDisplay(editingModel))}" ${modelFieldReadonly} data-model-provider="${editingModel.id}" data-model-field="baseUrl" />
         </div>
         <div class="field">
-          <label for="modelName">模型名称</label>
-          <input id="modelName" value="${escapeHtml(editingModel.modelName)}" ${editingModel.locked ? "readonly" : ""} data-model-provider="${editingModel.id}" data-model-field="modelName" />
+          <label for="modelName">${escapeHtml(t("model.field.modelName", "模型名称"))}</label>
+          <input id="modelName" value="${escapeHtml(getModelDisplayName(editingModel))}" ${modelFieldReadonly} data-model-provider="${editingModel.id}" data-model-field="modelName" />
         </div>
         ${apiKeyField}
       </div>
       <div class="model-config-note ${canActivateEditingModel ? "ready" : "missing"}">
-        ${canActivateEditingModel ? "该模型配置可以切换使用。" : "该模型需要先填写 API key，才允许切换为当前模型。"}
+        ${canActivateEditingModel ? escapeHtml(t("model.config.canActivate", "该模型配置可以切换使用。")) : escapeHtml(modelConfigMissingReason)}
       </div>
       ${renderModelConnectivityStatus(editingModel.id)}
     </div>
@@ -8017,7 +8136,7 @@ function renderModelSettingsSection() {
 function renderSettingsNav() {
   return SETTINGS_SECTIONS.map((section) => `
     <button class="${activeSettingsSection === section.id ? "active" : ""}" data-action="set-settings-section" data-section="${section.id}">
-      ${icon(section.icon)}${escapeHtml(section.label)}
+      ${icon(section.icon)}${escapeHtml(t(`settings.${section.id}`, section.label))}
     </button>
   `).join("");
 }
@@ -8032,24 +8151,182 @@ function renderSettingsPlaceholder(title, description, items = []) {
   `;
 }
 
+function getUserProfile() {
+  state.settings ||= {};
+  state.settings.userProfile ||= { displayName: t("account.defaultName", "本地用户"), avatarDataUrl: "" };
+  return state.settings.userProfile;
+}
+
+function renderUserAvatar(sizeClass = "") {
+  const profile = getUserProfile();
+  const name = String(profile.displayName || t("account.defaultName", "本地用户")).trim() || t("account.defaultName", "本地用户");
+  const initial = Array.from(name)[0] || t("account.initial", "本");
+  const avatar = String(profile.avatarDataUrl || "");
+  return `<div class="avatar ${escapeHtml(sizeClass)}">${avatar ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)}" />` : `<span>${escapeHtml(initial)}</span>`}</div>`;
+}
+
+function renderAccountSettingsSection() {
+  const profile = getUserProfile();
+  return `
+    <div class="account-settings-panel">
+      <div class="settings-row account-avatar-row">
+        <div>
+          <strong>${escapeHtml(t("account.avatar", "用户头像"))}</strong>
+          <span>${escapeHtml(t("account.avatar.desc", "用于侧边栏和本地工作区身份展示。"))}</span>
+        </div>
+        <div class="account-avatar-actions">
+          ${renderUserAvatar("large")}
+          <input id="accountAvatarInput" type="file" accept="image/*" hidden />
+          <button class="secondary-button" data-action="choose-account-avatar">${escapeHtml(t("account.changeAvatar", "更换头像"))}</button>
+          <button class="secondary-button" data-action="clear-account-avatar" ${profile.avatarDataUrl ? "" : "disabled"}>${escapeHtml(t("account.remove", "移除"))}</button>
+        </div>
+      </div>
+      <div class="settings-row account-name-row">
+        <div>
+          <strong>${escapeHtml(t("account.name", "用户名"))}</strong>
+          <span>${escapeHtml(t("account.name.desc", "修改后会显示在左下角账户区域。"))}</span>
+        </div>
+        <div class="settings-inline-field">
+          <input id="accountDisplayName" maxlength="32" value="${escapeHtml(profile.displayName || t("account.defaultName", "本地用户"))}" placeholder="${escapeHtml(t("account.name.placeholder", "请输入用户名"))}" />
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHelpActionItem({ label, action, url = "", external = false }) {
+  return `
+    <button class="help-action-item" data-action="${escapeHtml(action)}" ${url ? `data-url="${escapeHtml(url)}"` : ""}>
+      <span class="help-action-label">${escapeHtml(label)}</span>
+      ${external ? `<span class="help-action-external" aria-hidden="true">${icon("external")}</span>` : ""}
+    </button>
+  `;
+}
+
+function renderHelpSettingsSection() {
+  return `
+    <div class="help-settings-panel">
+      <div class="help-action-list">
+        ${renderHelpActionItem({ label: t("help.docs", "帮助文档"), action: "open-product-url", url: PRODUCT_HELP_URL, external: true })}
+        ${renderHelpActionItem({ label: t("help.feedback", "意见反馈"), action: "show-feedback-modal" })}
+        ${renderHelpActionItem({ label: t("help.contact", "联系我们"), action: "open-product-url", url: PRODUCT_HELP_URL, external: true })}
+      </div>
+      <div class="help-open-source-links">
+        <button data-action="open-product-url" data-url="${escapeHtml(PRODUCT_HELP_URL)}">${escapeHtml(t("help.license", "开源许可"))}</button>
+        <span>|</span>
+        <button data-action="open-product-url" data-url="${escapeHtml(PRODUCT_HELP_URL)}">${escapeHtml(t("help.home", "项目主页"))}</button>
+      </div>
+    </div>
+  `;
+}
+
+function showFeedbackModal() {
+  let backdrop = document.querySelector(".feedback-modal-backdrop");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.className = "feedback-modal-backdrop";
+    document.body.appendChild(backdrop);
+  }
+  backdrop.innerHTML = `
+    <div class="modal feedback-modal">
+      <div class="feedback-modal-head">
+        <h2>${escapeHtml(t("feedback.title", "意见反馈"))}</h2>
+        <button class="feedback-close-button" type="button" data-action="close-feedback-modal" aria-label="${escapeHtml(t("common.close", "关闭"))}">×</button>
+      </div>
+      <div class="feedback-input-card">
+        <textarea id="feedbackContent" maxlength="300" placeholder="${escapeHtml(t("feedback.placeholder", "你可以描述你遇到的问题"))}"></textarea>
+        <div class="feedback-input-footer">
+          <button class="feedback-upload-button" type="button" data-action="choose-feedback-images">
+            ${icon("image")}<span data-feedback-image-count>${escapeHtml(t("feedback.uploadImages", "上传图片 ({{count}}/4)", { count: 0 }))}</span>
+          </button>
+          <span class="feedback-char-count" data-feedback-char-count>0/300</span>
+        </div>
+        <input id="feedbackImageInput" type="file" accept="image/*" multiple hidden />
+      </div>
+      <div class="feedback-submit-row">
+        <label class="feedback-log-consent">
+          <input id="feedbackUploadLogs" type="checkbox" checked />
+          <span class="feedback-checkbox" aria-hidden="true">${icon("check")}</span>
+          <span>${escapeHtml(t("feedback.uploadLogsConsent", "上传日志，仅用于排查问题，可能包含对话记录、设备信息等数据。详情请查阅"))} <button type="button" data-action="open-product-url" data-url="${escapeHtml(PRODUCT_HELP_URL)}">${escapeHtml(t("feedback.privacyStatement", "隐私保护声明"))}</button></span>
+        </label>
+        <button class="feedback-submit-button" type="button" data-action="submit-feedback">${escapeHtml(t("feedback.submit", "提交"))}</button>
+      </div>
+    </div>
+  `;
+}
+
+function updateAccountDisplayName(value) {
+  const profile = getUserProfile();
+  profile.displayName = String(value || "").trimStart().slice(0, 32) || t("account.defaultName", "本地用户");
+  saveState();
+  document.querySelectorAll(".profile-name").forEach((node) => {
+    node.textContent = profile.displayName;
+  });
+}
+
+function updateAccountAvatarFromFile(file) {
+  if (!file || !file.type?.startsWith("image/")) {
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const profile = getUserProfile();
+    profile.avatarDataUrl = String(reader.result || "");
+    saveState();
+    render();
+    showSettingsModal();
+  });
+  reader.readAsDataURL(file);
+}
+
+function updateFeedbackCounters() {
+  const textarea = document.getElementById("feedbackContent");
+  const charCounter = document.querySelector("[data-feedback-char-count]");
+  if (textarea && charCounter) {
+    charCounter.textContent = `${Math.min(textarea.value.length, 300)}/300`;
+  }
+  const fileInput = document.getElementById("feedbackImageInput");
+  const imageCounter = document.querySelector("[data-feedback-image-count]");
+  if (fileInput && imageCounter) {
+    imageCounter.textContent = t("feedback.uploadImages", "上传图片 ({{count}}/4)", { count: Math.min(fileInput.files?.length || 0, 4) });
+  }
+}
+
+async function openProductUrl(url = PRODUCT_HELP_URL) {
+  const targetUrl = normalizeBrowserUrl(url || PRODUCT_HELP_URL);
+  try {
+    if (window.cossAPI?.openExternalUrl) {
+      await window.cossAPI.openExternalUrl(targetUrl);
+      return;
+    }
+  } catch (error) {
+    recordAppLog("help.open-url.failed", { url: targetUrl, error: error.message }, "warn");
+  }
+  if (getProject()) {
+    openPopupUrlInsideCosSBrowser(targetUrl);
+  } else {
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
+  }
+}
+
 function renderMemorySettingsSection() {
   const project = getProject();
   if (!project) {
-    return renderSettingsPlaceholder("记忆", "当前没有打开的项目。", ["先创建或选择一个项目"]);
+    return renderSettingsPlaceholder(t("memory.title", "记忆"), t("memory.noProject", "当前没有打开的项目。"), [t("memory.noProject.hint", "先创建或选择一个项目")]);
   }
   const memory = ensureProjectMemoryShape(project);
   const taskCount = memory.taskHistory.length;
   const artifactCount = memory.artifacts.length;
   const decisionCount = memory.decisions.length;
-  const updatedAt = memory.updatedAt ? formatDateTime(memory.updatedAt) : "尚未刷新";
+  const updatedAt = memory.updatedAt ? formatDateTime(memory.updatedAt) : t("memory.notRefreshed", "尚未刷新");
   return `
     <div class="settings-section-title">
-      <strong>项目记忆</strong>
-      <span>项目记忆会在新建任务时提供给 Kernel Planner，并通过 MCP 上下文提供给 Agent，避免每个新任务都像新项目一样重新规划。</span>
+      <strong>${escapeHtml(t("memory.title.projectMemory", "项目记忆"))}</strong>
+      <span>${escapeHtml(t("memory.desc", "项目记忆会在新建任务时提供给任务规划和协作者，帮助延续项目背景与既有决策。"))}</span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>当前项目</strong>
+        <strong>${escapeHtml(t("memory.currentProject", "当前项目"))}</strong>
         <span>${escapeHtml(project.name)} · ${escapeHtml(project.path || "")}</span>
       </div>
       <button class="settings-toggle-button" data-action="toggle-project-memory" aria-pressed="${memory.enabled !== false}">
@@ -8058,22 +8335,22 @@ function renderMemorySettingsSection() {
     </div>
     <div class="settings-row project-memory-actions-row">
       <div>
-        <strong>记忆状态</strong>
-        <span>${memory.enabled !== false ? "已开启" : "已关闭"} · ${taskCount} 个任务摘要 · ${artifactCount} 个产物 · ${decisionCount} 条决策 · ${escapeHtml(updatedAt)}</span>
+        <strong>${escapeHtml(t("memory.status", "记忆状态"))}</strong>
+        <span>${escapeHtml(t("memory.status.summary", "{{enabled}} · {{taskCount}} 个任务摘要 · {{artifactCount}} 个产物 · {{decisionCount}} 条决策 · {{updatedAt}}", { enabled: memory.enabled !== false ? t("memory.status.on", "已开启") : t("memory.status.off", "已关闭"), taskCount, artifactCount, decisionCount, updatedAt }))}</span>
       </div>
       <div class="settings-action-stack">
-        <button class="secondary-button" data-action="refresh-project-memory">刷新记忆</button>
-        <button class="secondary-button" data-action="save-project-memory">保存备注</button>
-        <button class="secondary-button danger" data-action="clear-project-memory">清空</button>
+        <button class="secondary-button" data-action="refresh-project-memory">${escapeHtml(t("memory.refresh", "刷新记忆"))}</button>
+        <button class="secondary-button" data-action="save-project-memory">${escapeHtml(t("memory.save", "保存备注"))}</button>
+        <button class="secondary-button danger" data-action="clear-project-memory">${escapeHtml(t("memory.clear", "清空"))}</button>
       </div>
     </div>
     <div class="project-memory-panel">
-      <label for="projectMemoryManualNotes">手写项目备注</label>
-      <textarea id="projectMemoryManualNotes" spellcheck="false" placeholder="例如：本项目已选 React + Vite；后端接口前缀为 /api；不要重复创建脚手架。">${escapeHtml(memory.manualNotes || "")}</textarea>
-      <div class="project-memory-help">这部分会被原样放入新任务规划提示词，适合记录架构选择、目录约定、已确认边界和不要重复的事项。</div>
+      <label for="projectMemoryManualNotes">${escapeHtml(t("memory.manualNotes.label", "手写项目备注"))}</label>
+      <textarea id="projectMemoryManualNotes" spellcheck="false" placeholder="${escapeHtml(t("memory.manualNotes.placeholder", "例如：项目技术栈、接口约定、目录规范、已确认的限制条件。"))}">${escapeHtml(memory.manualNotes || "")}</textarea>
+      <div class="project-memory-help">${escapeHtml(t("memory.manualNotes.help", "这部分会被原样放入新任务规划提示词，适合记录架构选择、目录约定、已确认边界和不要重复的事项。"))}</div>
     </div>
     <div class="project-memory-panel">
-      <label>自动摘要</label>
+      <label>${escapeHtml(t("memory.autoSummary", "自动摘要"))}</label>
       <pre class="project-memory-summary">${escapeHtml(formatProjectMemoryForDisplay(memory))}</pre>
     </div>
   `;
@@ -8084,31 +8361,42 @@ function renderSystemSettingsSection() {
   return `
     <div class="settings-row">
       <div>
-        <strong>应用版本</strong>
-        <span>当前 CosS 桌面应用版本。</span>
+        <strong>${escapeHtml(t("system.version", "应用版本"))}</strong>
+        <span>${escapeHtml(t("system.version.desc", "当前 CosS 桌面应用版本。"))}</span>
       </div>
       <span class="settings-value">${APP_VERSION}</span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>默认工作区路径</strong>
-        <span>新项目默认工作区仍使用当前 CosS 工作目录，后续可在这里配置全局默认路径。</span>
+        <strong>${escapeHtml(t("system.workspace", "默认工作区路径"))}</strong>
+        <span>${escapeHtml(t("system.workspace.desc", "新项目会在创建时选择工作区路径。"))}</span>
       </div>
-      <span class="settings-value">D:\\CosS</span>
+      <span class="settings-value">${escapeHtml(t("system.workspace.value", "创建项目时选择"))}</span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>当前模型摘要</strong>
-        <span>${escapeHtml(activeModel.label)} · ${escapeHtml(activeModel.modelName)}。完整配置请进入“模型”。</span>
+        <strong>${escapeHtml(t("system.language", "语言"))}</strong>
+        <span>${escapeHtml(t("system.language.desc", "设置应用界面显示语言。"))}</span>
       </div>
-      <button class="secondary-button" data-action="set-settings-section" data-section="model">打开模型</button>
+      <div class="settings-inline-field">
+        <select id="appLanguageSelect">
+          ${LANGUAGE_OPTIONS.map((language) => `<option value="${escapeHtml(language.id)}" ${state.settings.language === language.id ? "selected" : ""}>${escapeHtml(language.label)}</option>`).join("")}
+        </select>
+      </div>
     </div>
     <div class="settings-row">
       <div>
-        <strong>Agent 摘要</strong>
-        <span>当前 Agent 后端为 ${getAgentProviderLabel(state.settings.agentProvider)}。终端后端与环境检测请进入“智能体设置”。</span>
+        <strong>${escapeHtml(t("system.model", "当前模型摘要"))}</strong>
+        <span>${escapeHtml(t("system.model.summary", "{{label}} · {{modelName}}。完整配置请进入“模型”。", { label: activeModel.label, modelName: activeModel.modelName }))}</span>
       </div>
-      <button class="secondary-button" data-action="set-settings-section" data-section="agent">打开智能体</button>
+      <button class="secondary-button" data-action="set-settings-section" data-section="model">${escapeHtml(t("system.model.open", "打开模型"))}</button>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>${escapeHtml(t("system.agent", "Agent 摘要"))}</strong>
+        <span>${escapeHtml(t("system.agent.summary", "当前 Agent 后端为 {{provider}}。终端后端与环境检测请进入“智能体设置”。", { provider: getAgentProviderLabel(state.settings.agentProvider) }))}</span>
+      </div>
+      <button class="secondary-button" data-action="set-settings-section" data-section="agent">${escapeHtml(t("system.agent.open", "打开智能体"))}</button>
     </div>
   `;
 }
@@ -8117,8 +8405,8 @@ function renderMcpConfigStatus() {
   if (!mcpConfigStatus) {
     return `
       <div class="model-connectivity-status idle" data-mcp-config-status>
-        <strong>尚未检测当前项目 MCP 配置</strong>
-        <span>点击“检测配置”可检查 .mcp.json、.coss/mcp/coss-mcp.json 以及 Claude Code / Codex / CodeBuddy Code 的项目可发现状态。</span>
+        <strong>${escapeHtml(t("mcpConfig.notDetected", "尚未检测当前项目协作配置"))}</strong>
+        <span>${escapeHtml(t("mcpConfig.notDetected.desc", "点击“检测配置”可检查当前项目的 Agent 协作能力是否可用。"))}</span>
       </div>
     `;
   }
@@ -8126,8 +8414,8 @@ function renderMcpConfigStatus() {
   if (mcpConfigStatus.state === "writing" || mcpConfigStatus.state === "checking") {
     return `
       <div class="model-connectivity-status testing" data-mcp-config-status>
-        <strong>${mcpConfigStatus.state === "checking" ? "正在检测 MCP 配置" : "正在生成 MCP 配置"}</strong>
-        <span>${escapeHtml(mcpConfigStatus.message || "请稍候...")}</span>
+        <strong>${escapeHtml(mcpConfigStatus.state === "checking" ? t("mcpConfig.checking", "正在检测协作配置") : t("mcpConfig.generating", "正在生成协作配置"))}</strong>
+        <span>${escapeHtml(mcpConfigStatus.message || t("common.pleaseWait", "请稍候..."))}</span>
       </div>
     `;
   }
@@ -8145,12 +8433,12 @@ function renderMcpConfigStatus() {
 
   return `
     <div class="model-connectivity-status ${mcpConfigStatus.ok ? "ready" : "missing"}" data-mcp-config-status>
-      <strong>${mcpConfigStatus.ok ? "项目 MCP 配置健康" : "项目 MCP 配置需要修复"}</strong>
-      <span>${escapeHtml(mcpConfigStatus.error || `检测时间${checkedAt}`)}</span>
-      <span>.mcp.json：${rootReady ? "可发现" : root.exists ? root.valid ? "coss server 不匹配" : `解析失败：${root.error || "JSON 无效"}` : "缺失"}${root.path ? ` · ${root.path}` : ""}</span>
-      <span>.coss/mcp/coss-mcp.json：${cossReady ? "已同步" : coss.exists ? coss.valid ? "内容不匹配" : `解析失败：${coss.error || "JSON 无效"}` : "缺失"}${coss.path ? ` · ${coss.path}` : ""}</span>
+      <strong>${escapeHtml(mcpConfigStatus.ok ? t("mcpConfig.healthy", "项目协作配置健康") : t("mcpConfig.needFix", "项目协作配置需要修复"))}</strong>
+      <span>${escapeHtml(mcpConfigStatus.error || t("mcpConfig.checkedAt", "检测时间{{time}}", { time: checkedAt }))}</span>
+      <span>.mcp.json：${rootReady ? escapeHtml(t("mcpConfig.discoverable", "可发现")) : root.exists ? root.valid ? escapeHtml(t("mcpConfig.serverMismatch", "coss server 不匹配")) : escapeHtml(t("mcpConfig.parseFailed", "解析失败：{{error}}", { error: root.error || t("mcpConfig.jsonInvalid", "JSON 无效") })) : escapeHtml(t("mcpConfig.missing", "缺失"))}${root.path ? ` · ${escapeHtml(root.path)}` : ""}</span>
+      <span>.coss/mcp/coss-mcp.json：${cossReady ? escapeHtml(t("mcpConfig.synced", "已同步")) : coss.exists ? coss.valid ? escapeHtml(t("mcpConfig.contentMismatch", "内容不匹配")) : escapeHtml(t("mcpConfig.parseFailed", "解析失败：{{error}}", { error: coss.error || t("mcpConfig.jsonInvalid", "JSON 无效") })) : escapeHtml(t("mcpConfig.missing", "缺失"))}${coss.path ? ` · ${escapeHtml(coss.path)}` : ""}</span>
       <div class="mcp-agent-discovery-list">
-        ${providers.map(([label, ready]) => `<span class="${ready ? "ready" : "missing"}">${escapeHtml(label)}：${ready ? "可发现" : "待修复"}</span>`).join("")}
+        ${providers.map(([label, ready]) => `<span class="${ready ? "ready" : "missing"}">${escapeHtml(label)}：${ready ? escapeHtml(t("mcpConfig.discoverable", "可发现")) : escapeHtml(t("mcpConfig.needsFix", "待修复"))}</span>`).join("")}
       </div>
     </div>
   `;
@@ -8160,118 +8448,118 @@ function renderAgentSettingsSection() {
   return `
     <div class="settings-row agent-provider-row">
       <div>
-        <strong>Agent 终端</strong>
-        <span>选择创建角色 Agent 时默认使用的终端后端。</span>
+        <strong>${escapeHtml(t("agent.terminal.title", "Agent 终端"))}</strong>
+        <span>${escapeHtml(t("agent.terminal.desc", "选择创建角色 Agent 时默认使用的终端后端��"))}</span>
       </div>
       <div class="agent-provider-switch">
-        ${renderAgentProviderOption("claude", "Claude Code", "适合 Claude Code 交互式开发任务。")}
-        ${renderAgentProviderOption("codex", "Codex", "适合 Codex CLI 代码代理任务。")}
-        ${renderAgentProviderOption("codebuddy", "CodeBuddy Code", "适合 CodeBuddy Code 代码代理任务。")}
+        ${renderAgentProviderOption("claude", "Claude Code", t("agent.provider.claude.desc", "适合 Claude Code 交互式开发任务。"))}
+        ${renderAgentProviderOption("codex", "Codex", t("agent.provider.codex.desc", "适合 Codex CLI 代码代理任务。"))}
+        ${renderAgentProviderOption("codebuddy", "CodeBuddy Code", t("agent.provider.codebuddy.desc", "适合 CodeBuddy Code 代码代理任务。"))}
       </div>
     </div>
     <div class="settings-row">
       <div>
-        <strong>CosS MCP 工具层</strong>
-        <span>为当前项目生成 v0.10 Kernel MCP 配置，让 Agent 通过任务板、租约步骤、结构化结果、资源锁和审批完成协作。</span>
+        <strong>${escapeHtml(t("agent.collabConfig.title", "Agent 协作配置"))}</strong>
+        <span>${escapeHtml(t("agent.collabConfig.desc", "为当前项目启用 Agent 协作能力，支持任务进展同步、审批和结果回传。"))}</span>
       </div>
       <div class="settings-action-stack">
-        <button class="settings-toggle-button" data-action="toggle-agent-mcp-auto-config" aria-pressed="${state.settings.agentMcpAutoConfigEnabled === true}" title="创建 Agent 终端时自动维护项目 MCP 配置">
+        <button class="settings-toggle-button" data-action="toggle-agent-mcp-auto-config" aria-pressed="${state.settings.agentMcpAutoConfigEnabled === true}" title="${escapeHtml(t("agent.mcpAutoConfig.title", "创建 Agent 终端时自动维护项目协作配置"))}">
           <span class="settings-toggle ${state.settings.agentMcpAutoConfigEnabled === true ? "on" : ""}"></span>
         </button>
-        <button class="secondary-button" data-action="check-project-mcp-config">检测配置</button>
-        <button class="secondary-button" data-action="write-project-mcp-config">生成/修复</button>
-        <button class="secondary-button" data-action="show-mcp-audit">查看审计</button>
+        <button class="secondary-button" data-action="check-project-mcp-config">${escapeHtml(t("mcpConfig.detect", "检测配置"))}</button>
+        <button class="secondary-button" data-action="write-project-mcp-config">${escapeHtml(t("agent.collabConfig.fix", "生成/修复"))}</button>
+        <button class="secondary-button" data-action="show-mcp-audit">${escapeHtml(t("agent.collabConfig.audit", "查看审计"))}</button>
       </div>
     </div>
     <div class="settings-status-slot">${renderMcpConfigStatus()}</div>
     <div class="settings-row">
       <div>
-        <strong>Claude Code 自动检测</strong>
-        <span>创建 Agent 终端时，如果选择 Claude Code，会沿用自动检测与 winget 安装流程。</span>
+        <strong>${escapeHtml(t("agent.claude.autoDetect", "Claude Code 自动检测"))}</strong>
+        <span>${escapeHtml(t("agent.claude.autoDetect.desc", "创建 Agent 终端时，如果选择 Claude Code，会沿用自动检测与 winget 安装流程。"))}</span>
       </div>
-      <button class="secondary-button" data-action="check-claude">重新检测</button>
+      <button class="secondary-button" data-action="check-claude">${escapeHtml(t("commandAudit.recheck", "重新检测"))}</button>
     </div>
     <div class="settings-status-slot" id="claudeStatusMount">${renderClaudeStatus(latestClaudeStatus)}</div>
     <div class="settings-row">
       <div>
-        <strong>Claude Code 登录测试</strong>
-        <span>手动调用远程 API 校验当前凭据是否可用；没有 API key 时只显示跳过原因。</span>
+        <strong>${escapeHtml(t("agent.claude.loginTest", "Claude Code 登录测试"))}</strong>
+        <span>${escapeHtml(t("agent.loginTest.desc", "手动调用远程 API 校验当前凭据是否可用；没有 API key 时只显示跳过原因。"))}</span>
       </div>
-      <button class="secondary-button" data-action="test-agent-login" data-provider="claude">测试登录态</button>
+      <button class="secondary-button" data-action="test-agent-login" data-provider="claude">${escapeHtml(t("agent.loginTest.button", "测试登录态"))}</button>
     </div>
     <div class="settings-status-slot" id="claudeLoginTestMount">${renderAgentLoginTestStatus("claude")}</div>
     <div class="settings-row">
       <div>
-        <strong>Codex 命令</strong>
-        <span>默认查找 codex；不可运行时会通过 npm 自动安装 Codex CLI。需要自定义路径时，可设置环境变量 COSS_CODEX_COMMAND。</span>
+        <strong>${escapeHtml(t("agent.codex.command", "Codex 命令"))}</strong>
+        <span>${escapeHtml(t("agent.codex.command.desc", "默认查找 codex；不可运行时会通过 npm 自动安装 Codex CLI。需要自定义路径时，可设置环境变量 COSS_CODEX_COMMAND。"))}</span>
       </div>
       <span class="settings-value">codex</span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>Codex 自动检测</strong>
-        <span>检测 codex、npm、PATH 命中路径和 WindowsApps 应用包冲突。</span>
+        <strong>${escapeHtml(t("agent.codex.autoDetect", "Codex 自动检测"))}</strong>
+        <span>${escapeHtml(t("agent.codex.autoDetect.desc", "检测 codex、npm、PATH 命中路径和 WindowsApps 应用包冲突。"))}</span>
       </div>
-      <button class="secondary-button" data-action="check-codex">重新检测</button>
+      <button class="secondary-button" data-action="check-codex">${escapeHtml(t("commandAudit.recheck", "重新检测"))}</button>
     </div>
     <div class="settings-status-slot" id="codexStatusMount">${renderCodexStatus(latestCodexStatus)}</div>
     <div class="settings-row">
       <div>
-        <strong>Codex 登录测试</strong>
-        <span>手动调用 OpenAI/Codex 远程 API 校验当前凭据是否可用；没有 key 时只显示跳过原因。</span>
+        <strong>${escapeHtml(t("agent.codex.loginTest", "Codex 登录测试"))}</strong>
+        <span>${escapeHtml(t("agent.codex.loginTest.desc", "手动调用 OpenAI/Codex 远程 API 校验当前凭据是否可用；没有 key 时只显示跳过原因。"))}</span>
       </div>
-      <button class="secondary-button" data-action="test-agent-login" data-provider="codex">测试登录态</button>
+      <button class="secondary-button" data-action="test-agent-login" data-provider="codex">${escapeHtml(t("agent.loginTest.button", "测试登录态"))}</button>
     </div>
     <div class="settings-status-slot" id="codexLoginTestMount">${renderAgentLoginTestStatus("codex")}</div>
     <div class="settings-row">
       <div>
-        <strong>CodeBuddy Code 命令</strong>
-        <span>默认查找 codebuddy，并兼容 cbc；不可运行时会通过 npm 自动安装 CodeBuddy Code CLI。需要自定义路径时，可设置环境变量 COSS_CODEBUDDY_COMMAND。</span>
+        <strong>${escapeHtml(t("agent.codeBuddy.command", "CodeBuddy Code 命令"))}</strong>
+        <span>${escapeHtml(t("agent.codeBuddy.command.desc", "默认查找 codebuddy，并兼容 cbc；不可运行时会通过 npm 自动安装 CodeBuddy Code CLI。需要自定义路径时，可设置环境变量 COSS_CODEBUDDY_COMMAND。"))}</span>
       </div>
       <span class="settings-value">codebuddy</span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>CodeBuddy Code API Key</strong>
-        <span>创建 CodeBuddy Agent 终端时会写入 CODEBUDDY_API_KEY 环境变量；该值需要用户自行填写。</span>
+        <strong>${escapeHtml(t("agent.codeBuddy.apiKey", "CodeBuddy Code API Key"))}</strong>
+        <span>${escapeHtml(t("agent.codeBuddy.apiKey.desc", "创建 CodeBuddy Agent 终端时会写入 CODEBUDDY_API_KEY 环境变量；该值需要用户自行填写。"))}</span>
       </div>
       <div class="settings-inline-field">
-        <input type="password" autocomplete="off" placeholder="填写 CodeBuddy API Key" value="${escapeHtml(state.settings.codeBuddyApiKey || "")}" data-codebuddy-api-key />
+        <input type="password" autocomplete="off" placeholder="${escapeHtml(t("agent.codeBuddyApiKey.placeholder", "填写 CodeBuddy API Key"))}" value="${escapeHtml(state.settings.codeBuddyApiKey || "")}" data-codebuddy-api-key />
       </div>
     </div>
     <div class="settings-row">
       <div>
-        <strong>CodeBuddy Code 自动检测</strong>
-        <span>检测 codebuddy、cbc、npm 和 PATH 命中路径。</span>
+        <strong>${escapeHtml(t("agent.codeBuddy.autoDetect", "CodeBuddy Code 自动检测"))}</strong>
+        <span>${escapeHtml(t("agent.codeBuddy.autoDetect.desc", "检测 codebuddy、cbc、npm 和 PATH 命中路径。"))}</span>
       </div>
-      <button class="secondary-button" data-action="check-codebuddy">重新检测</button>
+      <button class="secondary-button" data-action="check-codebuddy">${escapeHtml(t("commandAudit.recheck", "重新检测"))}</button>
     </div>
     <div class="settings-status-slot" id="codeBuddyStatusMount">${renderCodeBuddyStatus(latestCodeBuddyStatus)}</div>
     <div class="settings-row">
       <div>
-        <strong>CodeBuddy Code 登录测试</strong>
-        <span>手动调用 CodeBuddy 兼容远程接口校验当前 API Key 是否可用；没有 key 时只显示跳过原因。</span>
+        <strong>${escapeHtml(t("agent.codeBuddy.loginTest", "CodeBuddy Code 登录测试"))}</strong>
+        <span>${escapeHtml(t("agent.codeBuddy.loginTest.desc", "手动调用 CodeBuddy 兼容远程接口校验当前 API Key 是否可用；没有 key 时只显示跳过原因。"))}</span>
       </div>
-      <button class="secondary-button" data-action="test-agent-login" data-provider="codebuddy">测试登录态</button>
+      <button class="secondary-button" data-action="test-agent-login" data-provider="codebuddy">${escapeHtml(t("agent.loginTest.button", "测试登录态"))}</button>
     </div>
     <div class="settings-status-slot" id="codeBuddyLoginTestMount">${renderAgentLoginTestStatus("codebuddy")}</div>
     <div class="settings-row">
       <div>
-        <strong>Agent 角色提示词模板</strong>
-        <span>创建 Claude Code、Codex 或 CodeBuddy Agent 终端时，会把模板渲染后写入 COSS_ROLE_PROMPT，并同步会话与任务上下文。</span>
+        <strong>${escapeHtml(t("agent.promptTemplate.title", "Agent 角色提示词模板"))}</strong>
+        <span>${escapeHtml(t("agent.promptTemplate.desc", "创建 Claude Code、Codex 或 CodeBuddy Agent 终端时，会把模板渲染后写入 COSS_ROLE_PROMPT，并同步会话与任务上下文。"))}</span>
       </div>
-      <button class="secondary-button" data-action="reset-agent-prompt-template">恢复默认</button>
+      <button class="secondary-button" data-action="reset-agent-prompt-template">${escapeHtml(t("agent.promptTemplate.reset", "恢复默认"))}</button>
     </div>
     <div class="settings-code-editor">
-      <textarea data-agent-prompt-template spellcheck="false">${escapeHtml(state.settings.agentPromptTemplate || defaultState.settings.agentPromptTemplate)}</textarea>
+      <textarea data-agent-prompt-template spellcheck="false">${escapeHtml(state.settings.agentPromptTemplate || getDefaultAgentPromptTemplate())}</textarea>
       <div class="settings-code-help">
-        支持占位符：{{roleName}}、{{roleDescription}}、{{projectName}}、{{workspace}}、{{agentProvider}}、{{agentPermissionLabel}}、{{agentPermissionInstructions}}、{{sessionId}}、{{taskTitle}}、{{taskGoal}}、{{subtaskTitle}}、{{subtaskDescription}}。
+        ${escapeHtml(t("agent.promptTemplate.help", "支持占位符：{{roleName}}、{{roleDescription}}、{{projectName}}、{{workspace}}、{{agentProvider}}、{{agentPermissionLabel}}、{{agentPermissionInstructions}}、{{sessionId}}、{{taskTitle}}、{{taskGoal}}、{{subtaskTitle}}、{{subtaskDescription}}。"))}
       </div>
     </div>
     <div class="settings-row">
       <div>
-        <strong>Agent 失败回退到 PowerShell</strong>
-        <span>关闭后，Agent 启动或安装失败时只保留错误日志窗口，不进入普通 PowerShell 提示符。</span>
+        <strong>${escapeHtml(t("agent.fallbackToShell.title", "Agent 失败回退到 PowerShell"))}</strong>
+        <span>${escapeHtml(t("agent.fallbackToShell.desc", "关闭后，Agent 启动或安装失败时只保留错误日志窗口，不进入普通 PowerShell 提示符。"))}</span>
       </div>
       <button class="settings-toggle-button" data-action="toggle-agent-fallback" aria-pressed="${state.settings.agentFallbackToShell !== false}">
         <span class="settings-toggle ${state.settings.agentFallbackToShell !== false ? "on" : ""}"></span>
@@ -8285,8 +8573,8 @@ function renderSecuritySettingsSection() {
   return `
     <div class="settings-row permission-policy-row">
       <div>
-        <strong>Agent 权限模式</strong>
-        <span>当前模式：${escapeHtml(activePolicy.label)}。新建 Agent 终端和后续任务投递都会携带该权限说明。</span>
+        <strong>${escapeHtml(t("security.permissionMode.title", "Agent 权限模式"))}</strong>
+        <span>${escapeHtml(t("security.permissionMode.desc", "当前模式：{{label}}。新建 Agent 终端和后续任务投递都会携带该权限说明。", { label: activePolicy.label }))}</span>
       </div>
       <div class="permission-policy-grid">
         ${Object.values(AGENT_PERMISSION_POLICIES).map(renderAgentPermissionOption).join("")}
@@ -8298,17 +8586,17 @@ function renderSecuritySettingsSection() {
     </div>
     <div class="settings-row">
       <div>
-        <strong>终端安全确认</strong>
-        <span>高风险命令会在执行前弹出确认窗口，并写入命令审计日志。</span>
+        <strong>${escapeHtml(t("security.terminalConfirm.title", "终端安全确认"))}</strong>
+        <span>${escapeHtml(t("security.terminalConfirm.desc", "高风险命令会在执行前弹出确认窗口，并写入命令审计日志。"))}</span>
       </div>
       <span class="settings-toggle on"></span>
     </div>
     <div class="settings-row">
       <div>
-        <strong>命令审计日志</strong>
-        <span>查看角色终端的高风险命令、确认状态和执行记录。</span>
+        <strong>${escapeHtml(t("security.auditLog.title", "命令审计日志"))}</strong>
+        <span>${escapeHtml(t("security.auditLog.desc", "查看角色终端的高风险命令、确认状态和执行记录。"))}</span>
       </div>
-      <button class="secondary-button" data-action="show-logs">打开日志</button>
+      <button class="secondary-button" data-action="show-logs">${escapeHtml(t("security.auditLog.open", "打开日志"))}</button>
     </div>
   `;
 }
@@ -8330,7 +8618,7 @@ function renderStorageOperationStatus() {
   }
   return `
     <div class="model-connectivity-status ${storageOperationStatus.ok ? "ready" : "missing"}" data-storage-operation-status>
-      <strong>${escapeHtml(storageOperationStatus.title || (storageOperationStatus.ok ? "操作完成" : "操作失败"))}</strong>
+      <strong>${escapeHtml(storageOperationStatus.title || (storageOperationStatus.ok ? t("storage.operationComplete", "操作完成") : t("storage.operationFailed", "操作失败")))}</strong>
       <span>${escapeHtml(storageOperationStatus.message || "")}</span>
     </div>
   `;
@@ -8342,61 +8630,61 @@ function renderStorageSettingsSection() {
   return `
     <div class="settings-row">
       <div>
-        <strong>SQLite 状态存储</strong>
-        <span>${info ? (info.sqliteEnabled ? "当前工作区状态已使用 SQLite 文件保存。" : info.sqliteReason) : "尚未读取存储信息。"}</span>
+        <strong>${escapeHtml(t("storage.sqlite.title", "SQLite 状态存储"))}</strong>
+        <span>${escapeHtml(info ? (info.sqliteEnabled ? t("storage.sqlite.enabled", "当前工作区状态已使用 SQLite 文件保存。") : info.sqliteReason) : t("storage.notRead", "尚未读取存储信息。"))}</span>
       </div>
-      <button class="secondary-button" data-action="refresh-storage-info">刷新</button>
+      <button class="secondary-button" data-action="refresh-storage-info">${escapeHtml(t("common.refresh", "刷新"))}</button>
     </div>
     <div class="settings-status-slot storage-status-card" data-storage-info>
       ${
         info
           ? `
             <strong>${escapeHtml(info.mode)} · Schema ${escapeHtml(info.schemaVersion)}</strong>
-            <span>SQLite：${escapeHtml(info.sqlitePath || "未启用")} · ${formatFileSize(info.sqliteSize)} · ${escapeHtml(formatDateTime(info.sqliteModifiedAt))}</span>
-            <span>JSON 兼容快照：${escapeHtml(info.statePath || "")} · ${formatFileSize(info.stateSize)}</span>
-            <span>备份目录：${escapeHtml(info.backupDirectory || "")} · ${info.backupCount || 0} 个备份</span>
+            <span>${escapeHtml(t("storage.sqlite.path", "SQLite：{{path}} · {{size}} · {{time}}", { path: info.sqlitePath || t("storage.sqlite.disabled", "未启用"), size: formatFileSize(info.sqliteSize), time: formatDateTime(info.sqliteModifiedAt) }))}</span>
+            <span>${escapeHtml(t("storage.jsonSnapshot", "JSON 兼容快照：{{path}} · {{size}}", { path: info.statePath || "", size: formatFileSize(info.stateSize) }))}</span>
+            <span>${escapeHtml(t("storage.backupDir", "备份目录：{{path}} · {{count}} 个备份", { path: info.backupDirectory || "", count: info.backupCount || 0 }))}</span>
           `
-          : "点击刷新读取 SQLite、JSON 快照和备份信息。"
+          : escapeHtml(t("storage.clickRefresh", "点击刷新读取 SQLite、JSON 快照和备份信息。"))
       }
     </div>
     ${renderStorageOperationStatus()}
     <div class="settings-row">
       <div>
-        <strong>导出状态数据</strong>
-        <span>导出当前 SQLite 中的工作区状态，便于迁移到其他机器或人工备份。</span>
+        <strong>${escapeHtml(t("storage.export.title", "导出状态数据"))}</strong>
+        <span>${escapeHtml(t("storage.export.desc", "导出当前 SQLite 中的工作区状态，便于迁移到其他机器或人工备份。"))}</span>
       </div>
-      <button class="secondary-button" data-action="export-storage-state">导出</button>
+      <button class="secondary-button" data-action="export-storage-state">${escapeHtml(t("storage.export.button", "导出"))}</button>
     </div>
     <div class="settings-row">
       <div>
-        <strong>导入状态数据</strong>
-        <span>导入前会自动创建备份，导入后会写入 SQLite 并刷新 JSON 兼容快照。</span>
+        <strong>${escapeHtml(t("storage.import.title", "导入状态数据"))}</strong>
+        <span>${escapeHtml(t("storage.import.desc", "导入前会自动创建备份，导入后会写入 SQLite 并刷新 JSON 兼容快照。"))}</span>
       </div>
-      <button class="secondary-button" data-action="import-storage-state">导入</button>
+      <button class="secondary-button" data-action="import-storage-state">${escapeHtml(t("storage.import.button", "导入"))}</button>
     </div>
     <div class="settings-row">
       <div>
-        <strong>立即创建备份</strong>
-        <span>把当前 SQLite 状态文件复制到备份目录，保留最近 ${escapeHtml(12)} 个备份。</span>
+        <strong>${escapeHtml(t("storage.backup.title", "立即创建备份"))}</strong>
+        <span>${escapeHtml(t("storage.backup.desc", "把当前 SQLite 状态文件复制到备份目录，保留最近 12 个备份。"))}</span>
       </div>
-      <button class="secondary-button" data-action="create-storage-backup">创建备份</button>
+      <button class="secondary-button" data-action="create-storage-backup">${escapeHtml(t("storage.backup.button", "创建备份"))}</button>
     </div>
     <div class="settings-row">
       <div>
-        <strong>导出诊断包</strong>
-        <span>包含存储摘要、脱敏状态快照和近期日志，用于排查异常恢复或协作问题。</span>
+        <strong>${escapeHtml(t("storage.diagnostics.title", "导出诊断包"))}</strong>
+        <span>${escapeHtml(t("storage.diagnostics.desc", "包含存储摘要、脱敏状态快照和近期日志，用于排查异常恢复或协作问题。"))}</span>
       </div>
-      <button class="secondary-button" data-action="export-diagnostics-package">导出诊断包</button>
+      <button class="secondary-button" data-action="export-diagnostics-package">${escapeHtml(t("storage.diagnostics.button", "导出诊断包"))}</button>
     </div>
     <div class="settings-row">
       <div>
-        <strong>打开数据目录</strong>
-        <span>查看 SQLite、JSON 快照、备份、诊断包和日志目录。</span>
+        <strong>${escapeHtml(t("storage.openDataDir.title", "打开数据目录"))}</strong>
+        <span>${escapeHtml(t("storage.openDataDir.desc", "查看 SQLite、JSON 快照、备份、诊断包和日志目录。"))}</span>
       </div>
-      <button class="secondary-button" data-action="open-storage-directory">打开目录</button>
+      <button class="secondary-button" data-action="open-storage-directory">${escapeHtml(t("storage.openDataDir.button", "打开目录"))}</button>
     </div>
     <div class="storage-backup-list">
-      <strong>最近备份</strong>
+      <strong>${escapeHtml(t("storage.recentBackups", "最近备份"))}</strong>
       ${
         backups.length
           ? backups.map((backup) => `
@@ -8405,7 +8693,7 @@ function renderStorageSettingsSection() {
                 <em>${escapeHtml(backup.type)} · ${formatFileSize(backup.size)} · ${escapeHtml(formatDateTime(backup.createdAt))}</em>
               </div>
             `).join("")
-          : `<span class="muted-text">暂无备份。</span>`
+          : `<span class="muted-text">${escapeHtml(t("storage.noBackups", "暂无备份。"))}</span>`
       }
     </div>
   `;
@@ -8413,17 +8701,14 @@ function renderStorageSettingsSection() {
 
 function renderSettingsContent() {
   return {
-    account: () => renderSettingsPlaceholder("账户管理", "账户登录、团队身份和同步能力将在后续版本接入。", ["本地模式继续可用", "后续支持团队空间和权限"]),
+    account: renderAccountSettingsSection,
     system: renderSystemSettingsSection,
     agent: renderAgentSettingsSection,
-    memory: () => renderSettingsPlaceholder("记忆", "这里将管理项目记忆、角色记忆和可清理的上下文缓存。", ["项目记忆开关", "角色长期记忆", "记忆导出与清理"]),
     memory: renderMemorySettingsSection,
     model: renderModelSettingsSection,
-    assistant: () => renderSettingsPlaceholder("助理设置", "这里将配置全局助理行为、默认语气和任务确认策略。", ["默认助理角色", "任务确认策略", "自动总结"]),
-    personalization: () => renderSettingsPlaceholder("个性化", "这里将配置主题、字号、桌面背景和窗口偏好。", ["浅色/深色主题", "工作区背景", "窗口默认尺寸"]),
     data: renderStorageSettingsSection,
     security: renderSecuritySettingsSection,
-    help: () => renderSettingsPlaceholder("帮助与反馈", "这里将放置使用说明、问题反馈和诊断信息。", ["快捷入口", "诊断包", "反馈记录"])
+    help: renderHelpSettingsSection
   }[activeSettingsSection]?.() || renderSystemSettingsSection();
 }
 
@@ -8435,8 +8720,8 @@ function showSettingsModal() {
         ${renderSettingsNav()}
       </aside>
       <section class="settings-panel">
-        <button class="settings-close" title="关闭" data-action="close-modal">×</button>
-        <h2>${escapeHtml(activeSection.label)}</h2>
+        <button class="settings-close" title="${escapeHtml(t("common.close", "关闭"))}" data-action="close-modal">×</button>
+        <h2>${escapeHtml(t(`settings.${activeSection.id}`, activeSection.label))}</h2>
         <div class="settings-list">
           ${renderSettingsContent()}
         </div>
@@ -8448,7 +8733,7 @@ function showSettingsModal() {
 async function checkClaudeStatus() {
   const mount = document.getElementById("claudeStatusMount");
   if (mount) {
-    mount.innerHTML = `<div class="claude-status empty" data-claude-status>正在检测 Claude Code 环境...</div>`;
+    mount.innerHTML = `<div class="claude-status empty" data-claude-status>${escapeHtml(t("app.loading.claude", "正在检测 Claude Code 环境..."))}</div>`;
   }
 
   try {
@@ -8482,7 +8767,7 @@ async function refreshStorageInfo({ rerender = true } = {}) {
   } catch (error) {
     storageOperationStatus = {
       ok: false,
-      title: "读取存储信息失败",
+      title: t("storage.readFailed", "读取存储信息失败"),
       message: error.message
     };
   }
@@ -8527,7 +8812,7 @@ async function runStorageOperation(actionName, operation) {
 async function checkCodexStatus() {
   const mount = document.getElementById("codexStatusMount");
   if (mount) {
-    mount.innerHTML = `<div class="claude-status empty" data-codex-status>正在检测 Codex CLI 环境...</div>`;
+    mount.innerHTML = `<div class="claude-status empty" data-codex-status>${escapeHtml(t("app.loading.codex", "正在检测 Codex CLI 环境..."))}</div>`;
   }
 
   try {
@@ -8557,7 +8842,7 @@ async function checkCodexStatus() {
 async function checkCodeBuddyStatus() {
   const mount = document.getElementById("codeBuddyStatusMount");
   if (mount) {
-    mount.innerHTML = `<div class="claude-status empty" data-codebuddy-status>正在检测 CodeBuddy Code CLI 环境...</div>`;
+    mount.innerHTML = `<div class="claude-status empty" data-codebuddy-status>${escapeHtml(t("app.loading.codebuddy", "正在检测 CodeBuddy Code 环境..."))}</div>`;
   }
 
   try {
@@ -8653,7 +8938,7 @@ async function checkCurrentProjectMcpConfig({ rerender = true } = {}) {
   if (!window.cossAPI?.checkProjectMcpConfig) {
     mcpConfigStatus = {
       ok: false,
-      error: "当前运行环境未暴露 MCP 配置检测接口。"
+      error: "当前运行环境未暴露 协作配置检测接口。"
     };
     if (rerender) {
       refreshSettingsModalIfOpen();
@@ -8671,7 +8956,7 @@ async function checkCurrentProjectMcpConfig({ rerender = true } = {}) {
 
   try {
     const result = await window.cossAPI.checkProjectMcpConfig(request);
-    mcpConfigStatus = result || { ok: false, error: "MCP 配置检测无返回。" };
+    mcpConfigStatus = result || { ok: false, error: "协作配置检测无返回。" };
     recordAppLog("settings.mcp-project-config.checked", {
       projectId: request.projectId,
       ok: Boolean(result?.ok),
@@ -8713,7 +8998,7 @@ async function writeCurrentProjectMcpConfig() {
   if (!window.cossAPI?.writeProjectMcpConfig) {
     mcpConfigStatus = {
       ok: false,
-      error: "当前运行环境未暴露 MCP 配置生成接口。"
+      error: "当前运行环境未暴露 协作配置生成接口。"
     };
     refreshSettingsModalIfOpen();
     return { ok: false, error: mcpConfigStatus.error };
@@ -8732,7 +9017,7 @@ async function writeCurrentProjectMcpConfig() {
     } else {
       mcpConfigStatus = {
         ok: false,
-        error: result?.error || "MCP 配置生成失败。"
+        error: result?.error || "协作配置生成失败。"
       };
     }
     recordAppLog("settings.mcp-project-config.completed", {
@@ -8772,49 +9057,49 @@ async function showMcpAuditModal() {
     .join("");
   const renderAuditShell = (body, eventsCount = null) => `
     <div class="modal mcp-audit-modal">
-      <h2>MCP 工具审计</h2>
+      <h2>${escapeHtml(t("security.mcpAudit.title", "协作工具审计"))}</h2>
       <p>${eventsCount === null
-        ? "正在读取最近的 mcp.* 日志事件。"
-        : `最近 ${eventsCount} 条 MCP 事件。可按角色、任务、工具和关键词过滤。`}</p>
+        ? escapeHtml(t("security.mcpAudit.loading", "正在读取最近的协作工具日志。"))
+        : escapeHtml(t("security.mcpAudit.summary", "最近 {{count}} 条协作工具事件。可按角色、任务、工具和关键词过滤。", { count: eventsCount }))}</p>
       <div class="mcp-audit-filterbar">
         <label>
-          <span>角色</span>
+          <span>${escapeHtml(t("taskList.filter.role", "角色"))}</span>
           <select id="mcpAuditRoleFilter">
-            <option value="">全部角色</option>
+            <option value="">${escapeHtml(t("taskList.filter.allRoles", "全部角色"))}</option>
             ${roleOptions}
           </select>
         </label>
         <label>
-          <span>任务</span>
+          <span>${escapeHtml(t("security.mcpAudit.task", "任务"))}</span>
           <select id="mcpAuditTaskFilter">
-            <option value="">全部任务</option>
+            <option value="">${escapeHtml(t("security.mcpAudit.allTasks", "全部任务"))}</option>
             ${taskOptions}
           </select>
         </label>
         <label>
-          <span>工具</span>
+          <span>${escapeHtml(t("security.mcpAudit.tool", "工具"))}</span>
           <select id="mcpAuditToolFilter">
-            <option value="">全部工具</option>
+            <option value="">${escapeHtml(t("security.mcpAudit.allTools", "全部工具"))}</option>
             ${toolOptions}
           </select>
         </label>
         <label>
-          <span>搜索</span>
-          <input id="mcpAuditQueryFilter" value="${escapeHtml(mcpAuditFilters.query || "")}" placeholder="事件、payload、错误">
+          <span>${escapeHtml(t("nav.search", "搜索"))}</span>
+          <input id="mcpAuditQueryFilter" value="${escapeHtml(mcpAuditFilters.query || "")}" placeholder="${escapeHtml(t("security.mcpAudit.queryPlaceholder", "事件、payload、错误"))}">
         </label>
-        <button class="secondary-button compact" data-action="apply-mcp-audit-filters">应用</button>
+        <button class="secondary-button compact" data-action="apply-mcp-audit-filters">${escapeHtml(t("common.apply", "应用"))}</button>
       </div>
       ${body}
       <div class="modal-actions">
-        <button class="secondary-button" data-action="show-settings">返回设置</button>
-        <button class="secondary-button" data-action="show-mcp-audit">刷新</button>
-        <button class="primary-button" data-action="close-modal">关闭</button>
+        <button class="secondary-button" data-action="show-settings">${escapeHtml(t("security.mcpAudit.backToSettings", "返回设置"))}</button>
+        <button class="secondary-button" data-action="show-mcp-audit">${escapeHtml(t("common.refresh", "刷新"))}</button>
+        <button class="primary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button>
       </div>
     </div>
   `;
 
   renderModal(`
-    ${renderAuditShell(`<div class="message-empty">正在读取...</div>`)}
+    ${renderAuditShell(`<div class="message-empty">${escapeHtml(t("common.loading", "正在读取..."))}</div>`)}
   `);
 
   try {
@@ -8847,16 +9132,16 @@ async function showMcpAuditModal() {
 function showTaskMcpConfigPrompt(task, status) {
   renderModal(`
     <div class="modal">
-      <h2>为本次任务启用 MCP 自动协作</h2>
-      <p>当前项目 MCP 配置尚未就绪。生成后，Claude Code、Codex、CodeBuddy Code 可通过 CosS MCP 工具读取任务、领取消息、续租步骤和回传结构化结果。</p>
+      <h2>${escapeHtml(t("mcpConfig.enable.title", "启用 Agent 协作配置"))}</h2>
+      <p>${escapeHtml(t("mcpConfig.enable.desc", "当前项目的 Agent 协作配置尚未就绪。生成后，协作者可以同步任务进展并回传结果。"))}</p>
       <div class="model-connectivity-status missing">
-        <strong>${escapeHtml(task?.title || "新任务")} · MCP 配置待修复</strong>
-        <span>${escapeHtml(status?.error || ".mcp.json 或 .coss/mcp/coss-mcp.json 缺失/不匹配。")}</span>
+        <strong>${escapeHtml(task?.title || t("task.create.title", "新任务"))} · ${escapeHtml(t("mcpConfig.needFix", "项目协作配置需要修复"))}</strong>
+        <span>${escapeHtml(status?.error || t("mcpConfig.missingOrMismatch", "项目协作配置缺失或不匹配。"))}</span>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">暂不处理</button>
-        <button class="secondary-button" data-action="open-agent-settings">打开智能体设置</button>
-        <button class="primary-button" data-action="write-task-mcp-config">生成/修复配置</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("mcpConfig.later", "暂不处理"))}</button>
+        <button class="secondary-button" data-action="open-agent-settings">${escapeHtml(t("system.agent.open", "打开智能体设置"))}</button>
+        <button class="primary-button" data-action="write-task-mcp-config">${escapeHtml(t("mcpConfig.fixConfig", "生成/修复配置"))}</button>
       </div>
     </div>
   `);
@@ -8893,6 +9178,21 @@ async function ensureProjectMcpConfigAfterTaskCreated(task) {
 async function testModelConnectivity(provider) {
   const config = getModelConfig(provider);
   modelEditorProvider = config.id;
+
+  if (!String(config.baseUrl || "").trim() || !String(config.modelName || "").trim()) {
+    recordAppLog("model.connectivity.skipped", {
+      provider: config.id,
+      modelName: config.modelName,
+      reason: "missing-endpoint-or-model"
+    }, "warn");
+    modelConnectivityStatuses[config.id] = {
+      ok: false,
+      checkedAt: new Date().toISOString(),
+      error: "请先填写 Base URL 和模型名称再测试连通性。"
+    };
+    refreshSettingsModalIfOpen();
+    return;
+  }
 
   if (config.apiKeyRequired && !config.apiKey) {
     recordAppLog("model.connectivity.skipped", {
@@ -8995,37 +9295,37 @@ function handleAppMenuAction(payload) {
 const APP_MENU_DEFINITIONS = [
   {
     id: "file",
-    label: "文件",
+    get label() { return t("menu.file", "文件"); },
     items: [
-      { label: "新建窗口", command: "new-window", shortcut: "Ctrl+N" },
-      { label: "新建任务", command: "show-create-task", shortcut: "Ctrl+Shift+T" },
-      { label: "新建项目", command: "show-create-project", shortcut: "Ctrl+Shift+N" },
+      { get label() { return t("menu.file.newWindow", "新建窗口"); }, command: "new-window", shortcut: "Ctrl+N" },
+      { get label() { return t("menu.file.newTask", "新建任务"); }, command: "show-create-task", shortcut: "Ctrl+Shift+T" },
+      { get label() { return t("menu.file.newProject", "新建项目"); }, command: "show-create-project", shortcut: "Ctrl+Shift+N" },
       { type: "separator" },
-      { label: "设置", command: "show-settings", shortcut: "Ctrl+," },
+      { get label() { return t("nav.settings", "设置"); }, command: "show-settings", shortcut: "Ctrl+," },
       { type: "separator" },
-      { label: "关闭窗口", command: "close-window", shortcut: "Ctrl+W" }
+      { get label() { return t("menu.file.closeWindow", "关闭窗口"); }, command: "close-window", shortcut: "Ctrl+W" }
     ]
   },
   {
     id: "edit",
-    label: "编辑",
+    get label() { return t("menu.edit", "编辑"); },
     items: [
-      { label: "撤销(U)", command: "edit-undo", shortcut: "Ctrl+Z" },
-      { label: "重做(R)", command: "edit-redo", shortcut: "Ctrl+Y" },
+      { get label() { return t("menu.edit.undo", "撤销(U)"); }, command: "edit-undo", shortcut: "Ctrl+Z" },
+      { get label() { return t("menu.edit.redo", "重做(R)"); }, command: "edit-redo", shortcut: "Ctrl+Y" },
       { type: "separator" },
-      { label: "剪切(T)", command: "edit-cut", shortcut: "Ctrl+X" },
-      { label: "复制(C)", command: "edit-copy", shortcut: "Ctrl+C" },
-      { label: "粘贴(P)", command: "edit-paste", shortcut: "Ctrl+V" },
+      { get label() { return t("menu.edit.cut", "剪切(T)"); }, command: "edit-cut", shortcut: "Ctrl+X" },
+      { get label() { return t("menu.edit.copy", "复制(C)"); }, command: "edit-copy", shortcut: "Ctrl+C" },
+      { get label() { return t("menu.edit.paste", "粘贴(P)"); }, command: "edit-paste", shortcut: "Ctrl+V" },
       { type: "separator" },
-      { label: "全选(A)", command: "edit-select-all", shortcut: "Ctrl+A" }
+      { get label() { return t("menu.edit.selectAll", "全选(A)"); }, command: "edit-select-all", shortcut: "Ctrl+A" }
     ]
   },
   {
     id: "help",
-    label: "帮助",
+    get label() { return t("menu.help", t("settings.help", "帮助")); },
     items: [
-      { label: "打开日志目录", command: "open-log-directory" },
-      { label: "关于 CosS", command: "show-about" }
+      { get label() { return t("menu.help.openLogs", "打开日志目录"); }, command: "open-log-directory" },
+      { get label() { return t("about.title", "关于 CosS"); }, command: "show-about" }
     ]
   }
 ];
@@ -9038,14 +9338,14 @@ function renderAppTitlebar() {
           <img class="app-title-icon" src="./Logo.png" alt="" aria-hidden="true" draggable="false" />
           <span class="app-title-text">CosS</span>
         </div>
-        <nav class="app-menu-bar" aria-label="应用菜单">
+        <nav class="app-menu-bar" aria-label="${escapeHtml(t("menu.appMenu", "应用菜单"))}">
           ${APP_MENU_DEFINITIONS.map(renderAppMenuButton).join("")}
         </nav>
       </div>
-      <div class="app-window-controls" aria-label="窗口控制">
-        <button class="app-window-control" title="最小化" data-action="window-control" data-window-action="minimize" aria-label="最小化">-</button>
-        <button class="app-window-control" title="${isWindowMaximized ? "还原" : "最大化"}" data-action="window-control" data-window-action="toggle-maximize" aria-label="${isWindowMaximized ? "还原" : "最大化"}">${isWindowMaximized ? "❐" : "□"}</button>
-        <button class="app-window-control close" title="关闭" data-action="window-control" data-window-action="close" aria-label="关闭">×</button>
+      <div class="app-window-controls" aria-label="${escapeHtml(t("window.controls", "窗口控制"))}">
+        <button class="app-window-control" title="${escapeHtml(t("window.minimize", "最小化"))}" data-action="window-control" data-window-action="minimize" aria-label="${escapeHtml(t("window.minimize", "最小化"))}">-</button>
+        <button class="app-window-control" title="${escapeHtml(isWindowMaximized ? t("window.restore", "还原") : t("window.maximize", "最大化"))}" data-action="window-control" data-window-action="toggle-maximize" aria-label="${escapeHtml(isWindowMaximized ? t("window.restore", "还原") : t("window.maximize", "最大化"))}">${isWindowMaximized ? "❐" : "□"}</button>
+        <button class="app-window-control close" title="${escapeHtml(t("common.close", "关闭"))}" data-action="window-control" data-window-action="close" aria-label="${escapeHtml(t("common.close", "关闭"))}">×</button>
       </div>
     </header>
   `;
@@ -9148,8 +9448,11 @@ async function executeCustomMenuCommand(command) {
 }
 
 function render() {
+  syncI18nLanguage();
+  document.documentElement.lang = getAppLanguage();
+  document.documentElement.dir = getAppLanguage() === "ar-SA" ? "rtl" : "ltr";
   const project = getProject();
-  const sidebarContent = sidebarCollapsed ? "" : `${renderSidebar(project)}<div class="sidebar-resizer" data-sidebar-resizer title="拖动调整侧边栏宽度"></div>`;
+  const sidebarContent = sidebarCollapsed ? "" : `${renderSidebar(project)}<div class="sidebar-resizer" data-sidebar-resizer title="${escapeHtml(t("sidebar.resizer.title", "拖动调整侧边栏宽度"))}"></div>`;
   captureTaskListScrollState();
   hydratedBrowserViews.clear();
   appRoot.innerHTML = `
@@ -9211,9 +9514,9 @@ function renderSidebar(project) {
         <button class="project-open" data-action="select-project" data-project-id="${item.id}" title="${escapeHtml(item.name)}">
           <span class="nav-icon">${icon("file")}</span>
           <span class="project-name">${escapeHtml(item.name)}</span>
-          <span class="project-time" title="${escapeHtml(createdTitle ? `创建于 ${createdTitle}` : "创建时间未知")}">${escapeHtml(createdLabel)}</span>
+          <span class="project-time" title="${escapeHtml(createdTitle ? t("project.createdAt", "创建于 {{time}}", { time: createdTitle }) : t("project.createdAtUnknown", "创建时间未知"))}">${escapeHtml(createdLabel)}</span>
         </button>
-        <button class="project-delete" title="删除项目" data-action="show-delete-project" data-project-id="${escapeHtml(item.id)}">×</button>
+        <button class="project-delete" title="${escapeHtml(t("project.delete.tooltip", "删除项目"))}" data-action="show-delete-project" data-project-id="${escapeHtml(item.id)}">×</button>
       </div>
     `;
     })
@@ -9224,28 +9527,28 @@ function renderSidebar(project) {
       <div class="brand-row">
         <div class="brand"><span>CosS</span> <span class="brand-version">${APP_VERSION}</span></div>
         <div class="icon-strip">
-          <button class="icon-button" title="新建项目" data-action="show-create-project">${icon("new")}</button>
-          <button class="icon-button" title="搜索" data-action="show-search">${icon("search")}</button>
-          <button class="icon-button sidebar-toggle-button" title="隐藏侧边栏" data-action="toggle-sidebar">${icon("sidebar")}</button>
+          <button class="icon-button" title="${escapeHtml(t("nav.newProject", "新建项目"))}" data-action="show-create-project">${icon("new")}</button>
+          <button class="icon-button" title="${escapeHtml(t("nav.search", "搜索"))}" data-action="show-search">${icon("search")}</button>
+          <button class="icon-button sidebar-toggle-button" title="${escapeHtml(t("nav.hideSidebar", "隐藏侧边栏"))}" data-action="toggle-sidebar">${icon("sidebar")}</button>
         </div>
       </div>
       <nav class="nav">
-        <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>新建任务</button>
-        <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>消息</button>
-        <button class="nav-item active"><span class="nav-icon">${icon("cube")}</span>项目</button>
+        <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>${escapeHtml(t("nav.newTask", "新建任务"))}</button>
+        <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>${escapeHtml(t("nav.messages", "消息"))}</button>
+        <button class="nav-item active"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
       </nav>
       <div class="section-title">
-        <span>项目 (${state.projects.length})</span>
-        <button class="icon-button" title="新建项目" data-action="show-create-project">${icon("plus")}</button>
+        <span>${escapeHtml(t("nav.projects", "项目"))} (${state.projects.length})</span>
+        <button class="icon-button" title="${escapeHtml(t("nav.newProject", "新建项目"))}" data-action="show-create-project">${icon("plus")}</button>
       </div>
       <div class="project-list">
-        ${projects || `<div class="project-list-empty">暂无项目</div>`}
+        ${projects || `<div class="project-list-empty">${escapeHtml(t("nav.noProjects", "暂无项目"))}</div>`}
       </div>
       <div class="sidebar-footer">
-        <div class="profile-name">Mood_01</div>
-        <button class="icon-button" title="通知">${icon("bell")}</button>
-        <button class="icon-button" title="设置" data-action="show-settings">${icon("gear")}</button>
-        <div class="avatar"></div>
+        <div class="profile-name">${escapeHtml(getUserProfile().displayName || t("account.defaultName", "本地用户"))}</div>
+        <button class="icon-button" title="${escapeHtml(t("nav.notifications", "通知"))}">${icon("bell")}</button>
+        <button class="icon-button" title="${escapeHtml(t("nav.settings", "设置"))}" data-action="show-settings">${icon("gear")}</button>
+        ${renderUserAvatar()}
       </div>
     </aside>
   `;
@@ -9289,18 +9592,18 @@ function renderWorkspace(project) {
 
   return `
     <section class="workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}" data-active-desktop-id="${escapeHtml(activeDesktop?.id || "")}">
-      ${sidebarCollapsed ? `<button class="sidebar-floating-toggle sidebar-toggle-button" title="显示侧边栏" data-action="toggle-sidebar">${icon("sidebar")}</button>` : ""}
+      ${sidebarCollapsed ? `<button class="sidebar-floating-toggle sidebar-toggle-button" title="${escapeHtml(t("nav.showSidebar", "显示侧边栏"))}" data-action="toggle-sidebar">${icon("sidebar")}</button>` : ""}
       <div class="workspace-topbar">
         <div class="project-heading">
-          <h1 class="workspace-title">${project ? escapeHtml(project.name) : "未选择项目"}</h1>
-          <div class="workspace-subtitle">${project ? `${escapeHtml(project.path)} · ${escapeHtml(activeDesktop?.name || "主对话")} · ${activeProgramCount} 个程序 · ${activeConversationTaskCount} 个对话任务 · ${desktopCount} 个对话 · ${project.tasks.length} 个项目任务` : "创建项目后启动工作区"}</div>
+          <h1 class="workspace-title">${project ? escapeHtml(project.name) : escapeHtml(t("desktop.noProject", "未选择项目"))}</h1>
+          <div class="workspace-subtitle">${project ? `${escapeHtml(project.path)} · ${escapeHtml(activeDesktop?.name || t("desktop.defaultName", "主对话"))} · ${escapeHtml(t("workspace.programs", "{{count}} 个程序", { count: activeProgramCount }))} · ${escapeHtml(t("workspace.conversationTasks", "{{count}} 个对话任务", { count: activeConversationTaskCount }))} · ${escapeHtml(t("workspace.conversations", "{{count}} 个对话", { count: desktopCount }))} · ${escapeHtml(t("workspace.projectTasks", "{{count}} 个项目任务", { count: project.tasks.length }))}` : escapeHtml(t("desktop.createToStart", "创建项目后启动工作区"))}</div>
         </div>
         <div class="workspace-actions">
-          <button class="secondary-button" data-action="show-message-center">${icon("assistant")}消息中心</button>
-          <button class="secondary-button task-view-toggle" data-action="show-task-view">${icon("layout")}对话视图</button>
-          <button class="secondary-button" data-action="open-task-list-window">${icon("task")}任务列表</button>
-          <button class="secondary-button" data-action="show-role-picker" data-type="terminal">${icon("terminal")}新建终端</button>
-          <button class="secondary-button" data-action="show-create-task">${icon("task")}新建任务</button>
+          <button class="secondary-button" data-action="show-message-center">${icon("assistant")}${escapeHtml(t("context.messageCenter", "消息中心"))}</button>
+          <button class="secondary-button task-view-toggle" data-action="show-task-view">${icon("layout")}${escapeHtml(t("desktop.conversationView", "对话视图"))}</button>
+          <button class="secondary-button" data-action="open-task-list-window">${icon("task")}${escapeHtml(t("context.taskList", "任务列表"))}</button>
+          <button class="secondary-button" data-action="show-role-picker" data-type="terminal">${icon("terminal")}${escapeHtml(t("context.newTerminal", "新建终端"))}</button>
+          <button class="secondary-button" data-action="show-create-task">${icon("task")}${escapeHtml(t("context.newTask", "新建任务"))}</button>
         </div>
       </div>
       <div class="desktop ${windows ? "" : "empty"}" data-action="desktop" oncontextmenu="return false;">
@@ -9318,18 +9621,18 @@ function renderEmptyState(project) {
   if (!project) {
     return `
       <div class="empty-state">
-        <h2>创建一个项目开始</h2>
-        <p>项目会拥有独立的工作区、角色程序、任务历史和协作状态。</p>
-        <button class="primary-button" data-action="show-create-project">${icon("plus")}新建项目</button>
+        <h2>${escapeHtml(t("emptyState.noProject.title", "创建一个项目开始"))}</h2>
+        <p>${escapeHtml(t("emptyState.noProject.desc", "项目会拥有独立的工作区、角色程序、任务历史和协作状态。"))}</p>
+        <button class="primary-button" data-action="show-create-project">${icon("plus")}${escapeHtml(t("nav.newProject", "新建项目"))}</button>
       </div>
     `;
   }
 
   return `
     <div class="empty-state">
-      <h2>${escapeHtml(project.name)} 已开机</h2>
-      <p>在桌面空白处右键创建终端、浏览器、文件或任务。创建程序时会先选择角色。</p>
-      <button class="primary-button" data-action="show-role-picker" data-type="terminal">${icon("terminal")}创建角色终端</button>
+      <h2>${escapeHtml(t("emptyState.projectReady.title", "{{name}} 已开机", { name: project.name }))}</h2>
+      <p>${escapeHtml(t("emptyState.projectReady.desc", "在桌面空白处右键创建终端、浏览器、文件或任务。创建程序时会先选择角色。"))}</p>
+      <button class="primary-button" data-action="show-role-picker" data-type="terminal">${icon("terminal")}${escapeHtml(t("emptyState.createTerminal", "创建角色终端"))}</button>
     </div>
   `;
 }
@@ -9340,7 +9643,7 @@ function renderBootScreen(project) {
       <div class="boot-panel">
         <div class="boot-logo"></div>
         <h2>${escapeHtml(project.name)} 工作区开机中</h2>
-        <p>正在加载项目配置、角色模板、消息通道和桌面布局。</p>
+        <p>${escapeHtml(t("app.loading.projectConfig", "正在加载项目配置、角色模板、消息通道和桌面布局。"))}</p>
         <div class="progress-track"><div class="progress-bar"></div></div>
       </div>
     </div>
@@ -9359,12 +9662,12 @@ function renderDock(project) {
 
   return `
     <div class="dock">
-      <button class="dock-button" title="搜索" data-action="show-search">${icon("search")}</button>
-      <button class="dock-button task-view-toggle" title="对话视图" data-action="show-task-view">${icon("layout")}</button>
-      <button class="dock-button" title="任务列表" data-action="open-task-list-window">${icon("task")}</button>
-      <button class="dock-button" title="新建终端" data-action="show-role-picker" data-type="terminal">${icon("terminal")}</button>
-      <button class="dock-button" title="新建浏览器" data-action="show-role-picker" data-type="browser">${icon("globe")}</button>
-      <button class="dock-button" title="新建文件" data-action="show-role-picker" data-type="file">${icon("file")}</button>
+      <button class="dock-button" title="${escapeHtml(t("nav.search", "搜索"))}" data-action="show-search">${icon("search")}</button>
+      <button class="dock-button task-view-toggle" title="${escapeHtml(t("desktop.conversationView", "对话视图"))}" data-action="show-task-view">${icon("layout")}</button>
+      <button class="dock-button" title="${escapeHtml(t("context.taskList", "任务列表"))}" data-action="open-task-list-window">${icon("task")}</button>
+      <button class="dock-button" title="${escapeHtml(t("context.newTerminal", "新建终端"))}" data-action="show-role-picker" data-type="terminal">${icon("terminal")}</button>
+      <button class="dock-button" title="${escapeHtml(t("context.newBrowser", "新建浏览器"))}" data-action="show-role-picker" data-type="browser">${icon("globe")}</button>
+      <button class="dock-button" title="${escapeHtml(t("context.newFile", "新建文件"))}" data-action="show-role-picker" data-type="file">${icon("file")}</button>
       ${buttons}
     </div>
   `;
@@ -9377,15 +9680,15 @@ function renderTaskView(project) {
 
   return `
     <div class="task-view-backdrop" data-action="close-task-view">
-      <div class="task-view-panel" role="dialog" aria-label="对话视图" data-no-focus="true">
+      <div class="task-view-panel" role="dialog" aria-label="${escapeHtml(t("desktop.conversationView", "对话视图"))}" data-no-focus="true">
         <div class="task-view-head">
           <div>
-            <strong>对话视图</strong>
-            <span>一个对话是一组持续工作的桌面程序；同一对话内可连续发布任务并复用已有角色程序。</span>
+            <strong>${escapeHtml(t("desktop.conversationView", "对话视图"))}</strong>
+            <span>${escapeHtml(t("desktop.conversationView.desc", "一个对话是一组持续工作的桌面程序；同一对话内可连续发布任务并复用已有角色程序。"))}</span>
           </div>
-          <button class="secondary-button compact" data-action="create-desktop">新建对话</button>
+          <button class="secondary-button compact" data-action="create-desktop">${escapeHtml(t("desktop.newConversation", "新建对话"))}</button>
         </div>
-        <div class="snap-layout-strip" aria-label="窗口布局">
+        <div class="snap-layout-strip" aria-label="${escapeHtml(t("window.layout", "窗口布局"))}">
           ${TASK_LAYOUT_PRESETS.map((layout) => `
             <button class="snap-layout-button ${activeLayoutPreset === layout.id ? "active" : ""}" data-action="select-layout-preset" data-layout="${layout.id}" title="${escapeHtml(layout.label)}">
               <span class="snap-layout ${layout.id}" aria-hidden="true">
@@ -9434,9 +9737,9 @@ function renderProgramWindow(win) {
         <div class="traffic-lights"><span></span><span></span><span></span></div>
         <div class="window-title">${escapeHtml(win.title)}</div>
         <div class="window-controls" data-no-drag="true" data-no-focus="true">
-          <button class="window-control" title="最小化" data-action="minimize-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="最小化窗口">&#8211;</button>
-          <button class="window-control" title="${win.maximized ? "还原" : "最大化"}" data-action="toggle-maximize-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${win.maximized ? "还原窗口" : "最大化窗口"}">${win.maximized ? "&#10064;" : "&#9633;"}</button>
-          <button class="window-control" title="关闭" data-action="close-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="关闭窗口">×</button>
+          <button class="window-control" title="${escapeHtml(t("window.minimize", "最小化"))}" data-action="minimize-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${escapeHtml(t("window.minimize", "最小化"))}">&#8211;</button>
+          <button class="window-control" title="${escapeHtml(win.maximized ? t("window.restore", "还原") : t("window.maximize", "最大化"))}" data-action="toggle-maximize-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${escapeHtml(win.maximized ? t("window.restore", "还原窗口") : t("window.maximize", "最大化窗口"))}">${win.maximized ? "&#10064;" : "&#9633;"}</button>
+          <button class="window-control" title="${escapeHtml(t("common.close", "关闭"))}" data-action="close-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${escapeHtml(t("window.close", "关闭窗口"))}">×</button>
         </div>
       </div>
       <div class="window-content">${content}</div>
@@ -9454,8 +9757,8 @@ function renderCollabOverlay(project) {
       const isAgentWindow = win.type === "terminal" && normalizeTerminalMode(win.terminalMode) === "agent";
       const relayClass = isAgentWindow ? `relay-${relayStage.className || getRelayStageClass(relayStage.stage)}` : "";
       const badgeTitle = isAgentWindow
-        ? `协作状态：${getStatusLabel(status)}；Agent 接力阶段：${relayStage.label}`
-        : `协作状态：${getStatusLabel(status)}`;
+        ? t("collab.statusWithRelay", "协作状态：{{status}}；Agent 接力阶段：{{label}}", { status: getStatusLabel(status), label: relayStage.label })
+        : t("collab.status", "协作状态：{{status}}", { status: getStatusLabel(status) });
       const badgeContent = isAgentWindow
         ? (relayStage.symbol || getRelayStageSymbol(relayStage.stage))
         : (collaborators.length || statusSymbol(status));
@@ -9485,7 +9788,7 @@ function renderTerminalContent(win) {
   return `
     <div class="terminal-mount" data-terminal-id="${win.id}" data-role-name="${escapeHtml(role.name)}">
       <div class="terminal-loading">
-        正在启动 ${escapeHtml(role.name)} ${modeLabel}...
+        ${escapeHtml(t("terminal.starting", "正在启动 {{role}} {{mode}}...", { role: role.name, mode: modeLabel }))}
       </div>
     </div>
   `;
@@ -9506,28 +9809,28 @@ function renderBrowserContent(win) {
           <div class="browser-tab-shell ${tab.id === win.activeBrowserTabId ? "active" : ""}">
             <button class="browser-tab ${tab.id === win.activeBrowserTabId ? "active" : ""}" data-action="browser-switch-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">
               ${tab.favicon ? `<img class="browser-tab-favicon" src="${escapeHtml(tab.favicon)}" alt="" />` : `<span class="browser-tab-fallback"></span>`}
-              <span>${escapeHtml(tab.title || tab.url || "新标签")}</span>
+              <span>${escapeHtml(tab.title || tab.url || t("browser.newTab", "新标签"))}</span>
             </button>
-            ${win.browserTabs.length > 1 ? `<button class="browser-tab-close" title="关闭标签" data-action="browser-close-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">×</button>` : ""}
+            ${win.browserTabs.length > 1 ? `<button class="browser-tab-close" title="${escapeHtml(t("browser.closeTab", "关闭标签"))}" data-action="browser-close-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">×</button>` : ""}
           </div>
         `).join("")}
-        <button class="icon-button" title="新标签" data-action="browser-new-tab" data-window-id="${escapeHtml(win.id)}">+</button>
+        <button class="icon-button" title="${escapeHtml(t("browser.newTab", "新标签"))}" data-action="browser-new-tab" data-window-id="${escapeHtml(win.id)}">+</button>
       </div>
       <div class="browser-bar">
-        <button class="icon-button" title="后退" data-action="browser-back" data-window-id="${escapeHtml(win.id)}">‹</button>
-        <button class="icon-button" title="前进" data-action="browser-forward" data-window-id="${escapeHtml(win.id)}">›</button>
-        <button class="icon-button" title="刷新" data-action="browser-reload" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
+        <button class="icon-button" title="${escapeHtml(t("browser.back", "后退"))}" data-action="browser-back" data-window-id="${escapeHtml(win.id)}">‹</button>
+        <button class="icon-button" title="${escapeHtml(t("browser.forward", "前进"))}" data-action="browser-forward" data-window-id="${escapeHtml(win.id)}">›</button>
+        <button class="icon-button" title="${escapeHtml(t("browser.reload", "刷新"))}" data-action="browser-reload" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
         <input class="browser-address" data-browser-address="${escapeHtml(win.id)}" value="${escapeHtml(url)}" />
-        <button class="primary-button compact" data-action="browser-go" data-window-id="${escapeHtml(win.id)}">打开</button>
-        <button class="secondary-button compact" data-action="browser-bookmark" data-window-id="${escapeHtml(win.id)}">${bookmarks.includes(url) ? "已收藏" : "收藏"}</button>
+        <button class="primary-button compact" data-action="browser-go" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("browser.go", "打开"))}</button>
+        <button class="secondary-button compact" data-action="browser-bookmark" data-window-id="${escapeHtml(win.id)}">${escapeHtml(bookmarks.includes(url) ? t("browser.bookmarked", "已收藏") : t("browser.bookmark", "收藏"))}</button>
       </div>
       <div class="browser-quick-links">
-        <span>收藏</span>
-        ${bookmarks.slice(-5).reverse().map((item) => `<button data-action="browser-open-bookmark" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("") || "<em>暂无</em>"}
-        <span>历史</span>
-        ${history.map((item) => `<button data-action="browser-open-history" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item.url)}">${escapeHtml(item.title || item.url)}</button>`).join("") || "<em>暂无</em>"}
+        <span>${escapeHtml(t("browser.bookmarks", "收藏"))}</span>
+        ${bookmarks.slice(-5).reverse().map((item) => `<button data-action="browser-open-bookmark" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("") || `<em>${escapeHtml(t("browser.noBookmarks", "暂无"))}</em>`}
+        <span>${escapeHtml(t("browser.history", "历史"))}</span>
+        ${history.map((item) => `<button data-action="browser-open-history" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item.url)}">${escapeHtml(item.title || item.url)}</button>`).join("") || `<em>${escapeHtml(t("browser.noBookmarks", "暂无"))}</em>`}
       </div>
-      <div class="browser-status" data-browser-status="${escapeHtml(win.id)}">${escapeHtml(win.browserStatus || `${role.name} 浏览器就绪`)}</div>
+      <div class="browser-status" data-browser-status="${escapeHtml(win.id)}">${escapeHtml(win.browserStatus || t("browser.ready", "{{role}} 浏览器就绪", { role: role.name }))}</div>
       <webview class="browser-webview"
         data-browser-webview="${escapeHtml(win.id)}"
         data-browser-tab-id="${escapeHtml(activeTab?.id || "")}"
@@ -9561,9 +9864,9 @@ function renderFileLineNumbers(content) {
 
 function renderFileEditorFooter(win, content = win.fileDraft || "", cursorIndex = 0) {
   const metrics = getFileEditorMetrics(content, cursorIndex);
-  const dirtyLabel = win.fileDirty ? "未保存" : "已保存";
-  const pathLabel = win.filePath || "未选择文件";
-  return `${pathLabel} · 第 ${metrics.line} 行，第 ${metrics.column} 列 · ${metrics.lines} 行 · ${metrics.chars} 字符 · ${dirtyLabel} · Ctrl+S 保存`;
+  const dirtyLabel = win.fileDirty ? t("file.unsaved", "未保存") : t("file.saved", "已保存");
+  const pathLabel = win.filePath || t("file.noFile", "未选择文件");
+  return t("file.footer", "{{path}} · 第 {{line}} 行，第 {{column}} 列 · {{lines}} 行 · {{chars}} 字符 · {{dirty}} · Ctrl+S 保存", { path: pathLabel, line: metrics.line, column: metrics.column, lines: metrics.lines, chars: metrics.chars, dirty: dirtyLabel });
 }
 
 function syncFileEditorChrome(windowId) {
@@ -9594,24 +9897,24 @@ function renderFileContent(win) {
     <div class="real-file-editor" data-file-window="${escapeHtml(win.id)}">
       <div class="file-toolbar">
         <div class="file-path-row">
-          <input class="file-path-input" data-file-path="${escapeHtml(win.id)}" value="${escapeHtml(win.filePath || "")}" placeholder="输入项目内文件路径，例如 README.md" />
-          <button class="secondary-button compact" data-action="file-open" data-window-id="${escapeHtml(win.id)}">打开</button>
-          <button class="secondary-button compact" data-action="file-pick" data-window-id="${escapeHtml(win.id)}">选择</button>
-          <button class="primary-button compact" data-action="file-save" data-window-id="${escapeHtml(win.id)}">保存</button>
-          <button class="secondary-button compact" data-action="file-save-as" data-window-id="${escapeHtml(win.id)}">另存为</button>
-          <button class="secondary-button compact" data-action="file-create-folder" data-window-id="${escapeHtml(win.id)}">新建文件夹</button>
-          <button class="secondary-button compact" data-action="file-rename" data-window-id="${escapeHtml(win.id)}">重命名</button>
-          <button class="secondary-button compact danger" data-action="file-delete" data-window-id="${escapeHtml(win.id)}">删除</button>
+          <input class="file-path-input" data-file-path="${escapeHtml(win.id)}" value="${escapeHtml(win.filePath || "")}" placeholder="${escapeHtml(t("file.placeholder.path", "输入项目内文件路径，例如 README.md"))}" />
+          <button class="secondary-button compact" data-action="file-open" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.open", "打开"))}</button>
+          <button class="secondary-button compact" data-action="file-pick" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.pick", "选择"))}</button>
+          <button class="primary-button compact" data-action="file-save" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.save", "保存"))}</button>
+          <button class="secondary-button compact" data-action="file-save-as" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.saveAs", "另存为"))}</button>
+          <button class="secondary-button compact" data-action="file-create-folder" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.newFolder", "新建文件夹"))}</button>
+          <button class="secondary-button compact" data-action="file-rename" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.rename", "重命名"))}</button>
+          <button class="secondary-button compact danger" data-action="file-delete" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.delete", "删除"))}</button>
         </div>
         <div class="file-status ${win.fileError ? "error" : ""}" data-file-status="${escapeHtml(win.id)}">
-          ${escapeHtml(win.fileError || win.fileStatus || `${role.name} 文件编辑器 · ${project ? project.path : "未选择项目"}`)}
+          ${escapeHtml(win.fileError || win.fileStatus || t("file.editorReady", "{{role}} 文件编辑器 · {{path}}", { role: role.name, path: project ? project.path : t("file.noProject", "未选择项目") }))}
         </div>
       </div>
       <div class="file-editor-layout">
         <aside class="file-list">
           <div class="file-list-title">
-            <span>项目文件</span>
-            <button class="icon-button" title="刷新文件列表" data-action="file-refresh-list" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
+            <span>${escapeHtml(t("file.projectFiles", "项目文件"))}</span>
+            <button class="icon-button" title="${escapeHtml(t("file.refreshList", "刷新文件列表"))}" data-action="file-refresh-list" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
           </div>
           <div class="file-list-items">
             ${
@@ -9624,14 +9927,14 @@ function renderFileContent(win) {
                       <span>${file.type === "directory" ? "[dir] " : ""}${escapeHtml(file.path)}</span>
                     </button>
                   `).join("")
-                : `<div class="file-list-empty">点击刷新或输入路径打开项目文件。</div>`
+                : `<div class="file-list-empty">${escapeHtml(t("file.listEmpty", "点击刷新或输入路径打开项目文件。"))}</div>`
             }
           </div>
         </aside>
         <section class="file-editor-pane">
           <div class="file-editor-main">
             <pre class="file-editor-lines" data-file-lines="${escapeHtml(win.id)}">${escapeHtml(renderFileLineNumbers(fileDraft))}</pre>
-            <textarea class="file-editor-textarea" data-file-editor="${escapeHtml(win.id)}" spellcheck="false" placeholder="打开或新建项目内文本文件。">${escapeHtml(fileDraft)}</textarea>
+            <textarea class="file-editor-textarea" data-file-editor="${escapeHtml(win.id)}" spellcheck="false" placeholder="${escapeHtml(t("file.placeholder.editor", "打开或新建项目内文本文件。"))}">${escapeHtml(fileDraft)}</textarea>
           </div>
           <div class="file-editor-footer" data-file-footer="${escapeHtml(win.id)}">${escapeHtml(renderFileEditorFooter(win, fileDraft))}</div>
         </section>
@@ -9644,7 +9947,7 @@ function renderTaskContent() {
   const project = getProject();
   const tasks = project ? getConversationTasks(project) : [];
   if (tasks.length === 0) {
-    return `<div class="browser-blank">当前对话暂无任务。右键空白处或点击新建任务后，会在这个对话中持续追加任务。</div>`;
+    return `<div class="browser-blank">${escapeHtml(t("task.content.empty", "当前对话暂无任务。右键空白处或点击新建任务后，会在这个对话中持续追加任务。"))}</div>`;
   }
 
   const pairs = tasks.flatMap((task) => task.subtasks.map((subtask) => ({ task, subtask })));
@@ -9658,10 +9961,10 @@ function renderTaskContent() {
   const roleFilter = `
     <div class="task-filterbar">
       <label>
-        <span>角色过滤</span>
+        <span>${escapeHtml(t("task.filter.role", "角色过滤"))}</span>
         <select id="taskRoleFilter">
-          <option value="">全部角色</option>
-          ${availableRoleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskRoleFilter ? "selected" : ""}>${escapeHtml(getRole(roleId).name)}</option>`).join("")}
+          <option value="">${escapeHtml(t("task.filter.allRoles", "全部角色"))}</option>
+          ${availableRoleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskRoleFilter ? "selected" : ""}>${escapeHtml(getRoleName(roleId))}</option>`).join("")}
         </select>
       </label>
     </div>
@@ -9670,25 +9973,25 @@ function renderTaskContent() {
     .map(({ task, subtask }) => {
       const kernelState = getSubtaskKernelProjection(task, subtask);
       const leaseLabel = kernelState.step?.lease?.expiresAt
-        ? `lease ${formatDateTime(kernelState.step.lease.expiresAt)}`
-        : "no lease";
+        ? t("task.lease.validUntil", "有效期至 {{time}}", { time: formatDateTime(kernelState.step.lease.expiresAt) })
+        : t("task.lease.unset", "未设置有效期");
       return `
       <div class="task-card ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
         <div class="task-card-head">
-          <div class="task-role">${escapeHtml(getRole(subtask.roleId).name)} · ${escapeHtml(task.title)} · ${escapeHtml(task.model?.modelName || "agent-brain")}</div>
+          <div class="task-role">${escapeHtml(getRoleName(subtask.roleId))} · ${escapeHtml(task.title)} · ${escapeHtml(getTaskModelName(task))}</div>
           <div class="task-chip-group">${renderKernelPhaseChip(kernelState.phase, kernelState)}${renderSubtaskStatusChip(kernelState.status)}</div>
         </div>
         <div class="task-title">${escapeHtml(subtask.title)}</div>
         <div class="task-desc">${escapeHtml(subtask.description)}</div>
-        <div class="task-desc">Kernel Step: ${escapeHtml(kernelState.step?.id || "pending")} · ${escapeHtml(leaseLabel)}</div>
-        <div class="task-desc">规划来源：${escapeHtml(task.planner?.status === "success" ? "Kernel Planner" : "本地降级")}</div>
+        <div class="task-desc">${escapeHtml(t("task.currentStep", "当前步骤：{{step}}", { step: kernelState.step?.id || t("task.stepPending", "待分配") }))} · ${escapeHtml(leaseLabel)}</div>
+        <div class="task-desc">${escapeHtml(t("task.planSource", "规划来源：{{source}}", { source: task.planner?.status === "success" ? t("task.planSource.ai", "智能规划") : t("task.planSource.local", "本地规则") }))}</div>
         ${renderSubtaskActions(task.id, subtask)}
       </div>
     `;
     })
     .join("");
 
-  return `${roleFilter}${taskCards || `<div class="message-empty">当前角色暂无子任务。</div>`}${renderRecentAgentEvents(project)}`;
+  return `${roleFilter}${taskCards || `<div class="message-empty">${escapeHtml(t("task.content.noSubtasks", "当前角色暂无子任务。"))}</div>`}${renderRecentAgentEvents(project)}`;
 }
 
 function renderTaskListFilters(project, tasks) {
@@ -9698,33 +10001,33 @@ function renderTaskListFilters(project, tasks) {
   return `
     <div class="task-list-filters">
       <label>
-        <span>搜索</span>
-        <input id="taskListSearch" value="${escapeHtml(taskListFilters.query)}" placeholder="任务、角色、说明" />
+        <span>${escapeHtml(t("taskList.filter.search", "搜索"))}</span>
+        <input id="taskListSearch" value="${escapeHtml(taskListFilters.query)}" placeholder="${escapeHtml(t("taskList.filter.searchPlaceholder", "任务、角色、说明"))}" />
       </label>
       <label>
-        <span>角色</span>
+        <span>${escapeHtml(t("taskList.filter.role", "角色"))}</span>
         <select id="taskListRoleFilter">
-          <option value="">全部角色</option>
-          ${roleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskListFilters.roleId ? "selected" : ""}>${escapeHtml(getRole(roleId).name)}</option>`).join("")}
+          <option value="">${escapeHtml(t("taskList.filter.allRoles", "全部角色"))}</option>
+          ${roleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskListFilters.roleId ? "selected" : ""}>${escapeHtml(getRoleName(roleId))}</option>`).join("")}
         </select>
       </label>
       <label>
-        <span>状态</span>
+        <span>${escapeHtml(t("taskList.filter.status", "状态"))}</span>
         <select id="taskListStatusFilter">
-          <option value="">全部状态</option>
+          <option value="">${escapeHtml(t("taskList.filter.allStatuses", "全部状态"))}</option>
           ${statuses.map((status) => `<option value="${escapeHtml(status)}" ${status === taskListFilters.status ? "selected" : ""}>${escapeHtml(SUBTASK_STATUS_DEFS[status]?.label || status)}</option>`).join("")}
         </select>
       </label>
       <label>
-        <span>模型</span>
+        <span>${escapeHtml(t("taskList.filter.model", "模型"))}</span>
         <select id="taskListModelFilter">
-          <option value="">全部模型</option>
+          <option value="">${escapeHtml(t("taskList.filter.allModels", "全部模型"))}</option>
           ${models.map((model) => `<option value="${escapeHtml(model)}" ${model === taskListFilters.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
         </select>
       </label>
       <label class="task-list-check">
         <input id="taskListIncludeArchived" type="checkbox" ${taskListFilters.includeArchived ? "checked" : ""} />
-        <span>显示归档</span>
+        <span>${escapeHtml(t("taskList.filter.showArchived", "显示归档"))}</span>
       </label>
     </div>
   `;
@@ -9734,7 +10037,7 @@ function renderTaskListDetail(project, task) {
   if (!task) {
     return `
       <aside class="task-list-detail">
-        <div class="message-empty">选择一个任务查看详情。</div>
+        <div class="message-empty">${escapeHtml(t("taskList.selectTask", "选择一个任务查看详情。"))}</div>
       </aside>
     `;
   }
@@ -9749,16 +10052,16 @@ function renderTaskListDetail(project, task) {
     <aside class="task-list-detail">
       <div class="task-detail-head">
         <div>
-          <strong>${escapeHtml(task.title || "未命名任务")}</strong>
+          <strong>${escapeHtml(task.title || t("taskList.untitledTask", "未命名任务"))}</strong>
           <span>${escapeHtml(task.goal || "")}</span>
         </div>
         ${renderSubtaskStatusChip(status)}
       </div>
       <div class="task-detail-actions">
-        <button class="secondary-button compact" data-action="show-message-center">查看时间线</button>
+        <button class="secondary-button compact" data-action="show-message-center">${escapeHtml(t("taskList.viewTimeline", "查看时间线"))}</button>
         ${task.archived
-          ? `<button class="secondary-button compact" data-action="restore-task" data-task-id="${escapeHtml(task.id)}">恢复任务</button>`
-          : `<button class="secondary-button compact" data-action="archive-task" data-task-id="${escapeHtml(task.id)}">归档任务</button>`}
+          ? `<button class="secondary-button compact" data-action="restore-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("taskList.restoreTask", "恢复任务"))}</button>`
+          : `<button class="secondary-button compact" data-action="archive-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("taskList.archiveTask", "归档任务"))}</button>`}
       </div>
       <div class="task-detail-metrics">
         <span>idle ${projection.counts.idle || 0}</span>
@@ -9767,49 +10070,49 @@ function renderTaskListDetail(project, task) {
         <span>locks ${projection.activeLocks.length}</span>
         <span>approvals ${projection.pendingApprovals.length}</span>
         <span>events ${projection.events.length}</span>
-        <span>子任务 ${doneCount}/${task.subtasks?.length || 0}</span>
-        <span>消息 ${messages.length}</span>
-        <span>投递 ${deliveries.length}</span>
-        <span>输出 ${refs.length}</span>
+        <span>${escapeHtml(t("taskList.metrics.subtasks", "子任务 {{done}}/{{total}}", { done: doneCount, total: task.subtasks?.length || 0 }))}</span>
+        <span>${escapeHtml(t("taskList.metrics.messages", "消息 {{count}}", { count: messages.length }))}</span>
+        <span>${escapeHtml(t("taskList.metrics.deliveries", "投递 {{count}}", { count: deliveries.length }))}</span>
+        <span>${escapeHtml(t("taskList.metrics.outputs", "输出 {{count}}", { count: refs.length }))}</span>
         <span>${escapeHtml(getTaskModelName(task))}</span>
       </div>
       <div class="task-detail-section">
-        <strong>子任务</strong>
+        <strong>${escapeHtml(t("taskList.detail.subtasks", "子任务"))}</strong>
         ${(task.subtasks || []).map((subtask) => {
           const kernelState = getSubtaskKernelProjection(task, subtask);
           return `
           <div class="task-detail-subtask ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
-            <span>${escapeHtml(getRole(subtask.roleId).name)}</span>
+            <span>${escapeHtml(getRoleName(subtask.roleId))}</span>
             <strong>${escapeHtml(subtask.title)}</strong>
             <span class="task-chip-group">${renderKernelPhaseChip(kernelState.phase, kernelState)}${renderSubtaskStatusChip(kernelState.status)}</span>
             <p>${escapeHtml(subtask.description || "")}</p>
-            <p>Kernel Step: ${escapeHtml(kernelState.step?.id || "pending")}</p>
+            <p>${escapeHtml(t("task.currentStep", "当前步骤：{{step}}", { step: kernelState.step?.id || t("task.stepPending", "待分配") }))}</p>
             ${renderSubtaskActions(task.id, subtask)}
           </div>
         `;
         }).join("")}
       </div>
       <div class="task-detail-section">
-        <strong>关联投递</strong>
+        <strong>${escapeHtml(t("taskList.detail.deliveries", "关联投递"))}</strong>
         ${deliveries.length
           ? deliveries.slice(0, 5).map((delivery) => `
             <div class="task-detail-linkrow">
-              <span>${escapeHtml(getRole(delivery.roleId).name)} · ${escapeHtml(getDeliveryStatusLabel(delivery.status))}</span>
+              <span>${escapeHtml(getRoleName(delivery.roleId))} · ${escapeHtml(getDeliveryStatusLabel(delivery.status))}</span>
               <span>${escapeHtml(delivery.submissionMethod || "pending")}</span>
             </div>
           `).join("")
-          : `<div class="message-empty">暂无投递。</div>`}
+          : `<div class="message-empty">${escapeHtml(t("taskList.detail.noDeliveries", "暂无投递。"))}</div>`}
       </div>
       <div class="task-detail-section">
-        <strong>最近消息</strong>
+        <strong>${escapeHtml(t("taskList.detail.recentMessages", "最近消息"))}</strong>
         ${messages.length
           ? messages.slice(-4).reverse().map((message) => `
             <div class="task-detail-message">
-              <span>${escapeHtml(getRole(message.fromRoleId).name)} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</span>
+              <span>${escapeHtml(getRoleName(message.fromRoleId))} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、"))}</span>
               <p>${escapeHtml(message.content)}</p>
             </div>
           `).join("")
-          : `<div class="message-empty">暂无消息。</div>`}
+          : `<div class="message-empty">${escapeHtml(t("taskList.detail.noMessages", "暂无消息。"))}</div>`}
       </div>
     </aside>
   `;
@@ -9820,7 +10123,7 @@ function renderTaskListContent() {
   const conversation = getActiveDesktop(project);
 
   if (!project) {
-    return `<div class="browser-blank">请先选择项目。</div>`;
+    return `<div class="browser-blank">${escapeHtml(t("taskList.noProject", "请先选择项目。"))}</div>`;
   }
 
   const allTasks = getConversationTasks(project);
@@ -9837,13 +10140,13 @@ function renderTaskListContent() {
   return `
     <div class="task-list-program">
       <div class="task-list-head">
-        <strong>${escapeHtml(conversation?.name || "当前对话")}任务列表</strong>
-        <span>${visibleTasks.length}/${allTasks.length} 个任务 · ${totalSubtasks} 个子任务 · ${archivedCount} 个归档</span>
+        <strong>${escapeHtml(t("taskList.title", "{{name}}任务列表", { name: conversation?.name || t("taskList.currentConversation", "当前对话") }))}</strong>
+        <span>${escapeHtml(t("taskList.header.summary", "{{visible}}/{{total}} 个任务 · {{subtasks}} 个子任务 · {{archived}} 个归档", { visible: visibleTasks.length, total: allTasks.length, subtasks: totalSubtasks, archived: archivedCount }))}</span>
       </div>
       ${renderTaskListFilters(project, allTasks)}
       ${
         allTasks.length === 0
-          ? `<div class="browser-blank">当前对话还没有任务。点击右上角“新建任务”后，任务会持续追加到这个对话中。</div>`
+          ? `<div class="browser-blank">${escapeHtml(t("taskList.empty.noTasks", "当前对话还没有任务。点击右上角“新建任务”后，任务会持续追加到这个对话中。"))}</div>`
           : `
             <div class="task-list-layout">
               <div class="task-list-items">
@@ -9855,7 +10158,7 @@ function renderTaskListContent() {
                     <button class="task-list-item ${selectedTask?.id === task.id ? "active" : ""} ${task.archived ? "archived" : ""}" data-action="select-task-list-task" data-task-id="${escapeHtml(task.id)}">
                       <div class="task-list-row-head">
                         <div>
-                          <strong>${escapeHtml(task.title || `任务 ${index + 1}`)}</strong>
+                          <strong>${escapeHtml(task.title || t("taskList.taskIndex", "任务 {{index}}", { index: index + 1 }))}</strong>
                           <span>${escapeHtml(task.goal || "")}</span>
                         </div>
                         ${renderSubtaskStatusChip(status)}
@@ -9865,23 +10168,23 @@ function renderTaskListContent() {
                         <span>running ${projection.activeCount || 0}</span>
                         <span>locks ${projection.activeLocks.length}</span>
                         <span>approvals ${projection.pendingApprovals.length}</span>
-                        <span>${doneCount}/${task.subtasks?.length || 0} 已完成</span>
+                        <span>${escapeHtml(t("taskList.subtasksDone", "{{done}}/{{total}} 已完成", { done: doneCount, total: task.subtasks?.length || 0 }))}</span>
                         <span>${escapeHtml(formatDateTime(task.confirmedAt || task.createdAt))}</span>
-                        ${task.archived ? `<span>已归档</span>` : ""}
+                        ${task.archived ? `<span>${escapeHtml(t("taskList.archived", "已归档"))}</span>` : ""}
                       </div>
                       <div class="task-list-subtasks">
                         ${(task.subtasks || []).map((subtask) => {
                           const kernelState = getSubtaskKernelProjection(task, subtask);
                           return `
                           <span class="task-list-subtask ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
-                            ${escapeHtml(getRole(subtask.roleId).name)} · ${escapeHtml(subtask.title)}
+                            ${escapeHtml(getRoleName(subtask.roleId))} · ${escapeHtml(subtask.title)}
                           </span>
                         `;
                         }).join("")}
                       </div>
                     </button>
                   `;
-                }).join("") : `<div class="message-empty">没有匹配当前筛选条件的任务。</div>`}
+                }).join("") : `<div class="message-empty">${escapeHtml(t("taskList.noMatchingTasks", "没有匹配当前筛选条件的任务。"))}</div>`}
               </div>
               ${renderTaskListDetail(project, selectedTask)}
             </div>
@@ -9900,14 +10203,14 @@ function renderRecentAgentEvents(project) {
   return `
     <div class="agent-event-panel">
       <div class="agent-event-panel-title">
-        <strong>Agent 会话事件</strong>
-        <span>最近 ${events.length} 条</span>
+        <strong>${escapeHtml(t("agent.events.title", "Agent 会话事件"))}</strong>
+        <span>${escapeHtml(t("agent.events.recent", "最近 {{count}} 条", { count: events.length }))}</span>
       </div>
       ${events.map((event) => `
         <div class="agent-event-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}">
-          <strong>${escapeHtml(getRole(event.roleId).name)} · ${escapeHtml(event.provider || "agent")}</strong>
+          <strong>${escapeHtml(getRoleName(event.roleId))} · ${escapeHtml(event.provider || "agent")}</strong>
           <span>${escapeHtml(event.status || "event")} · ${escapeHtml(formatDateTime(event.receivedAt))}</span>
-          <p>${escapeHtml(event.message || event.sessionId || "Agent 输出了状态事件。")}</p>
+          <p>${escapeHtml(event.message || event.sessionId || t("delivery.event.default", "Agent 输出了状态事件。"))}</p>
         </div>
       `).join("")}
     </div>
@@ -9980,7 +10283,7 @@ function renderSubtaskActions(taskId, subtask) {
   const project = getProject();
   const task = project?.tasks.find((item) => item.id === taskId);
   const status = normalizeSubtaskStatus(subtask.status);
-  const executeLabel = status === "done" ? "重新执行" : "执行";
+  const executeLabel = status === "done" ? t("task.action.reExecute", "重新执行") : t("task.action.execute", "执行");
   const canExecuteSubtask = task && canManuallyExecuteKernelSubtask(task, subtask);
   const executeButton = canExecuteSubtask
     ? `<button class="primary-button compact" data-action="execute-kernel-subtask" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">${escapeHtml(executeLabel)}</button>`
@@ -9990,12 +10293,12 @@ function renderSubtaskActions(taskId, subtask) {
   );
   const url = getSubtaskTaskUrl(task, subtask);
   const taskUrlButton = url
-    ? `<button class="secondary-button compact" data-action="open-task-url" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">打开任务 URL</button>`
+    ? `<button class="secondary-button compact" data-action="open-task-url" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">${escapeHtml(t("task.action.openUrl", "打开任务 URL"))}</button>`
     : "";
   let actions = {
-    idle: [button("开始执行", "running", "primary")],
-    running: [button("标记完成", "done", "primary")],
-    done: [button("重新打开", "idle")]
+    idle: [button(t("task.action.start", "开始执行"), "running", "primary")],
+    running: [button(t("task.action.markDone", "标记完成"), "done", "primary")],
+    done: [button(t("task.action.reopen", "重新打开"), "idle")]
   }[status] || [];
   if (!canExecuteSubtask || status !== "running") {
     actions = [];
@@ -10004,7 +10307,7 @@ function renderSubtaskActions(taskId, subtask) {
 }
 
 function renderCollabPopover(win, collaborators, status, relayStage = getAgentRelayStageForWindow(win)) {
-  const names = collaborators.map((role) => role.name).join("、") || "暂无协作对象";
+  const names = collaborators.map((role) => role.name).join("、") || t("collab.noCollaborators", "暂无协作对象");
   const project = getProject();
   const taskContext = getTaskContextForWindow(win, project);
   const kernelStep = (taskContext.taskId
@@ -10014,21 +10317,21 @@ function renderCollabPopover(win, collaborators, status, relayStage = getAgentRe
     .filter(({ step }) => step.roleId === win.roleId)
     .sort((a, b) => new Date(b.step.lease?.heartbeatAt || b.step.updatedAt || 0).getTime() - new Date(a.step.lease?.heartbeatAt || a.step.updatedAt || 0).getTime())[0];
   const kernelLine = kernelStep
-    ? `<div>Kernel Step: ${escapeHtml(kernelStep.step.id)} · ${renderKernelPhaseChip(kernelStep.step.phase, kernelStep.step)}${kernelStep.step.lease?.expiresAt ? ` · lease ${escapeHtml(formatDateTime(kernelStep.step.lease.expiresAt))}` : ""}</div>`
+    ? `<div>${escapeHtml(t("collab.currentStep", "当前步骤：{{step}}", { step: kernelStep.step.id }))} · ${renderKernelPhaseChip(kernelStep.step.phase, kernelStep.step)}${kernelStep.step.lease?.expiresAt ? ` · ${escapeHtml(t("task.lease.validUntil", "有效期至 {{time}}", { time: formatDateTime(kernelStep.step.lease.expiresAt) }))}` : ""}</div>`
     : "";
   const messages = `${kernelLine}${(project?.messages || [])
     .filter((message) => message.fromRoleId === win.roleId || message.toRoleIds.includes(win.roleId))
     .slice(-3)
-    .map((message) => `<div>${escapeHtml(getRole(message.fromRoleId).name)}：${escapeHtml(message.content)}</div>`)
+    .map((message) => `<div>${escapeHtml(getRoleName(message.fromRoleId))}：${escapeHtml(message.content)}</div>`)
     .join("")}`;
 
   return `
     <div class="collab-popover">
       <strong>${escapeHtml(getStatusLabel(status))}</strong>
-      ${normalizeTerminalMode(win.terminalMode) === "agent" ? `<div>Agent 接力阶段：${escapeHtml(relayStage.label)}</div>` : ""}
-      <div>协作对象：${escapeHtml(names)}</div>
-      ${messages || "<div>还没有消息。</div>"}
-      <button class="secondary-button compact" data-action="show-message-center" data-role-id="${escapeHtml(win.roleId)}">查看时间线</button>
+      ${normalizeTerminalMode(win.terminalMode) === "agent" ? `<div>${escapeHtml(t("collab.relayStage", "Agent 接力阶段：{{label}}", { label: relayStage.label }))}</div>` : ""}
+      <div>${escapeHtml(t("collab.collaborators", "协作对象：{{names}}", { names }))}</div>
+      ${messages || `<div>${escapeHtml(t("collab.noMessages", "还没有消息。"))}</div>`}
+      <button class="secondary-button compact" data-action="show-message-center" data-role-id="${escapeHtml(win.roleId)}">${escapeHtml(t("collab.viewTimeline", "查看时间线"))}</button>
     </div>
   `;
 }
@@ -10036,15 +10339,15 @@ function renderCollabPopover(win, collaborators, status, relayStage = getAgentRe
 function renderContextMenu() {
   return `
     <div class="context-menu" style="left:${contextMenu.x}px; top:${contextMenu.y}px;">
-      <button data-action="role-menu" data-type="terminal">${icon("terminal")}新建终端</button>
-      <button data-action="role-menu" data-type="browser">${icon("globe")}新建浏览器</button>
-      <button data-action="role-menu" data-type="file">${icon("file")}新建文件</button>
-      <button data-action="open-task-list-window">${icon("task")}任务列表</button>
-      <button data-action="show-create-task">${icon("task")}新建任务</button>
-      <button data-action="show-message-center">${icon("assistant")}消息中心</button>
+      <button data-action="role-menu" data-type="terminal">${icon("terminal")}${escapeHtml(t("context.newTerminal", "新建终端"))}</button>
+      <button data-action="role-menu" data-type="browser">${icon("globe")}${escapeHtml(t("context.newBrowser", "新建浏览器"))}</button>
+      <button data-action="role-menu" data-type="file">${icon("file")}${escapeHtml(t("context.newFile", "新建文件"))}</button>
+      <button data-action="open-task-list-window">${icon("task")}${escapeHtml(t("context.taskList", "任务列表"))}</button>
+      <button data-action="show-create-task">${icon("task")}${escapeHtml(t("context.newTask", "新建任务"))}</button>
+      <button data-action="show-message-center">${icon("assistant")}${escapeHtml(t("context.messageCenter", "消息中心"))}</button>
       <div class="menu-divider"></div>
-      <button data-action="refresh-workspace">${icon("refresh")}刷新桌面</button>
-      <button data-action="show-settings">${icon("gear")}系统设置</button>
+      <button data-action="refresh-workspace">${icon("refresh")}${escapeHtml(t("context.refreshDesktop", "刷新桌面"))}</button>
+      <button data-action="show-settings">${icon("gear")}${escapeHtml(t("context.systemSettings", "系统设置"))}</button>
     </div>
   `;
 }
@@ -10483,34 +10786,34 @@ function showFileOperationModal(windowId, operation) {
   const baseDir = currentPath && /[/\\]/.test(currentPath) ? currentPath.replace(/[/\\][^/\\]*$/, "") : "";
   const config = {
     "create-folder": {
-      title: "新建文件夹",
-      label: "项目内文件夹路径",
+      get title() { return t("file.op.createFolder.title", "新建文件夹"); },
+      get label() { return t("file.op.createFolder.label", "项目内文件夹路径"); },
       defaultValue: baseDir ? `${baseDir}/new-folder` : "new-folder",
-      confirmLabel: "创建"
+      get confirmLabel() { return t("common.create", "创建"); }
     },
     "save-as": {
-      title: "另存为",
-      label: "新的项目内文件路径",
+      get title() { return t("file.op.saveAs.title", "另存为"); },
+      get label() { return t("file.op.saveAs.label", "新的项目内文件路径"); },
       defaultValue: currentPath || "untitled.md",
-      confirmLabel: "另存为"
+      get confirmLabel() { return t("file.op.saveAs.confirm", "另存为"); }
     },
     rename: {
-      title: "重命名",
-      label: "新的项目内路径",
+      get title() { return t("file.op.rename.title", "重命名"); },
+      get label() { return t("file.op.rename.label", "新的项目内路径"); },
       defaultValue: currentPath,
-      confirmLabel: "重命名"
+      get confirmLabel() { return t("file.op.rename.confirm", "重命名"); }
     },
     delete: {
-      title: "删除",
-      label: "将删除的项目内路径",
+      get title() { return t("common.delete", "删除"); },
+      get label() { return t("file.op.delete.label", "将删除的项目内路径"); },
       defaultValue: currentPath,
-      confirmLabel: "确认删除",
+      get confirmLabel() { return t("file.op.delete.confirm", "确认删除"); },
       danger: true
     }
   }[operation];
 
   if (!config || (!config.defaultValue && operation !== "create-folder")) {
-    setFileStatus(windowId, "请先选择文件或文件夹。", "error");
+    setFileStatus(windowId, t("file.op.selectFirst", "请先选择文件或文件夹。"), "error");
     return;
   }
 
@@ -10518,14 +10821,14 @@ function showFileOperationModal(windowId, operation) {
   renderModal(`
     <div class="modal file-operation-modal">
       <h2>${escapeHtml(config.title)}</h2>
-      <p>路径必须位于当前项目目录内：${escapeHtml(project.path)}</p>
+      <p>${escapeHtml(t("file.op.pathMustBeInProject", "路径必须位于当前项目目录内：{{path}}", { path: project.path }))}</p>
       <div class="field">
         <label for="fileOperationPath">${escapeHtml(config.label)}</label>
         <input id="fileOperationPath" value="${escapeHtml(config.defaultValue)}" ${operation === "delete" ? "readonly" : ""} />
       </div>
-      <div id="fileOperationStatus" class="form-status muted">${operation === "delete" ? "删除操作不可撤销，请确认路径无误。" : "确认后会写入项目文件系统。"}</div>
+      <div id="fileOperationStatus" class="form-status muted">${escapeHtml(operation === "delete" ? t("file.op.deleteWarning", "删除操作不可撤销，请确认路径无误。") : t("file.op.confirmWrite", "确认后会写入项目文件系统。"))}</div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
         <button class="${config.danger ? "secondary-button danger" : "primary-button"}" data-action="confirm-file-operation">${escapeHtml(config.confirmLabel)}</button>
       </div>
     </div>
@@ -11947,6 +12250,49 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "open-product-url") {
+    openProductUrl(target.dataset.url || PRODUCT_HELP_URL);
+    return;
+  }
+
+  if (action === "show-feedback-modal") {
+    showFeedbackModal();
+    return;
+  }
+
+  if (action === "close-feedback-modal") {
+    closeFeedbackModal();
+    return;
+  }
+
+  if (action === "choose-feedback-images") {
+    document.getElementById("feedbackImageInput")?.click();
+    return;
+  }
+
+  if (action === "submit-feedback") {
+    recordAppLog("help.feedback.submitted", {
+      length: String(document.getElementById("feedbackContent")?.value || "").length,
+      imageCount: Math.min(document.getElementById("feedbackImageInput")?.files?.length || 0, 4),
+      uploadLogs: Boolean(document.getElementById("feedbackUploadLogs")?.checked)
+    });
+    closeFeedbackModal();
+    return;
+  }
+
+  if (action === "choose-account-avatar") {
+    document.getElementById("accountAvatarInput")?.click();
+    return;
+  }
+
+  if (action === "clear-account-avatar") {
+    getUserProfile().avatarDataUrl = "";
+    saveState();
+    render();
+    showSettingsModal();
+    return;
+  }
+
   if (action === "set-agent-provider") {
     state.settings.agentProvider = normalizeAgentProvider(target.dataset.provider);
     recordAppLog("settings.agent-provider.changed", {
@@ -12025,7 +12371,7 @@ document.addEventListener("click", (event) => {
 
   if (action === "reset-agent-prompt-template") {
     state.settings.agentPromptTemplate = ensureAgentPromptMcpInstructions(
-      ensureAgentPromptPermissionPlaceholders(defaultState.settings.agentPromptTemplate)
+      ensureAgentPromptPermissionPlaceholders(getDefaultAgentPromptTemplate())
     );
     recordAppLog("settings.agent-prompt-template.reset", {
       length: state.settings.agentPromptTemplate.length
@@ -12272,6 +12618,16 @@ document.addEventListener("input", (event) => {
     return;
   }
 
+  if (inputTarget?.id === "feedbackContent") {
+    updateFeedbackCounters();
+    return;
+  }
+
+  if (inputTarget?.id === "accountDisplayName") {
+    updateAccountDisplayName(inputTarget.value);
+    return;
+  }
+
   const agentPromptTemplate = event.target instanceof Element ? event.target.closest("[data-agent-prompt-template]") : null;
   if (agentPromptTemplate) {
     state.settings.agentPromptTemplate = agentPromptTemplate.value;
@@ -12337,6 +12693,16 @@ document.addEventListener("change", (event) => {
     return;
   }
 
+  if (target.id === "feedbackImageInput") {
+    updateFeedbackCounters();
+    return;
+  }
+
+  if (target.id === "accountAvatarInput") {
+    updateAccountAvatarFromFile(target.files?.[0]);
+    return;
+  }
+
   const planField = target.closest("[data-plan-field]");
   if (planField) {
     updatePendingTaskPlanField(Number(planField.dataset.planIndex), planField.dataset.planField, planField.value);
@@ -12358,6 +12724,14 @@ document.addEventListener("change", (event) => {
       taskId: target.value
     };
     refreshMessageTimelineList();
+  }
+
+  if (target.id === "appLanguageSelect") {
+    state.settings.language = LANGUAGE_OPTIONS.some((item) => item.id === target.value) ? target.value : "zh-CN";
+    saveState();
+    render();
+    showSettingsModal();
+    return;
   }
 
   if (target.id === "taskRoleFilter") {
@@ -12516,6 +12890,12 @@ function icon(name) {
     task: `<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/><path d="M5 20h14"/></svg>`,
     globe: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>`,
     file: `<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/></svg>`,
+    doc: `<svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5"/><path d="M9.5 12h5M9.5 15h5M9.5 18h3"/></svg>`,
+    chat: `<svg viewBox="0 0 24 24"><path d="M5 6.5A4.5 4.5 0 0 1 9.5 2h5A4.5 4.5 0 0 1 19 6.5v4A4.5 4.5 0 0 1 14.5 15H11l-5 4v-4.6A4.5 4.5 0 0 1 5 10.5z"/><path d="M9 7h6M9 10h4"/></svg>`,
+    contact: `<svg viewBox="0 0 24 24"><path d="M7 8h8l-3-3M15 16H7l3 3"/><path d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v13a3.5 3.5 0 0 1-3.5 3.5h-9A3.5 3.5 0 0 1 4 18.5z"/></svg>`,
+    external: `<svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M10 14 18 6M13 6h5v5"/></svg>`,
+    image: `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m7 17 4-4 3 3 2-2 3 3"/></svg>`,
+    check: `<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>`,
     refresh: `<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>`,
     layout: `<svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="15" width="7" height="5" rx="1.5"/><rect x="14" y="15" width="7" height="5" rx="1.5"/></svg>`
   };
@@ -12566,33 +12946,66 @@ function setAppLoadingStep(message) {
   }
 }
 
+async function tryAutoInstallAgent(name, statusGetter, installFn) {
+  const status = typeof statusGetter === "function" ? statusGetter() : null;
+  const available = status ? (status.installed || status.runnable) : false;
+  if (available || status?.autoInstallDisabled) {
+    return;
+  }
+  try {
+    const result = await installFn();
+    if (result && result.ok) {
+      console.log(`${name} auto-install succeeded, refreshing status...`);
+    } else {
+      console.warn(`${name} auto-install returned:`, result);
+    }
+  } catch (error) {
+    console.warn(`${name} auto-install failed:`, error);
+  }
+}
+
 async function runStartupConfigurationLoad() {
-  setAppLoadingStep("正在加载工作区状态...");
+  setAppLoadingStep(t("app.loading.workspace", "正在加载工作区状态..."));
   await loadState();
 
-  setAppLoadingStep("正在读取窗口状态...");
+  setAppLoadingStep(t("app.loading.windows", "正在读取窗口状态..."));
   try {
     isWindowMaximized = Boolean(await window.cossAPI?.isWindowMaximized?.());
   } catch {
     isWindowMaximized = false;
   }
 
-  setAppLoadingStep("正在检测 Claude Code 环境...");
+  setAppLoadingStep(t("app.loading.claude", "正在检测 Claude Code 环境..."));
   await checkClaudeStatus();
+  if (latestClaudeStatus && !latestClaudeStatus.installed && !latestClaudeStatus.autoInstallDisabled) {
+    setAppLoadingStep(t("app.loading.claude.installing", "未检测到 Claude Code 环境，正在自动安装..."));
+    await tryAutoInstallAgent("Claude Code", () => latestClaudeStatus, () => window.cossAPI?.installClaude?.());
+    await checkClaudeStatus();
+  }
 
-  setAppLoadingStep("正在检测 Codex CLI 环境...");
+  setAppLoadingStep(t("app.loading.codex", "正在检测 Codex CLI 环境..."));
   await checkCodexStatus();
+  if (latestCodexStatus && !latestCodexStatus.runnable && !latestCodexStatus.autoInstallDisabled) {
+    setAppLoadingStep(t("app.loading.codex.installing", "未检测到 Codex CLI 环境，正在自动安装..."));
+    await tryAutoInstallAgent("Codex CLI", () => latestCodexStatus, () => window.cossAPI?.installCodex?.());
+    await checkCodexStatus();
+  }
 
-  setAppLoadingStep("正在检测 CodeBuddy Code 环境...");
+  setAppLoadingStep(t("app.loading.codebuddy", "正在检测 CodeBuddy Code 环境..."));
   await checkCodeBuddyStatus();
+  if (latestCodeBuddyStatus && !latestCodeBuddyStatus.runnable && !latestCodeBuddyStatus.autoInstallDisabled) {
+    setAppLoadingStep(t("app.loading.codebuddy.installing", "未检测到 CodeBuddy Code 环境，正在自动安装..."));
+    await tryAutoInstallAgent("CodeBuddy Code", () => latestCodeBuddyStatus, () => window.cossAPI?.installCodeBuddy?.());
+    await checkCodeBuddyStatus();
+  }
 
-  setAppLoadingStep("正在读取存储与项目配置...");
+  setAppLoadingStep(t("app.loading.storage", "正在读取存储与项目配置..."));
   await refreshStorageInfo({ rerender: false });
   if (state.activeProjectId) {
     await checkCurrentProjectMcpConfig({ rerender: false });
   }
 
-  setAppLoadingStep("正在准备桌面...");
+  setAppLoadingStep(t("app.loading.desktop", "正在准备桌面..."));
   render();
   startExternalStateRefresh();
   startPendingKernelAutoWorkflowPump();
@@ -12609,7 +13022,7 @@ async function runStartupConfigurationLoad() {
 
 runStartupConfigurationLoad().catch((error) => {
   console.error("Failed to load CosS startup configuration", error);
-  setAppLoadingStep(`启动配置加载失败：${error.message}`);
+  setAppLoadingStep(t("app.loading.failed", "启动配置加载失败：{{error}}", { error: error.message }));
   setTimeout(() => {
     render();
   }, 900);

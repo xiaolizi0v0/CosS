@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("cossAPI", {
   planTask: (request) => ipcRenderer.invoke("llm:plan-task", request),
   testModelConnectivity: (request) => ipcRenderer.invoke("llm:test-model", request),
   getAppInfo: () => ipcRenderer.invoke("app:info"),
+  openExternalUrl: (url) => ipcRenderer.invoke("app:open-external-url", url),
   logEvent: (eventName, payload, level) => ipcRenderer.invoke("app:log-event", eventName, payload, level),
   openLogDirectory: () => ipcRenderer.invoke("logs:open-directory"),
   getStorageInfo: () => ipcRenderer.invoke("storage:info"),
@@ -46,6 +47,9 @@ contextBridge.exposeInMainWorld("cossAPI", {
     return () => ipcRenderer.removeListener("browser:open-url", listener);
   },
   getClaudeStatus: () => ipcRenderer.invoke("claude:status"),
+  installClaude: () => ipcRenderer.invoke("agent:install-claude"),
+  installCodex: () => ipcRenderer.invoke("agent:install-codex"),
+  installCodeBuddy: () => ipcRenderer.invoke("agent:install-codebuddy"),
   getCodexStatus: () => ipcRenderer.invoke("codex:status"),
   getCodeBuddyStatus: (request) => ipcRenderer.invoke("codebuddy:status", request),
   testAgentLogin: (request) => ipcRenderer.invoke("agent:login-test", request),
