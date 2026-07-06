@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/github/last-commit/xiaolizi0v0/CosS" alt="last commit"/><br>
   <img src="https://img.shields.io/badge/Created-26.03.01-blue" alt="Created Time"/>
   <img src="https://img.shields.io/badge/Author-xiaolizi0v0-orange" alt="Author"/>
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License"/>
+  <img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-green" alt="License"/>
 </p>
 <hr>
 
@@ -148,7 +148,7 @@ CosS/
 │   └── e2e/                     # Playwright E2E 测试
 ├── docs/
 │   ├── help.md                  # 帮助文档
-│   ├── license.md               # MIT 许可证
+│   ├── LICENSE.md               # CC BY-NC-SA 4.0 许可证
 │   └── privacy.md               # 隐私声明
 ├── .mcp.json                    # MCP 服务器注册
 └── package.json
@@ -157,7 +157,7 @@ CosS/
 ## 文档
 
 - [帮助文档](docs/help.md)
-- [许可证](docs/license.md) — MIT
+- [许可证](docs/LICENSE.md) — CC BY-NC-SA 4.0
 - [隐私声明](docs/privacy.md)
 
 ## 许可证

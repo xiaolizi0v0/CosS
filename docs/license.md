@@ -1,46 +1,37 @@
 # 开源许可
 
-CosS（Code Orchestration System）采用 **MIT 许可证** 进行开源。
+CosS（Code Orchestration System）采用 **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International（CC BY-NC-SA 4.0）** 许可协议发布。
 
-## MIT 许可证
+> 说明：该许可要求署名、禁止商业用途，并要求演绎作品以相同协议共享。
 
-```
-MIT License
+## 许可要点
 
-Copyright (c) 2026 xiaolizi0v0
+- **署名（Attribution）**：转载、分发或改编时需要保留原作者署名与项目链接。
+- **非商业（NonCommercial）**：不得将本项目或其改编版本用于主要面向商业利益或金钱补偿的用途。
+- **相同方式共享（ShareAlike）**：如果分发改编版本，必须继续使用 CC BY-NC-SA 4.0 或兼容协议。
+- **无担保**：本项目按“原样”提供，不提供任何明示或暗示担保。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+完整协议文本请查看仓库根目录的 [LICENSE](../LICENSE)，或访问：
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+https://creativecommons.org/licenses/by-nc-sa/4.0/
 
 ## 第三方依赖
 
-CosS 使用了多个开源第三方库，它们的许可信息如下：
+CosS 使用了多个开源第三方库，它们仍遵循各自的许可协议。
 
 | 依赖 | 许可协议 |
 |------|----------|
 | Electron | MIT |
 | Node.js | MIT |
+| i18next | MIT |
+| xterm.js | MIT |
+| Playwright | Apache-2.0 |
+| sql.js | MIT |
 | 其他 npm 依赖 | 详见各依赖的 LICENSE 文件 |
 
 ## 贡献指南
 
-我们欢迎社区贡献！如果您想为 CosS 做出贡献：
+我们欢迎社区贡献。提交贡献即表示您同意您的贡献按本项目当前许可协议 **CC BY-NC-SA 4.0** 发布。
 
 1. Fork 本仓库
 2. 创建您的特性分支 (`git checkout -b feature/amazing-feature`)

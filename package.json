@@ -2,6 +2,7 @@
   "name": "coss-desktop",
   "version": "0.10.0",
   "description": "CosS Windows desktop AI collaboration workspace MVP.",
+  "license": "CC-BY-NC-SA-4.0",
   "main": "src/main.cjs",
   "private": true,
   "scripts": {
