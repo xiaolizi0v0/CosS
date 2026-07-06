@@ -1,48 +1,92 @@
 name: Release
 
 on:
+  pull_request:
+    branches:
+      - "main"
   push:
+    branches:
+      - "main"
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.10.0"
-        required: true
+        description: "Optional release tag, for example v0.10.0. Leave empty to only build artifacts."
+        required: false
         type: string
 
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate release tag input
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ] && [[ ! "${{ github.event.inputs.tag }}" =~ ^v ]]; then
+            echo "Release tags must start with v, for example v0.10.0." >&2
+            exit 1
+          fi
+          echo "release_tag=${tag}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install dependencies
+        run: npm ci
+
   build:
     name: Package ${{ matrix.label }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - label: Windows x64
+          - label: windows-x64
             os: windows-latest
             platform: win32
             arch: x64
             asset: win-x64-portable.zip
             include_helper: true
-          - label: Linux x64
+          - label: linux-x64
             os: ubuntu-latest
             platform: linux
             arch: x64
             asset: linux-x64.zip
             include_helper: false
-          - label: macOS x64
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            asset: linux-arm64.zip
+            include_helper: false
+          - label: macos-x64
             os: macos-13
             platform: darwin
             arch: x64
             asset: macos-x64.zip
             include_helper: false
-          - label: macOS arm64
+          - label: macos-arm64
             os: macos-latest
             platform: darwin
             arch: arm64
@@ -73,6 +117,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $log = "build-${{ matrix.label }}.log"
           New-Item -ItemType Directory -Force -Path release-work/coss-terminal-helper | Out-Null
 
           dotnet publish native/coss-terminal-helper/CosS.TerminalHelper.csproj `
@@ -83,16 +128,24 @@ jobs:
             /p:IncludeNativeLibrariesForSelfExtract=true `
             /p:DebugType=None `
             /p:DebugSymbols=false `
-            -o release-work/coss-terminal-helper
+            -o release-work/coss-terminal-helper 2>&1 | Tee-Object -FilePath $log -Append
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Package Electron app
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $log = "build-${{ matrix.label }}.log"
 
           $tag = $env:RELEASE_TAG
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            throw "RELEASE_TAG is empty. Push a v* tag or provide workflow_dispatch input 'tag'."
+            $tag = "${{ github.ref_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "Release tag/ref name is empty."
           }
 
           New-Item -ItemType Directory -Force -Path release-assets, release-work | Out-Null
@@ -120,7 +173,10 @@ jobs:
             $packagerArgs += "--extra-resource=release-work/coss-terminal-helper"
           }
 
-          & npx --yes '@electron/packager@18.3.6' @packagerArgs
+          & npx --yes '@electron/packager@18.3.6' @packagerArgs 2>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
           Compress-Archive `
             -Path "release-work/$folder/*" `
@@ -129,19 +185,75 @@ jobs:
 
           Get-ChildItem release-assets -File | Format-Table Name, Length
 
-      - name: Upload platform asset
+      - name: Print build log on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $log = "build-${{ matrix.label }}.log"
+          Write-Host "=== BUILD LOG: $log ==="
+          if (Test-Path $log) {
+            Get-Content $log -Tail 200
+          } else {
+            Write-Host "Log file not found."
+          }
+
+      - name: Summarize warnings
+        if: always()
+        shell: pwsh
+        run: |
+          $log = "build-${{ matrix.label }}.log"
+          $warnings = "warnings-${{ matrix.label }}.txt"
+          if (Test-Path $log) {
+            Select-String -Path $log -Pattern "warning|warn" | ForEach-Object { $_.Line } | Set-Content -Encoding UTF8 $warnings
+          } else {
+            New-Item -ItemType File -Force -Path $warnings | Out-Null
+          }
+
+          $warningCount = 0
+          if (Test-Path $warnings) {
+            $warningCount = @(Get-Content $warnings | Where-Object { $_ }).Count
+          }
+
+          "## ${{ matrix.label }}" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- warnings: $warningCount" >> $env:GITHUB_STEP_SUMMARY
+          "- log: $log" >> $env:GITHUB_STEP_SUMMARY
+          if ($warningCount -gt 0) {
+            "" >> $env:GITHUB_STEP_SUMMARY
+            '```text' >> $env:GITHUB_STEP_SUMMARY
+            Get-Content $warnings -TotalCount 200 >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload build logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-asset-${{ matrix.platform }}-${{ matrix.arch }}
+          name: logs-${{ matrix.label }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build-${{ matrix.label }}.log
+            warnings-${{ matrix.label }}.txt
+
+      - name: Upload platform asset
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-asset-${{ matrix.label }}
+          retention-days: 7
           path: release-assets/*
           if-no-files-found: error
 
   release:
     name: Publish GitHub release
-    runs-on: ubuntu-latest
     needs: build
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v')) }}
+    permissions:
+      contents: write
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
     steps:
       - name: Check out repository
@@ -174,6 +286,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-${{ env.RELEASE_TAG }}
+          retention-days: 30
           path: release-assets/*
           if-no-files-found: error
 
