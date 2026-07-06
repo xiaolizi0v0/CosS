@@ -312,12 +312,22 @@ const modelConnectivityStatuses = {};
 const agentLoginTestStatuses = {};
 let openAppMenuId = null;
 let isWindowMaximized = false;
+let sidebarCollapsed = false;
+let sidebarWidth = 216;
+let sidebarResizeState = null;
+let sidebarCollapseTimer = null;
+const SIDEBAR_MIN_WIDTH = 216;
+const SIDEBAR_MAX_WIDTH = 360;
 let pendingTaskPlanDraft = null;
 let messageComposerDefaults = {};
 let messageTimelineFilters = { taskId: "", query: "" };
 let messageFlowSelection = { roleId: "", edgeKey: "" };
 let selectedTimelineItemId = "";
 let messageTimelineScrollLeft = 0;
+let globalSearchQuery = "";
+let agentBlueprintNodePositions = {};
+let agentBlueprintDragState = null;
+let agentBlueprintRouteCache = new Map();
 let taskViewOpen = false;
 let pendingFileOperation = null;
 let taskRoleFilter = "";
@@ -6447,13 +6457,445 @@ function renderAgentFlowSelection(project, graph) {
   `;
 }
 
+function getAgentBlueprintPositionKey(projectId, roleId) {
+  return `${projectId || "project"}:${roleId || "human"}`;
+}
+
+function getAgentBlueprintAutoLayout(graph) {
+  const nodeIds = graph.nodes.map((node) => node.id);
+  const outgoing = new Map(nodeIds.map((id) => [id, []]));
+  const incoming = new Map(nodeIds.map((id) => [id, []]));
+  graph.edges.forEach((edge) => {
+    if (!outgoing.has(edge.fromId) || !incoming.has(edge.toId)) {
+      return;
+    }
+    outgoing.get(edge.fromId).push(edge.toId);
+    incoming.get(edge.toId).push(edge.fromId);
+  });
+
+  const inDegree = new Map(nodeIds.map((id) => [id, incoming.get(id).length]));
+  const queue = nodeIds.filter((id) => inDegree.get(id) === 0);
+  const ordered = [];
+  while (queue.length > 0) {
+    const id = queue.shift();
+    ordered.push(id);
+    outgoing.get(id).forEach((nextId) => {
+      inDegree.set(nextId, inDegree.get(nextId) - 1);
+      if (inDegree.get(nextId) === 0) {
+        queue.push(nextId);
+      }
+    });
+  }
+  nodeIds.forEach((id) => {
+    if (!ordered.includes(id)) {
+      ordered.push(id);
+    }
+  });
+
+  const layerById = new Map(nodeIds.map((id) => [id, 0]));
+  ordered.forEach((id) => {
+    outgoing.get(id).forEach((nextId) => {
+      layerById.set(nextId, Math.max(layerById.get(nextId), layerById.get(id) + 1));
+    });
+  });
+
+  let layers = [];
+  nodeIds.forEach((id) => {
+    const layer = layerById.get(id) || 0;
+    layers[layer] ||= [];
+    layers[layer].push(id);
+  });
+  layers = layers.filter(Boolean);
+  const sortByBarycenter = (ids, neighborMap, neighborLayer) => ids
+    .map((id, index) => {
+      const neighbors = neighborMap.get(id) || [];
+      const neighborPositions = neighbors
+        .map((neighborId) => neighborLayer.indexOf(neighborId))
+        .filter((position) => position >= 0);
+      return {
+        id,
+        index,
+        barycenter: neighborPositions.length
+          ? neighborPositions.reduce((sum, position) => sum + position, 0) / neighborPositions.length
+          : index
+      };
+    })
+    .sort((a, b) => a.barycenter - b.barycenter || a.index - b.index)
+    .map((item) => item.id);
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    for (let layer = 1; layer < layers.length; layer += 1) {
+      layers[layer] = sortByBarycenter(layers[layer], incoming, layers[layer - 1]);
+    }
+    for (let layer = layers.length - 2; layer >= 0; layer -= 1) {
+      layers[layer] = sortByBarycenter(layers[layer], outgoing, layers[layer + 1]);
+    }
+  }
+
+  const positions = new Map();
+  layers.forEach((ids, layer) => {
+    const columnY = 38 + Math.max(0, 3 - ids.length) * 44;
+    ids.forEach((id, index) => {
+      positions.set(id, {
+        x: 44 + layer * 260,
+        y: columnY + index * 124
+      });
+    });
+  });
+  return positions;
+}
+
+function getAgentBlueprintNodePosition(node) {
+  return {
+    x: Number.parseFloat(node.style.left) || 0,
+    y: Number.parseFloat(node.style.top) || 0,
+    width: node.offsetWidth || 164,
+    height: node.offsetHeight || 78
+  };
+}
+
+function deCasteljauPoint(p0, p1, p2, p3, t) {
+  const lerp = (a, b) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const ab = lerp(p0, p1);
+  const bc = lerp(p1, p2);
+  const cd = lerp(p2, p3);
+  const abbc = lerp(ab, bc);
+  const bccd = lerp(bc, cd);
+  return lerp(abbc, bccd);
+}
+
+function getCubicBlueprintSegment(points, index, tension = 0.92) {
+  const previous = points[index - 1] || points[index];
+  const current = points[index];
+  const next = points[index + 1];
+  const afterNext = points[index + 2] || next;
+  const currentLength = Math.hypot(next.x - current.x, next.y - current.y);
+  const previousLength = Math.hypot(current.x - previous.x, current.y - previous.y) || currentLength;
+  const nextLength = Math.hypot(afterNext.x - next.x, afterNext.y - next.y) || currentLength;
+  const handleA = Math.min(currentLength * 0.42, previousLength * 0.38, 82) * tension;
+  const handleB = Math.min(currentLength * 0.42, nextLength * 0.38, 82) * tension;
+  const previousVectorLength = Math.hypot(next.x - previous.x, next.y - previous.y) || 1;
+  const nextVectorLength = Math.hypot(afterNext.x - current.x, afterNext.y - current.y) || 1;
+  return {
+    p0: current,
+    p1: {
+      x: current.x + ((next.x - previous.x) / previousVectorLength) * handleA,
+      y: current.y + ((next.y - previous.y) / previousVectorLength) * handleA
+    },
+    p2: {
+      x: next.x - ((afterNext.x - current.x) / nextVectorLength) * handleB,
+      y: next.y - ((afterNext.y - current.y) / nextVectorLength) * handleB
+    },
+    p3: next
+  };
+}
+
+function sampleCubicBlueprintPath(points, samplesPerSegment = 10) {
+  const cleanPoints = points.filter((point, index) => {
+    const previous = points[index - 1];
+    return !previous || previous.x !== point.x || previous.y !== point.y;
+  });
+  if (cleanPoints.length < 2) {
+    return { d: "", samples: [] };
+  }
+
+  const commands = [`M ${cleanPoints[0].x} ${cleanPoints[0].y}`];
+  const samples = [cleanPoints[0]];
+  for (let index = 0; index < cleanPoints.length - 1; index += 1) {
+    const segment = getCubicBlueprintSegment(cleanPoints, index);
+    commands.push(`C ${segment.p1.x} ${segment.p1.y}, ${segment.p2.x} ${segment.p2.y}, ${segment.p3.x} ${segment.p3.y}`);
+    const segmentSamples = Math.max(6, Math.min(18, Math.ceil(Math.hypot(segment.p3.x - segment.p0.x, segment.p3.y - segment.p0.y) / 28), samplesPerSegment));
+    for (let step = 1; step <= segmentSamples; step += 1) {
+      samples.push(deCasteljauPoint(segment.p0, segment.p1, segment.p2, segment.p3, step / segmentSamples));
+    }
+  }
+
+  return {
+    d: commands.join(" "),
+    samples
+  };
+}
+
+function buildRoundedBlueprintPath(points) {
+  return sampleCubicBlueprintPath(points).d;
+}
+
+function inflateBlueprintRect(rect, margin = 24) {
+  return {
+    ...rect,
+    x: rect.x - margin,
+    y: rect.y - margin,
+    width: rect.width + margin * 2,
+    height: rect.height + margin * 2
+  };
+}
+
+function uniqueSortedNumbers(values) {
+  return Array.from(new Set(values.map((value) => Math.round(value)).filter((value) => Number.isFinite(value))))
+    .sort((a, b) => a - b);
+}
+
+function pointInsideRect(point, rect) {
+  return point.x > rect.x && point.x < rect.x + rect.width && point.y > rect.y && point.y < rect.y + rect.height;
+}
+
+function segmentIntersectsRect(a, b, rect) {
+  if (a.y === b.y) {
+    const minX = Math.min(a.x, b.x);
+    const maxX = Math.max(a.x, b.x);
+    return a.y > rect.y && a.y < rect.y + rect.height && maxX > rect.x && minX < rect.x + rect.width;
+  }
+  if (a.x === b.x) {
+    const minY = Math.min(a.y, b.y);
+    const maxY = Math.max(a.y, b.y);
+    return a.x > rect.x && a.x < rect.x + rect.width && maxY > rect.y && minY < rect.y + rect.height;
+  }
+  return true;
+}
+
+function getBlueprintDirection(a, b) {
+  return a.x === b.x ? "v" : "h";
+}
+
+function getPolylineMidpoint(points) {
+  const lengths = [];
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const length = Math.abs(points[index].x - points[index - 1].x) + Math.abs(points[index].y - points[index - 1].y);
+    lengths.push(length);
+    total += length;
+  }
+  let cursor = 0;
+  const target = total / 2;
+  for (let index = 1; index < points.length; index += 1) {
+    const length = lengths[index - 1];
+    if (cursor + length >= target) {
+      const ratio = length ? (target - cursor) / length : 0;
+      return {
+        x: points[index - 1].x + (points[index].x - points[index - 1].x) * ratio,
+        y: points[index - 1].y + (points[index].y - points[index - 1].y) * ratio
+      };
+    }
+    cursor += length;
+  }
+  return points[Math.floor(points.length / 2)] || points[0];
+}
+
+function routeBlueprintOrthogonalPath(start, end, obstacles, bounds, edgeIndex = 0) {
+  const startedAt = performance.now();
+  const timeoutMs = 18;
+  const edgeOffset = (edgeIndex % 5) * 10;
+  const xValues = [bounds.left, bounds.right, start.x, end.x, start.x + 34 + edgeOffset, end.x - 34 - edgeOffset];
+  const yValues = [bounds.top, bounds.bottom, start.y, end.y];
+  obstacles.forEach((rect) => {
+    xValues.push(rect.x, rect.x + rect.width, rect.x - 18 - edgeOffset, rect.x + rect.width + 18 + edgeOffset);
+    yValues.push(rect.y, rect.y + rect.height, rect.y - 18 - edgeOffset, rect.y + rect.height + 18 + edgeOffset);
+  });
+  const xs = uniqueSortedNumbers(xValues).filter((value) => value >= bounds.left && value <= bounds.right);
+  const ys = uniqueSortedNumbers(yValues).filter((value) => value >= bounds.top && value <= bounds.bottom);
+  const points = [];
+  const pointMap = new Map();
+  const pointKey = (x, y) => `${x},${y}`;
+  xs.forEach((x) => {
+    ys.forEach((y) => {
+      const point = { x, y };
+      if (obstacles.some((rect) => pointInsideRect(point, rect))) {
+        return;
+      }
+      pointMap.set(pointKey(x, y), points.length);
+      points.push(point);
+    });
+  });
+  const startKey = pointKey(start.x, start.y);
+  const endKey = pointKey(end.x, end.y);
+  if (!pointMap.has(startKey) || !pointMap.has(endKey)) {
+    return null;
+  }
+
+  const clearSegment = (a, b) => !obstacles.some((rect) => segmentIntersectsRect(a, b, rect));
+  const getNeighbors = (index) => {
+    const point = points[index];
+    const neighbors = [];
+    const xIndex = xs.indexOf(point.x);
+    const yIndex = ys.indexOf(point.y);
+    [xIndex - 1, xIndex + 1].forEach((nextXIndex) => {
+      if (nextXIndex < 0 || nextXIndex >= xs.length) {
+        return;
+      }
+      const nextIndex = pointMap.get(pointKey(xs[nextXIndex], point.y));
+      if (Number.isInteger(nextIndex) && clearSegment(point, points[nextIndex])) {
+        neighbors.push(nextIndex);
+      }
+    });
+    [yIndex - 1, yIndex + 1].forEach((nextYIndex) => {
+      if (nextYIndex < 0 || nextYIndex >= ys.length) {
+        return;
+      }
+      const nextIndex = pointMap.get(pointKey(point.x, ys[nextYIndex]));
+      if (Number.isInteger(nextIndex) && clearSegment(point, points[nextIndex])) {
+        neighbors.push(nextIndex);
+      }
+    });
+    return neighbors;
+  };
+
+  const startIndex = pointMap.get(startKey);
+  const endIndex = pointMap.get(endKey);
+  const startState = `${startIndex}|`;
+  const queue = [{ state: startState, index: startIndex, previousDirection: "", cost: 0, priority: 0 }];
+  const costs = new Map([[startState, 0]]);
+  const parents = new Map();
+  let bestState = "";
+  const heuristic = (point) => Math.abs(point.x - end.x) + Math.abs(point.y - end.y);
+  while (queue.length > 0 && performance.now() - startedAt < timeoutMs) {
+    queue.sort((a, b) => a.priority - b.priority);
+    const current = queue.shift();
+    if (current.index === endIndex) {
+      bestState = current.state;
+      break;
+    }
+    getNeighbors(current.index).forEach((nextIndex) => {
+      const direction = getBlueprintDirection(points[current.index], points[nextIndex]);
+      const bendPenalty = current.previousDirection && current.previousDirection !== direction ? 42 : 0;
+      const stepCost = Math.abs(points[current.index].x - points[nextIndex].x) + Math.abs(points[current.index].y - points[nextIndex].y) + bendPenalty;
+      const nextCost = current.cost + stepCost;
+      const nextState = `${nextIndex}|${direction}`;
+      if (costs.has(nextState) && costs.get(nextState) <= nextCost) {
+        return;
+      }
+      costs.set(nextState, nextCost);
+      parents.set(nextState, current.state);
+      queue.push({
+        state: nextState,
+        index: nextIndex,
+        previousDirection: direction,
+        cost: nextCost,
+        priority: nextCost + heuristic(points[nextIndex])
+      });
+    });
+  }
+  if (!bestState) {
+    return null;
+  }
+
+  const route = [];
+  let cursor = bestState;
+  while (cursor) {
+    const index = Number(cursor.split("|")[0]);
+    route.push(points[index]);
+    cursor = parents.get(cursor);
+  }
+  return route.reverse();
+}
+
+function fallbackBlueprintRoute(from, to, allRects = [], edgeIndex = 0) {
+  const startX = from.x + from.width;
+  const startY = from.y + from.height / 2;
+  const endX = to.x;
+  const endY = to.y + to.height / 2;
+  const allBottom = Math.max(...allRects.map((rect) => rect.y + rect.height), from.y + from.height, to.y + to.height);
+  const laneY = allBottom + 62 + (edgeIndex % 4) * 22;
+  return [
+    { x: startX, y: startY },
+    { x: startX + 42, y: startY },
+    { x: startX + 42, y: laneY },
+    { x: endX - 42, y: laneY },
+    { x: endX - 42, y: endY },
+    { x: endX, y: endY }
+  ];
+}
+
+function getUnrealBlueprintSpline(start, end, edgeIndex = 0) {
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const absDeltaX = Math.abs(deltaX);
+  const absDeltaY = Math.abs(deltaY);
+  const sideOffset = (edgeIndex % 4) * 10;
+  const tangent = Math.max(96, Math.min(360, absDeltaX * 0.55 + absDeltaY * 0.18 + sideOffset));
+  const startDir = { x: tangent, y: 0 };
+  const endDir = { x: -tangent, y: 0 };
+  const p0 = start;
+  const p1 = { x: start.x + startDir.x, y: start.y + startDir.y };
+  const p2 = { x: end.x + endDir.x, y: end.y + endDir.y };
+  const p3 = end;
+  const samples = [];
+  for (let step = 0; step <= 24; step += 1) {
+    samples.push(deCasteljauPoint(p0, p1, p2, p3, step / 24));
+  }
+  return {
+    d: `M ${p0.x} ${p0.y} C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ${p3.x} ${p3.y}`,
+    samples
+  };
+}
+
+function getAgentBlueprintRoute(from, to, allRects = [], edgeIndex = 0) {
+  // 端点对齐到端口中心（端口在节点边缘外 1px），避免连线插入节点内部
+  const start = { x: from.x + from.width + 1, y: from.y + from.height / 2 };
+  const end = { x: to.x - 1, y: to.y + to.height / 2 };
+  const cacheKey = JSON.stringify({ style: "ue-spline", start, end, edgeIndex });
+  let spline = agentBlueprintRouteCache.get(cacheKey);
+  if (!spline) {
+    spline = getUnrealBlueprintSpline(start, end, edgeIndex);
+    agentBlueprintRouteCache.set(cacheKey, spline);
+    if (agentBlueprintRouteCache.size > 240) {
+      agentBlueprintRouteCache = new Map(Array.from(agentBlueprintRouteCache.entries()).slice(-160));
+    }
+  }
+  const midpoint = spline.samples[Math.floor(spline.samples.length / 2)] || getPolylineMidpoint([start, end]);
+  return {
+    d: spline.d,
+    labelX: midpoint.x,
+    labelY: midpoint.y - 8,
+    minY: Math.min(...spline.samples.map((point) => point.y), start.y, end.y),
+    maxY: Math.max(...spline.samples.map((point) => point.y), start.y, end.y)
+  };
+}
+
+function getAgentBlueprintPath(fromNode, toNode, edgeIndex = 0) {
+  const canvas = fromNode.closest(".agent-blueprint-canvas");
+  const allRects = Array.from(canvas?.querySelectorAll(".agent-blueprint-node") || []).map((node) => ({
+    id: node.dataset.roleId || "",
+    ...getAgentBlueprintNodePosition(node)
+  }));
+  return getAgentBlueprintRoute(
+    { id: fromNode.dataset.roleId || "", ...getAgentBlueprintNodePosition(fromNode) },
+    { id: toNode.dataset.roleId || "", ...getAgentBlueprintNodePosition(toNode) },
+    allRects,
+    edgeIndex
+  );
+}
+
+function updateAgentBlueprintLinks(canvas) {
+  if (!canvas) {
+    return;
+  }
+
+  let routeMaxY = 0;
+  canvas.querySelectorAll(".agent-blueprint-link").forEach((link) => {
+    const fromNode = canvas.querySelector(`.agent-blueprint-node[data-role-id="${CSS.escape(link.dataset.fromRoleId || "")}"]`);
+    const toNode = canvas.querySelector(`.agent-blueprint-node[data-role-id="${CSS.escape(link.dataset.toRoleId || "")}"]`);
+    if (!fromNode || !toNode) {
+      return;
+    }
+
+    const path = getAgentBlueprintPath(fromNode, toNode, Number(link.dataset.edgeIndex || 0));
+    routeMaxY = Math.max(routeMaxY, path.maxY || 0);
+    link.querySelectorAll(".agent-blueprint-link-hit, .agent-blueprint-link-line").forEach((node) => node.setAttribute("d", path.d));
+    link.querySelector(".agent-blueprint-link-label")?.setAttribute("x", path.labelX);
+    link.querySelector(".agent-blueprint-link-label")?.setAttribute("y", path.labelY);
+  });
+  if (routeMaxY) {
+    updateAgentBlueprintCanvasSize(canvas, 0, routeMaxY);
+  }
+}
+
 function renderAgentFlowGraph(project) {
   const graph = getAgentFlowGraph(project);
   if (graph.nodes.length === 0) {
     return `
-      <div class="agent-flow-panel">
+      <div class="agent-flow-panel agent-blueprint-panel">
         <div class="agent-flow-header">
-          <strong>角色消息池流向</strong>
+          <strong>角色消息池蓝图</strong>
           <span>等待首条角色消息写入消息池</span>
         </div>
       </div>
@@ -6462,43 +6904,104 @@ function renderAgentFlowGraph(project) {
   const selectedRoleId = graph.nodes.some((node) => node.id === messageFlowSelection.roleId) ? messageFlowSelection.roleId : "";
   const selectedEdgeKey = graph.edges.some((edge) => edge.key === messageFlowSelection.edgeKey) ? messageFlowSelection.edgeKey : "";
   const hasSelection = Boolean(selectedRoleId || selectedEdgeKey);
-  const roleNodes = graph.nodes.map((node, index) => `
-    <button class="agent-flow-node node-${index % 5} ${node.id === selectedRoleId ? "selected" : ""}"
-      title="${escapeHtml(node.label)}"
-      data-action="select-agent-flow-role"
-      data-role-id="${escapeHtml(node.id)}"
-      aria-pressed="${node.id === selectedRoleId ? "true" : "false"}">
-      <span class="agent-flow-dot"></span>
-      <strong>${escapeHtml(node.label)}</strong>
-      <small>发 ${node.sent} / 收 ${node.received}</small>
-    </button>
-  `).join("");
-  const edgeRows = graph.edges.length
-    ? graph.edges.map((edge, index) => `
-      <button class="agent-flow-edge edge-${index % 5} ${edge.key === selectedEdgeKey ? "selected" : ""}"
+  const nodeWidth = 164;
+  const nodeHeight = 78;
+  const autoLayoutPositions = getAgentBlueprintAutoLayout(graph);
+  const nodePositions = new Map();
+  graph.nodes.forEach((node, index) => {
+    const saved = agentBlueprintNodePositions[getAgentBlueprintPositionKey(project.id, node.id)];
+    nodePositions.set(node.id, saved || autoLayoutPositions.get(node.id) || {
+      x: 44 + index * 260,
+      y: 38
+    });
+  });
+  const nodePositionBounds = Array.from(nodePositions.values());
+  // 画布尺寸只跟随真实节点边界，避免用 sqrt(N) 网格公式强行撑出空白
+  const maxNodeX = Math.max(44 + nodeWidth, ...nodePositionBounds.map((position) => position.x + nodeWidth));
+  const maxNodeY = Math.max(38 + nodeHeight, ...nodePositionBounds.map((position) => position.y + nodeHeight));
+  const nodeRects = graph.nodes.map((node) => ({ id: node.id, ...(nodePositions.get(node.id) || { x: 0, y: 0 }), width: nodeWidth, height: nodeHeight }));
+  const edgeRoutes = graph.edges.map((edge, index) => {
+    const from = nodePositions.get(edge.fromId) || { x: 0, y: 0 };
+    const to = nodePositions.get(edge.toId) || { x: 0, y: 0 };
+    return getAgentBlueprintRoute(
+      { id: edge.fromId, ...from, width: nodeWidth, height: nodeHeight },
+      { id: edge.toId, ...to, width: nodeWidth, height: nodeHeight },
+      nodeRects,
+      index
+    );
+  });
+  const routeMaxY = Math.max(...edgeRoutes.map((route) => route.maxY), maxNodeY);
+  const blueprintWidth = Math.max(680, maxNodeX + 80);
+  const blueprintHeight = Math.max(260, routeMaxY + 80);
+  const edgePaths = graph.edges.map((edge, index) => {
+    const route = edgeRoutes[index];
+    return `
+      <g class="agent-blueprint-link link-${index % 5} ${edge.key === selectedEdgeKey ? "selected" : ""}"
         data-action="select-agent-flow-edge"
         data-flow-edge-key="${escapeHtml(edge.key)}"
         data-from-role-id="${escapeHtml(edge.fromId)}"
         data-to-role-id="${escapeHtml(edge.toId)}"
+        data-edge-index="${index}"
         aria-pressed="${edge.key === selectedEdgeKey ? "true" : "false"}">
-        <span>${escapeHtml(graph.nodes.find((node) => node.id === edge.fromId)?.label || getFlowRoleLabel(edge.fromId))}</span>
-        <i></i>
-        <span>${escapeHtml(graph.nodes.find((node) => node.id === edge.toId)?.label || getFlowRoleLabel(edge.toId))}</span>
-        <em>${edge.count}</em>
+        <path class="agent-blueprint-link-hit" d="${escapeHtml(route.d)}"></path>
+        <path class="agent-blueprint-link-line" d="${escapeHtml(route.d)}" marker-end="url(#agentBlueprintArrow)"></path>
+        <text class="agent-blueprint-link-label" x="${route.labelX}" y="${route.labelY}">${edge.count}</text>
+      </g>
+    `;
+  }).join("");
+  const roleNodes = graph.nodes.map((node, index) => {
+    const position = nodePositions.get(node.id) || { x: 0, y: 0 };
+    const selected = node.id === selectedRoleId;
+    return `
+      <button class="agent-blueprint-node node-${index % 5} ${selected ? "selected" : ""}"
+        style="left:${position.x}px; top:${position.y}px;"
+        title="${escapeHtml(node.label)}"
+        data-action="select-agent-flow-role"
+        data-role-id="${escapeHtml(node.id)}"
+        data-position-key="${escapeHtml(getAgentBlueprintPositionKey(project.id, node.id))}"
+        aria-pressed="${selected ? "true" : "false"}">
+        <span class="agent-blueprint-port in" aria-hidden="true"></span>
+        <span class="agent-blueprint-port out" aria-hidden="true"></span>
+        <strong>${escapeHtml(node.label)}</strong>
+        <small><span>发 ${node.sent}</span><span>收 ${node.received}</span></small>
+      </button>
+    `;
+  }).join("");
+  const edgeLegend = graph.edges.length
+    ? graph.edges.slice(-5).reverse().map((edge) => `
+      <button class="agent-blueprint-edge-chip ${edge.key === selectedEdgeKey ? "selected" : ""}"
+        data-action="select-agent-flow-edge"
+        data-flow-edge-key="${escapeHtml(edge.key)}">
+        ${escapeHtml(getFlowRoleLabel(edge.fromId))} → ${escapeHtml(getFlowRoleLabel(edge.toId))}<span>${edge.count}</span>
       </button>
     `).join("")
     : `<div class="agent-flow-empty">已有角色节点，暂无角色之间的交接消息。</div>`;
   return `
-    <div class="agent-flow-panel">
+    <div class="agent-flow-panel agent-blueprint-panel">
       <div class="agent-flow-header">
-        <strong>角色消息池流向</strong>
-        <span>${graph.nodes.length} 个节点 · ${graph.edges.length} 条流向${hasSelection ? " · 已筛选" : ""}</span>
+        <strong>角色消息池蓝图</strong>
+        <span>${graph.nodes.length} 个节点 · ${graph.edges.length} 条连接${hasSelection ? " · 已筛选" : ""}</span>
+        <button class="secondary-button compact" data-action="auto-layout-agent-blueprint">自动整理</button>
         ${hasSelection ? `<button class="secondary-button compact" data-action="clear-agent-flow-selection">清除</button>` : ""}
       </div>
-      <div class="agent-flow-body">
-        <div class="agent-flow-nodes">${roleNodes}</div>
-        <div class="agent-flow-edges">${edgeRows}</div>
+      <div class="agent-blueprint-wrap">
+        <div class="agent-blueprint-canvas" data-project-id="${escapeHtml(project.id)}" style="width:${blueprintWidth}px; height:${blueprintHeight}px;">
+          <svg class="agent-blueprint-svg" width="${blueprintWidth}" height="${blueprintHeight}" viewBox="0 0 ${blueprintWidth} ${blueprintHeight}" aria-hidden="true">
+            <defs>
+              <pattern id="agentBlueprintGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+                <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(82, 103, 140, 0.10)" stroke-width="1" />
+              </pattern>
+              <marker id="agentBlueprintArrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" class="agent-blueprint-arrow-head"></path>
+              </marker>
+            </defs>
+            <rect class="agent-blueprint-grid" width="100%" height="100%" fill="url(#agentBlueprintGrid)"></rect>
+            ${edgePaths}
+          </svg>
+          ${roleNodes}
+        </div>
       </div>
+      <div class="agent-blueprint-legend">${edgeLegend}</div>
       ${renderAgentFlowSelection(project, graph)}
     </div>
   `;
@@ -6536,6 +7039,8 @@ function refreshMessageTimelineList() {
   if (list && project) {
     const scrollLeft = captureMessageTimelineScroll();
     list.innerHTML = renderMessageRows(project);
+    attachAgentBlueprintDragHandlers();
+    updateAgentBlueprintLinks(list.querySelector(".agent-blueprint-canvas"));
     restoreMessageTimelineScroll(scrollLeft);
   }
 }
@@ -6592,6 +7097,22 @@ function selectAgentFlowEdge(edgeKey) {
 function clearAgentFlowSelection() {
   messageFlowSelection = { roleId: "", edgeKey: "" };
   selectedTimelineItemId = "";
+  refreshMessageTimelineList();
+}
+
+function autoLayoutAgentBlueprint() {
+  const project = getProject();
+  if (!project) {
+    return;
+  }
+
+  const prefix = `${project.id}:`;
+  Object.keys(agentBlueprintNodePositions).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      delete agentBlueprintNodePositions[key];
+    }
+  });
+  agentBlueprintRouteCache.clear();
   refreshMessageTimelineList();
 }
 
@@ -6652,6 +7173,8 @@ function showMessageCenterModal(defaults = {}) {
       </div>
     </div>
   `);
+  attachAgentBlueprintDragHandlers();
+  updateAgentBlueprintLinks(document.querySelector(".agent-blueprint-canvas"));
   if (modalWasOpen) {
     restoreMessageTimelineScroll(timelineScrollLeft);
   }
@@ -6702,17 +7225,22 @@ async function showAboutModal() {
   }
 
   renderModal(`
-    <div class="modal about-modal">
-      <h2>关于 CosS</h2>
-      <p>CosS 是一个面向多角色 AI 协作的 Windows 类桌面工作区。</p>
-      <div class="about-list">
-        <div><strong>当前版本</strong><span>v${escapeHtml(appInfo.version || APP_VERSION.replace(/^v/, ""))}</span></div>
-        <div><strong>日志目录</strong><span>${escapeHtml(appInfo.logDirectory || "未获取")}</span></div>
-        <div><strong>用户数据</strong><span>${escapeHtml(appInfo.userData || "未获取")}</span></div>
+    <div class="modal about-modal" role="dialog" aria-label="关于 CosS">
+      <div class="about-titlebar">
+        <div class="about-titlebar-title">
+          <img class="about-titlebar-icon" src="./Logo.png" alt="" aria-hidden="true" draggable="false" />
+          <span>关于 CosS</span>
+        </div>
+        <button class="about-close-button" type="button" data-action="close-modal" aria-label="关闭">×</button>
       </div>
-      <div class="modal-actions">
-        <button class="secondary-button" data-action="open-log-directory">打开日志目录</button>
-        <button class="primary-button" data-action="close-modal">确定</button>
+      <div class="about-main">
+        <img class="about-main-logo" src="./Logo.png" alt="CosS" draggable="false" />
+        <h2>CosS</h2>
+        <p class="about-version">版本 ${escapeHtml(appInfo.version || APP_VERSION.replace(/^v/, ""))} · 发布于 2026年7月1日</p>
+        <p class="about-copyright">© CosS</p>
+      </div>
+      <div class="about-footer">
+        <button class="about-ok-button" type="button" data-action="close-modal">确定</button>
       </div>
     </div>
   `);
@@ -6792,6 +7320,243 @@ function closeModal() {
   pendingTaskPlanDraft = null;
   pendingFileOperation = null;
   document.querySelector(".modal-backdrop")?.remove();
+}
+
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function searchHaystackMatches(query, values) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return true;
+  }
+  return values.join(" ").toLowerCase().includes(normalizedQuery);
+}
+
+function getSearchResultScore(query, values) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return 0;
+  }
+  const normalizedValues = values.map((value) => String(value || "").toLowerCase());
+  if (normalizedValues.some((value) => value === normalizedQuery)) {
+    return 100;
+  }
+  if (normalizedValues.some((value) => value.startsWith(normalizedQuery))) {
+    return 70;
+  }
+  return normalizedValues.some((value) => value.includes(normalizedQuery)) ? 30 : 0;
+}
+
+function buildGlobalSearchResults(query = globalSearchQuery) {
+  const normalizedQuery = normalizeSearchText(query);
+  const activeProjectId = state.activeProjectId || "";
+  const results = [];
+  const pushResult = (result, haystack) => {
+    if (!searchHaystackMatches(normalizedQuery, haystack)) {
+      return;
+    }
+    results.push({
+      ...result,
+      score: getSearchResultScore(normalizedQuery, haystack) + (result.projectId === activeProjectId ? 8 : 0)
+    });
+  };
+
+  state.projects.forEach((project) => {
+    ensureProjectShape(project);
+    pushResult({
+      kind: "project",
+      projectId: project.id,
+      title: project.name || "未命名项目",
+      subtitle: project.path || "未设置项目路径",
+      meta: `${project.tasks.length} 个任务 · ${project.windows.length} 个窗口`,
+      actionLabel: "打开项目"
+    }, [project.name, project.path, project.id]);
+
+    project.windows.forEach((win) => {
+      const role = getRole(win.roleId);
+      pushResult({
+        kind: "window",
+        projectId: project.id,
+        windowId: win.id,
+        desktopId: win.desktopId || "",
+        title: win.title || PROGRAMS[win.type]?.label || "窗口",
+        subtitle: `${project.name} · ${role.name} · ${PROGRAMS[win.type]?.label || win.type}`,
+        meta: win.minimized ? "已最小化" : "运行中",
+        actionLabel: "定位窗口"
+      }, [project.name, project.path, win.title, win.type, role.name, win.filePath, win.url, win.browserTabs?.map((tab) => `${tab.title} ${tab.url}`).join(" ")]);
+    });
+
+    project.tasks.forEach((task) => {
+      const roleNames = getTaskRoleIds(task).map((roleId) => getRole(roleId).name).join("、");
+      pushResult({
+        kind: "task",
+        projectId: project.id,
+        taskId: task.id,
+        desktopId: getTaskConversationId(task),
+        title: task.title || "未命名任务",
+        subtitle: task.goal || "无任务目标",
+        meta: `${project.name} · ${roleNames || "未分配角色"} · ${SUBTASK_STATUS_DEFS[getTaskStatusValue(task)]?.label || getTaskStatusValue(task)}`,
+        actionLabel: "查看任务"
+      }, [project.name, project.path, task.title, task.goal, task.model?.modelName, roleNames, ...(task.subtasks || []).flatMap((subtask) => [subtask.title, subtask.description, getRole(subtask.roleId).name])]);
+    });
+
+    project.messages.forEach((message) => {
+      const fromRole = getRole(message.fromRoleId).name;
+      const toRoles = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
+      pushResult({
+        kind: "message",
+        timelineKind: "message",
+        projectId: project.id,
+        itemId: message.id,
+        taskId: message.taskId || "",
+        title: `${fromRole} → ${toRoles}`,
+        subtitle: message.content || "空消息",
+        meta: `${project.name} · ${getMessageTaskLabel(message.taskId)} · ${formatDateTime(message.createdAt)}`,
+        actionLabel: "查看消息"
+      }, [project.name, project.path, fromRole, toRoles, message.content, message.source, getMessageTaskLabel(message.taskId)]);
+    });
+
+    project.agentEvents.forEach((event) => {
+      const roleName = getRole(event.roleId).name;
+      pushResult({
+        kind: "event",
+        timelineKind: "agent-event",
+        projectId: project.id,
+        itemId: event.id,
+        taskId: event.taskId || "",
+        title: `Agent 事件 · ${roleName}`,
+        subtitle: event.message || event.sessionId || event.status || "状态事件",
+        meta: `${project.name} · ${event.provider || "agent"} · ${formatDateTime(event.receivedAt)}`,
+        actionLabel: "查看事件"
+      }, [project.name, project.path, roleName, event.provider, event.status, event.type, event.toolName, event.message, event.sessionId, getMessageTaskLabel(event.taskId)]);
+    });
+  });
+
+  return results
+    .sort((a, b) => b.score - a.score || String(a.title).localeCompare(String(b.title), "zh-CN"))
+    .slice(0, normalizedQuery ? 80 : 28);
+}
+
+function renderGlobalSearchResults(query = globalSearchQuery) {
+  const results = buildGlobalSearchResults(query);
+  const normalizedQuery = normalizeSearchText(query);
+  if (results.length === 0) {
+    return `<div class="global-search-empty">${normalizedQuery ? "没有找到匹配结果。可以搜索项目、任务、消息、角色、窗口标题或文件路径。" : "输入关键词后搜索项目、任务、消息、事件和窗口。"}</div>`;
+  }
+
+  return results.map((item) => `
+    <button class="global-search-result" data-action="open-search-result"
+      data-result-kind="${escapeHtml(item.kind)}"
+      data-project-id="${escapeHtml(item.projectId || "")}"
+      data-window-id="${escapeHtml(item.windowId || "")}"
+      data-task-id="${escapeHtml(item.taskId || "")}"
+      data-desktop-id="${escapeHtml(item.desktopId || "")}"
+      data-item-id="${escapeHtml(item.itemId || "")}"
+      data-timeline-kind="${escapeHtml(item.timelineKind || "")}">
+      <span class="global-search-kind">${escapeHtml({ project: "项目", task: "任务", message: "消息", event: "事件", window: "窗口" }[item.kind] || "结果")}</span>
+      <span class="global-search-main">
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(item.subtitle)}</span>
+        <em>${escapeHtml(item.meta || "")}</em>
+      </span>
+      <span class="global-search-action">${escapeHtml(item.actionLabel || "打开")}</span>
+    </button>
+  `).join("");
+}
+
+function refreshGlobalSearchResults() {
+  const list = document.querySelector("[data-global-search-results]");
+  const count = document.querySelector("[data-global-search-count]");
+  const results = buildGlobalSearchResults(globalSearchQuery);
+  if (list) {
+    list.innerHTML = renderGlobalSearchResults(globalSearchQuery);
+  }
+  if (count) {
+    count.textContent = `${results.length} 个结果`;
+  }
+}
+
+function showSearchModal() {
+  closeMenus();
+  const results = buildGlobalSearchResults(globalSearchQuery);
+  renderModal(`
+    <div class="modal global-search-modal">
+      <div class="global-search-head">
+        <div>
+          <h2>搜索</h2>
+          <p>搜索项目、任务、消息、Agent 事件、窗口标题和文件路径。</p>
+        </div>
+        <button class="settings-close" title="关闭" data-action="close-modal">×</button>
+      </div>
+      <label class="global-search-box">
+        <span>${icon("search")}</span>
+        <input id="globalSearchInput" value="${escapeHtml(globalSearchQuery)}" placeholder="输入关键词，例如任务标题、角色、路径或消息内容" autocomplete="off" />
+      </label>
+      <div class="global-search-summary" data-global-search-count>${results.length} 个结果</div>
+      <div class="global-search-results" data-global-search-results>
+        ${renderGlobalSearchResults(globalSearchQuery)}
+      </div>
+    </div>
+  `);
+  setTimeout(() => document.getElementById("globalSearchInput")?.focus(), 0);
+}
+
+function openSearchResult(target) {
+  const projectId = target.dataset.projectId || "";
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) {
+    closeModal();
+    return;
+  }
+
+  const kind = target.dataset.resultKind || "";
+  closeModal();
+  if (state.activeProjectId !== project.id) {
+    state.activeProjectId = project.id;
+    project.lastOpenedAt = new Date().toISOString();
+  }
+
+  if (kind === "project") {
+    saveState();
+    bootWorkspace(project.id);
+    return;
+  }
+
+  const desktopId = target.dataset.desktopId || "";
+  if (desktopId && getProjectDesktops(project).some((desktop) => desktop.id === desktopId)) {
+    project.activeDesktopId = desktopId;
+  }
+
+  if (kind === "window") {
+    saveState();
+    focusWindow(target.dataset.windowId || "");
+    return;
+  }
+
+  if (kind === "task") {
+    const taskId = target.dataset.taskId || "";
+    const task = project.tasks.find((item) => item.id === taskId);
+    taskListFilters = { query: "", roleId: "", status: "", model: "", includeArchived: Boolean(task?.archived) };
+    selectedTaskListTaskId = taskId;
+    saveState();
+    openTaskListWindow();
+    return;
+  }
+
+  if (kind === "message" || kind === "event") {
+    const timelineKind = target.dataset.timelineKind || (kind === "event" ? "agent-event" : "message");
+    selectedTimelineItemId = `${timelineKind}:${target.dataset.itemId || ""}`;
+    messageTimelineFilters = { ...messageTimelineFilters, taskId: target.dataset.taskId || "", query: "" };
+    messageFlowSelection = { roleId: "", edgeKey: "" };
+    saveState();
+    showMessageCenterModal({ filterTaskId: target.dataset.taskId || "" });
+    return;
+  }
+
+  saveState();
+  render();
 }
 
 function renderSeverityLabel(severity) {
@@ -8270,7 +9035,7 @@ function renderAppTitlebar() {
     <header class="app-titlebar">
       <div class="app-titlebar-left">
         <div class="app-titlemark">
-          <span class="app-title-icon" aria-hidden="true"></span>
+          <img class="app-title-icon" src="./Logo.png" alt="" aria-hidden="true" draggable="false" />
           <span class="app-title-text">CosS</span>
         </div>
         <nav class="app-menu-bar" aria-label="应用菜单">
@@ -8384,13 +9149,14 @@ async function executeCustomMenuCommand(command) {
 
 function render() {
   const project = getProject();
+  const sidebarContent = sidebarCollapsed ? "" : `${renderSidebar(project)}<div class="sidebar-resizer" data-sidebar-resizer title="拖动调整侧边栏宽度"></div>`;
   captureTaskListScrollState();
   hydratedBrowserViews.clear();
   appRoot.innerHTML = `
     <div class="app-frame">
       ${renderAppTitlebar()}
-      <main class="app-shell">
-        ${renderSidebar(project)}
+      <main class="app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}" style="--sidebar-width:${sidebarWidth}px;">
+        ${sidebarContent}
         ${renderWorkspace(project)}
       </main>
       ${contextMenu ? renderContextMenu() : ""}
@@ -8399,6 +9165,8 @@ function render() {
   `;
   attachWindowFocusHandlers();
   attachWindowDragHandlers();
+  attachSidebarResizeHandlers();
+  attachAgentBlueprintDragHandlers();
   hydrateTerminalWindows();
   hydrateBrowserViews();
   restoreTaskListScrollState();
@@ -8454,21 +9222,17 @@ function renderSidebar(project) {
   return `
     <aside class="sidebar">
       <div class="brand-row">
-        <div class="brand">CosS <span class="brand-version">${APP_VERSION}</span></div>
+        <div class="brand"><span>CosS</span> <span class="brand-version">${APP_VERSION}</span></div>
         <div class="icon-strip">
           <button class="icon-button" title="新建项目" data-action="show-create-project">${icon("new")}</button>
-          <button class="icon-button" title="搜索">${icon("search")}</button>
-          <button class="icon-button" title="菜单">${icon("menu")}</button>
+          <button class="icon-button" title="搜索" data-action="show-search">${icon("search")}</button>
+          <button class="icon-button sidebar-toggle-button" title="隐藏侧边栏" data-action="toggle-sidebar">${icon("sidebar")}</button>
         </div>
       </div>
       <nav class="nav">
         <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>新建任务</button>
         <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>消息</button>
         <button class="nav-item active"><span class="nav-icon">${icon("cube")}</span>项目</button>
-        <button class="nav-item" data-action="show-logs"><span class="nav-icon">${icon("shield")}</span>日志</button>
-        <button class="nav-item disabled"><span class="nav-icon">${icon("user")}</span>专家</button>
-        <button class="nav-item disabled"><span class="nav-icon">${icon("bolt")}</span>自动化</button>
-        <button class="nav-item disabled"><span class="nav-icon">${icon("more")}</span>更多</button>
       </nav>
       <div class="section-title">
         <span>项目 (${state.projects.length})</span>
@@ -8524,7 +9288,8 @@ function renderWorkspace(project) {
   const activeConversationTaskCount = project ? getConversationTasks(project).length : 0;
 
   return `
-    <section class="workspace" data-active-desktop-id="${escapeHtml(activeDesktop?.id || "")}">
+    <section class="workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}" data-active-desktop-id="${escapeHtml(activeDesktop?.id || "")}">
+      ${sidebarCollapsed ? `<button class="sidebar-floating-toggle sidebar-toggle-button" title="显示侧边栏" data-action="toggle-sidebar">${icon("sidebar")}</button>` : ""}
       <div class="workspace-topbar">
         <div class="project-heading">
           <h1 class="workspace-title">${project ? escapeHtml(project.name) : "未选择项目"}</h1>
@@ -8594,7 +9359,7 @@ function renderDock(project) {
 
   return `
     <div class="dock">
-      <button class="dock-button" title="搜索">${icon("search")}</button>
+      <button class="dock-button" title="搜索" data-action="show-search">${icon("search")}</button>
       <button class="dock-button task-view-toggle" title="对话视图" data-action="show-task-view">${icon("layout")}</button>
       <button class="dock-button" title="任务列表" data-action="open-task-list-window">${icon("task")}</button>
       <button class="dock-button" title="新建终端" data-action="show-role-picker" data-type="terminal">${icon("terminal")}</button>
@@ -10124,7 +10889,17 @@ function hydrateTerminalWindows() {
       }
     };
 
-    const inputDisposable = term.onData((data) => handleTerminalInput(win, inputState, term, data));
+    const inputDisposable = term.onData((data) => {
+      handleTerminalInput(win, inputState, term, data);
+      // Workaround for xterm.js IME composition bug on Windows: the textarea is
+      // not cleared after composition ends (only on blur/Ctrl+C/Enter), so stale
+      // composed text lingers and gets re-emitted on subsequent keystrokes,
+      // causing the first composed character (e.g. "中") to repeat indefinitely.
+      // Clearing it here resets composition positions for the next input.
+      if (term.textarea) {
+        term.textarea.value = "";
+      }
+    });
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       window.cossAPI.resizeTerminal(win.id, cols, rows);
     });
@@ -10473,6 +11248,197 @@ function finishWindowDrag() {
   saveState();
 }
 
+function clampSidebarWidth(value) {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value));
+}
+
+function updateSidebarWidth(width) {
+  sidebarWidth = clampSidebarWidth(width);
+  document.querySelector(".app-shell")?.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
+}
+
+function updateSidebarResize(event) {
+  if (!sidebarResizeState) {
+    return;
+  }
+
+  const deltaX = event.clientX - sidebarResizeState.startX;
+  const rawWidth = sidebarResizeState.startWidth + deltaX;
+  const shouldPreviewCollapse = rawWidth < SIDEBAR_MIN_WIDTH && deltaX < -8;
+  sidebarResizeState.lastDeltaX = deltaX;
+  if (Math.abs(deltaX) > 2) {
+    sidebarResizeState.hasDragged = true;
+  }
+
+  const shell = document.querySelector(".app-shell");
+  if (shouldPreviewCollapse) {
+    sidebarResizeState.collapsing = true;
+    shell?.style.setProperty("--sidebar-width", `${SIDEBAR_MIN_WIDTH}px`);
+    shell?.classList.add("sidebar-collapsing");
+    return;
+  }
+
+  if (sidebarResizeState.collapsing) {
+    sidebarResizeState.collapsing = false;
+    shell?.classList.remove("sidebar-collapsing");
+  }
+  updateSidebarWidth(rawWidth);
+}
+
+function animateSidebarCollapse() {
+  if (sidebarCollapsed || sidebarCollapseTimer) {
+    return;
+  }
+
+  const shell = document.querySelector(".app-shell");
+  if (!shell) {
+    sidebarCollapsed = true;
+    render();
+    return;
+  }
+
+  shell.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
+  void shell.offsetWidth;
+  shell.classList.add("sidebar-collapsing");
+  sidebarCollapseTimer = setTimeout(() => {
+    sidebarCollapsed = true;
+    sidebarCollapseTimer = null;
+    document.body.classList.remove("sidebar-resizing");
+    render();
+  }, 210);
+}
+
+function finishSidebarResize() {
+  if (!sidebarResizeState) {
+    return;
+  }
+
+  const shouldCollapse = Boolean(sidebarResizeState.collapsing);
+  document.body.classList.remove("sidebar-resizing");
+  sidebarResizeState = null;
+  if (shouldCollapse) {
+    sidebarWidth = SIDEBAR_MIN_WIDTH;
+    sidebarCollapsed = true;
+    render();
+    return;
+  }
+
+  document.querySelector(".app-shell")?.classList.remove("sidebar-collapsing");
+}
+
+function attachSidebarResizeHandlers() {
+  document.querySelectorAll("[data-sidebar-resizer]").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || sidebarCollapsed) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      sidebarResizeState = {
+        startX: event.clientX,
+        startWidth: sidebarWidth,
+        lastDeltaX: 0,
+        hasDragged: false,
+        collapsing: false
+      };
+      document.body.classList.add("sidebar-resizing");
+      handle.setPointerCapture(event.pointerId);
+    });
+
+    handle.addEventListener("pointermove", updateSidebarResize);
+    handle.addEventListener("pointerup", finishSidebarResize);
+    handle.addEventListener("pointercancel", finishSidebarResize);
+  });
+}
+
+function updateAgentBlueprintCanvasSize(canvas, x, y) {
+  const svg = canvas?.querySelector(".agent-blueprint-svg");
+  if (!canvas || !svg) {
+    return;
+  }
+
+  const renderedRect = canvas.getBoundingClientRect();
+  const renderedWidth = Math.ceil(renderedRect.width || canvas.clientWidth || 0);
+  const renderedHeight = Math.ceil(renderedRect.height || canvas.clientHeight || 0);
+  const nextWidth = Math.max(Number.parseFloat(canvas.style.width) || 0, renderedWidth, x + 220);
+  const nextHeight = Math.max(Number.parseFloat(canvas.style.height) || 0, renderedHeight, y + 130);
+  canvas.style.width = `${nextWidth}px`;
+  canvas.style.height = `${nextHeight}px`;
+  svg.setAttribute("width", nextWidth);
+  svg.setAttribute("height", nextHeight);
+  svg.setAttribute("viewBox", `0 0 ${nextWidth} ${nextHeight}`);
+}
+
+function updateAgentBlueprintDrag(event) {
+  if (!agentBlueprintDragState) {
+    return;
+  }
+
+  const deltaX = event.clientX - agentBlueprintDragState.startX;
+  const deltaY = event.clientY - agentBlueprintDragState.startY;
+  if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) {
+    agentBlueprintDragState.moved = true;
+    agentBlueprintDragState.node.dataset.blueprintDragged = "true";
+  }
+
+  const x = Math.max(16, agentBlueprintDragState.originX + deltaX);
+  const y = Math.max(16, agentBlueprintDragState.originY + deltaY);
+  agentBlueprintDragState.node.style.left = `${x}px`;
+  agentBlueprintDragState.node.style.top = `${y}px`;
+  if (agentBlueprintDragState.positionKey) {
+    agentBlueprintNodePositions[agentBlueprintDragState.positionKey] = { x, y };
+  }
+  updateAgentBlueprintCanvasSize(agentBlueprintDragState.canvas, x, y);
+  updateAgentBlueprintLinks(agentBlueprintDragState.canvas);
+}
+
+function finishAgentBlueprintDrag() {
+  if (!agentBlueprintDragState) {
+    return;
+  }
+
+  agentBlueprintDragState.node.classList.remove("dragging");
+  if (!agentBlueprintDragState.moved) {
+    delete agentBlueprintDragState.node.dataset.blueprintDragged;
+  }
+  agentBlueprintDragState = null;
+}
+
+function attachAgentBlueprintDragHandlers() {
+  document.querySelectorAll(".agent-blueprint-node").forEach((node) => {
+    node.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const canvas = node.closest(".agent-blueprint-canvas");
+      if (!canvas) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      agentBlueprintDragState = {
+        node,
+        canvas,
+        positionKey: node.dataset.positionKey || "",
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: Number.parseFloat(node.style.left) || 0,
+        originY: Number.parseFloat(node.style.top) || 0,
+        moved: false
+      };
+      node.classList.add("dragging");
+      node.setPointerCapture(event.pointerId);
+    });
+
+    node.addEventListener("pointermove", updateAgentBlueprintDrag);
+    node.addEventListener("pointerup", finishAgentBlueprintDrag);
+    node.addEventListener("pointercancel", finishAgentBlueprintDrag);
+  });
+}
+
 function attachWindowDragHandlers() {
   document.querySelectorAll("[data-drag-handle]").forEach((handle) => {
     handle.addEventListener("pointerdown", (event) => {
@@ -10565,6 +11531,34 @@ document.addEventListener("click", (event) => {
     contextMenu = null;
     roleMenu = null;
     render();
+    return;
+  }
+
+  if (action === "toggle-sidebar") {
+    sidebarResizeState = null;
+    document.body.classList.remove("sidebar-resizing");
+    closeMenus();
+    if (sidebarCollapsed) {
+      if (sidebarCollapseTimer) {
+        clearTimeout(sidebarCollapseTimer);
+        sidebarCollapseTimer = null;
+      }
+      sidebarCollapsed = false;
+      updateSidebarWidth(sidebarWidth);
+      render();
+    } else {
+      animateSidebarCollapse();
+    }
+    return;
+  }
+
+  if (action === "show-search") {
+    showSearchModal();
+    return;
+  }
+
+  if (action === "open-search-result") {
+    openSearchResult(target);
     return;
   }
 
@@ -11118,6 +12112,11 @@ document.addEventListener("click", (event) => {
   }
 
   if (action === "select-agent-flow-role") {
+    const blueprintNode = target.closest(".agent-blueprint-node");
+    if (blueprintNode?.dataset.blueprintDragged === "true") {
+      delete blueprintNode.dataset.blueprintDragged;
+      return;
+    }
     selectAgentFlowRole(target.dataset.roleId || "");
     return;
   }
@@ -11129,6 +12128,11 @@ document.addEventListener("click", (event) => {
 
   if (action === "clear-agent-flow-selection") {
     clearAgentFlowSelection();
+    return;
+  }
+
+  if (action === "auto-layout-agent-blueprint") {
+    autoLayoutAgentBlueprint();
     return;
   }
 
@@ -11249,6 +12253,12 @@ document.addEventListener("input", (event) => {
       query: inputTarget.value
     };
     refreshMessageTimelineList();
+    return;
+  }
+
+  if (inputTarget?.id === "globalSearchInput") {
+    globalSearchQuery = inputTarget.value;
+    refreshGlobalSearchResults();
     return;
   }
 
@@ -11404,6 +12414,22 @@ document.addEventListener("contextmenu", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    showSearchModal();
+    return;
+  }
+
+  const globalSearchInput = event.target instanceof Element ? event.target.closest("#globalSearchInput") : null;
+  if (globalSearchInput && event.key === "Enter") {
+    event.preventDefault();
+    const firstResult = document.querySelector(".global-search-result");
+    if (firstResult) {
+      openSearchResult(firstResult);
+    }
+    return;
+  }
+
   const browserAddress = event.target instanceof Element ? event.target.closest("[data-browser-address]") : null;
   if (browserAddress && event.key === "Enter") {
     event.preventDefault();
@@ -11472,6 +12498,7 @@ function icon(name) {
     new: `<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 14h6M12 11v6"/></svg>`,
     search: `<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>`,
     menu: `<svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9"/></svg>`,
+    sidebar: `<svg viewBox="0 0 24 24"><rect x="4.5" y="5.5" width="15" height="13" rx="3"/><path d="M9.5 5.5v13"/></svg>`,
     clock: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></svg>`,
     assistant: `<svg viewBox="0 0 24 24"><rect x="6" y="7" width="12" height="10" rx="2"/><path d="M9 7V5h6v2M9 12h.01M15 12h.01"/></svg>`,
     cube: `<svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12 4 7.5M12 12l8-4.5M12 12v9"/></svg>`,
@@ -11532,12 +12559,40 @@ window.cossAPI?.onAgentEvent?.((event) => {
   applyAgentEventToState(event);
 });
 
-loadState().then(async () => {
+function setAppLoadingStep(message) {
+  const loadingText = document.getElementById("appLoadingText");
+  if (loadingText) {
+    loadingText.textContent = message;
+  }
+}
+
+async function runStartupConfigurationLoad() {
+  setAppLoadingStep("正在加载工作区状态...");
+  await loadState();
+
+  setAppLoadingStep("正在读取窗口状态...");
   try {
     isWindowMaximized = Boolean(await window.cossAPI?.isWindowMaximized?.());
   } catch {
     isWindowMaximized = false;
   }
+
+  setAppLoadingStep("正在检测 Claude Code 环境...");
+  await checkClaudeStatus();
+
+  setAppLoadingStep("正在检测 Codex CLI 环境...");
+  await checkCodexStatus();
+
+  setAppLoadingStep("正在检测 CodeBuddy Code 环境...");
+  await checkCodeBuddyStatus();
+
+  setAppLoadingStep("正在读取存储与项目配置...");
+  await refreshStorageInfo({ rerender: false });
+  if (state.activeProjectId) {
+    await checkCurrentProjectMcpConfig({ rerender: false });
+  }
+
+  setAppLoadingStep("正在准备桌面...");
   render();
   startExternalStateRefresh();
   startPendingKernelAutoWorkflowPump();
@@ -11549,5 +12604,13 @@ loadState().then(async () => {
     getProject()?.windows
       ?.filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
       .forEach((win) => scheduleAgentDeliveryQueueDrain(win.id, 350));
+  }, 900);
+}
+
+runStartupConfigurationLoad().catch((error) => {
+  console.error("Failed to load CosS startup configuration", error);
+  setAppLoadingStep(`启动配置加载失败：${error.message}`);
+  setTimeout(() => {
+    render();
   }, 900);
 });

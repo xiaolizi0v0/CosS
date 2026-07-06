@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "build:terminal-helper": "dotnet build native/coss-terminal-helper/CosS.TerminalHelper.csproj",
     "test": "npm run test:e2e",
     "test:e2e": "playwright test"
   },

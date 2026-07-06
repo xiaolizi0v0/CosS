@@ -236,6 +236,15 @@ function getTargetWindow() {
   return BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
 }
 
+function getAppIconPath() {
+  const icoPath = path.join(__dirname, "app-icon.ico");
+  if (process.platform === "win32" && fs.existsSync(icoPath)) {
+    return icoPath;
+  }
+  const pngPath = path.join(__dirname, "Logo.png");
+  return fs.existsSync(pngPath) ? pngPath : "";
+}
+
 function sendMenuAction(action, payload = {}) {
   const win = getTargetWindow();
   if (!win || win.isDestroyed()) {
@@ -2474,6 +2483,62 @@ function findCommandPaths(command, env = getWindowsShellEnv()) {
     .filter(Boolean);
 }
 
+function getPathDirectories(env = getWindowsShellEnv()) {
+  return String(getCaseInsensitiveEnvValue(env, "PATH") || "")
+    .split(path.delimiter)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getWindowsExecutableExtensions(env = getWindowsShellEnv()) {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  const pathExt = getCaseInsensitiveEnvValue(env, "PATHEXT") || ".COM;.EXE;.BAT;.CMD";
+  const extensions = pathExt
+    .split(";")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return ["", ...extensions];
+}
+
+function getStaticCommandLookupDirectories(env = getWindowsShellEnv()) {
+  const directories = getPathDirectories(env);
+  if (process.platform === "win32") {
+    const appData = getCaseInsensitiveEnvValue(env, "APPDATA");
+    const programFiles = getCaseInsensitiveEnvValue(env, "ProgramFiles") || "C:\\Program Files";
+    const programFilesX86 = getCaseInsensitiveEnvValue(env, "ProgramFiles(x86)") || "C:\\Program Files (x86)";
+    if (appData) {
+      directories.push(path.join(appData, "npm"));
+    }
+    directories.push(path.join(programFiles, "nodejs"), path.join(programFilesX86, "nodejs"));
+  }
+  return [...new Set(directories.filter(Boolean))];
+}
+
+function findCommandPathsStatic(command, env = getWindowsShellEnv()) {
+  const rawCommand = String(command || "").trim();
+  if (!rawCommand) {
+    return [];
+  }
+  if (rawCommand.includes("\\") || rawCommand.includes("/") || path.isAbsolute(rawCommand)) {
+    return fs.existsSync(rawCommand) ? [rawCommand] : [];
+  }
+
+  const parsedExtension = path.extname(rawCommand);
+  const extensions = parsedExtension ? [""] : getWindowsExecutableExtensions(env);
+  const candidates = [];
+  for (const directory of getStaticCommandLookupDirectories(env)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${rawCommand}${extension}`);
+      if (fs.existsSync(candidate)) {
+        candidates.push(candidate);
+      }
+    }
+  }
+  return [...new Set(candidates)];
+}
+
 function preferWindowsCmdShim(command, lookupPaths = []) {
   if (process.platform !== "win32") {
     return command;
@@ -2527,11 +2592,20 @@ function isWindowsBatchCommand(command) {
 
 function buildCmdInvocation(command, args = []) {
   const invocation = [cmdQuote(command), ...args.map((arg) => cmdQuote(arg))].join(" ");
-  return isWindowsBatchCommand(command) ? `call ${invocation}` : invocation;
+  return `call ${invocation}`;
 }
 
 function runWindowsPowerShellInvocation(invocation, env, timeout = 5000) {
-  return childProcess.spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", invocation], {
+  return childProcess.spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", invocation], {
+    encoding: "utf8",
+    env,
+    timeout,
+    windowsHide: true
+  });
+}
+
+function runWindowsCmdInvocation(command, args, env, timeout = 5000) {
+  return childProcess.spawnSync("cmd.exe", ["/d", "/c", buildCmdInvocation(command, args)], {
     encoding: "utf8",
     env,
     timeout,
@@ -2648,6 +2722,33 @@ function getCodeBuddyCommandStatus(env = getWindowsShellEnv()) {
   };
 }
 
+function getCodexLaunchCommandInfo(env = getWindowsShellEnv()) {
+  const requestedCommand = process.env.COSS_CODEX_COMMAND || "codex";
+  const lookupPaths = findCommandPathsStatic(requestedCommand, env);
+  const command = preferWindowsCmdShim(lookupPaths[0] || requestedCommand, lookupPaths);
+  return {
+    command,
+    requestedCommand,
+    lookupPaths
+  };
+}
+
+function getCodeBuddyLaunchCommandInfo(env = getWindowsShellEnv()) {
+  const requestedCommand = process.env.COSS_CODEBUDDY_COMMAND || "codebuddy";
+  const aliasCommand = requestedCommand === "codebuddy" ? "cbc" : "";
+  const lookupPaths = [
+    ...findCommandPathsStatic(requestedCommand, env),
+    ...(aliasCommand ? findCommandPathsStatic(aliasCommand, env) : [])
+  ].filter((item, index, list) => item && list.indexOf(item) === index);
+  const command = preferWindowsCmdShim(lookupPaths[0] || requestedCommand, lookupPaths);
+  return {
+    command,
+    requestedCommand,
+    aliasCommand,
+    lookupPaths
+  };
+}
+
 function getNpmCommand() {
   return process.env.COSS_NPM_COMMAND || (process.platform === "win32" ? "npm.cmd" : "npm");
 }
@@ -2726,8 +2827,14 @@ function getNodeCommonPaths(env) {
 
 function resolveNodeCommandForAgent(env = getWindowsShellEnv()) {
   const configured = String(process.env.COSS_NODE_COMMAND || "").trim();
-  if (configured && (commandExists(configured, env) || fs.existsSync(configured))) {
-    return configured;
+  if (configured) {
+    if (configured.includes("\\") || configured.includes("/") || path.isAbsolute(configured)) {
+      if (fs.existsSync(configured)) {
+        return configured;
+      }
+    } else {
+      return findCommandPathsStatic(configured, env)[0] || configured;
+    }
   }
 
   const npmNode = String(process.env.npm_node_execpath || "").trim();
@@ -2740,7 +2847,7 @@ function resolveNodeCommandForAgent(env = getWindowsShellEnv()) {
     return currentExecutable;
   }
 
-  return [...findCommandPaths("node", env), ...getNodeCommonPaths(env)][0] || "node";
+  return [...findCommandPathsStatic("node", env), ...getNodeCommonPaths(env)][0] || (process.platform === "win32" ? "node.exe" : "node");
 }
 
 function resolveNpmPackageBinScript(command, lookupPaths = [], packagePath = [], binPath = []) {
@@ -2820,7 +2927,7 @@ function buildCodeBuddyWindowsLaunch(codeBuddyStatus, options = {}, env = getWin
     return directLaunch;
   }
 
-  const npxCommand = resolveNpxCommand(env);
+  const npxCommand = getNpxCommand();
   return {
     file: "powershell.exe",
     args: [
@@ -2908,7 +3015,7 @@ function getNpmStatus(env = getWindowsShellEnv()) {
     usable: Boolean(success),
     version: success?.output || "",
     errorDetail: success ? "" : firstAttempt.errorDetail,
-    runner: process.platform === "win32" ? "powershell" : "direct"
+    runner: process.platform === "win32" ? "powershell-hidden" : "direct"
   };
 }
 
@@ -3672,7 +3779,41 @@ function resolveTerminalLaunch(options) {
   }
 
   if (terminalMode === "agent" && agentProvider === "codex") {
-    const codexStatus = getCodexCommandStatus(env);
+    const codexLaunchInfo = getCodexLaunchCommandInfo(env);
+    appendLogEvent("agent.codex.launch.detection-skipped", {
+      command: codexLaunchInfo.command || "",
+      requestedCommand: codexLaunchInfo.requestedCommand || "",
+      lookupPathCount: codexLaunchInfo.lookupPaths.length
+    });
+
+    if (process.platform === "win32") {
+      const codexLaunch = buildCodexWindowsLaunch(codexLaunchInfo, env);
+      return {
+        file: codexLaunch.file,
+        args: codexLaunch.args,
+        env,
+        label: "Codex",
+        requestedMode: "agent",
+        activeMode: "codex",
+        rolePrompt,
+        launchMethod: codexLaunch.launchMethod,
+        nodeCommand: codexLaunch.nodeCommand || "",
+        scriptPath: codexLaunch.scriptPath || ""
+      };
+    }
+
+    return {
+      file: codexLaunchInfo.command,
+      args: [],
+      env,
+      label: "Codex",
+      requestedMode: "agent",
+      activeMode: "codex",
+      rolePrompt
+    };
+
+    // Legacy auto-detect/install flow below is intentionally unreachable.
+    // Manual settings checks still use the codex:status IPC handler.
 
     if (!codexStatus.runnable) {
       const lookupText = codexStatus.lookupPaths.length
@@ -3761,7 +3902,68 @@ function resolveTerminalLaunch(options) {
   }
 
   if (terminalMode === "agent" && agentProvider === "codebuddy") {
-    const codeBuddyStatus = getCodeBuddyCommandStatus(env);
+    const codeBuddyLaunchInfo = getCodeBuddyLaunchCommandInfo(env);
+    const hasCodeBuddyKeyForLaunch = Boolean(codeBuddyApiKey || getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY"));
+    appendLogEvent("agent.codebuddy.launch.detection-skipped", {
+      command: codeBuddyLaunchInfo.command || "",
+      requestedCommand: codeBuddyLaunchInfo.requestedCommand || "",
+      aliasCommand: codeBuddyLaunchInfo.aliasCommand || "",
+      lookupPathCount: codeBuddyLaunchInfo.lookupPaths.length,
+      hasApiKey: hasCodeBuddyKeyForLaunch
+    });
+
+    if (!hasCodeBuddyKeyForLaunch) {
+      const warning =
+        "CodeBuddy Code API Key is not configured.\r\n" +
+        "Set CODEBUDDY_API_KEY in environment variables or configure it in Settings before starting a CodeBuddy Agent.";
+      if (!fallbackToShell) {
+        return buildStaticLogLaunch({
+          env,
+          label: "CodeBuddy Code Agent Error",
+          rolePrompt,
+          warning
+        });
+      }
+      return {
+        ...shell,
+        env,
+        label: "PowerShell",
+        requestedMode: "agent",
+        activeMode: "shell",
+        rolePrompt,
+        warning
+      };
+    }
+
+    if (process.platform === "win32") {
+      const codeBuddyLaunch = buildCodeBuddyWindowsLaunch(codeBuddyLaunchInfo, options, env);
+      return {
+        file: codeBuddyLaunch.file,
+        args: codeBuddyLaunch.args,
+        env,
+        label: "CodeBuddy Code",
+        requestedMode: "agent",
+        activeMode: "codebuddy",
+        rolePrompt,
+        launchMethod: codeBuddyLaunch.launchMethod,
+        npxCommand: codeBuddyLaunch.npxCommand || "",
+        nodeCommand: codeBuddyLaunch.nodeCommand || "",
+        scriptPath: codeBuddyLaunch.scriptPath || ""
+      };
+    }
+
+    return {
+      file: codeBuddyLaunchInfo.command,
+      args: buildCodeBuddyArgs({ cwd: options.cwd }),
+      env,
+      label: "CodeBuddy Code",
+      requestedMode: "agent",
+      activeMode: "codebuddy",
+      rolePrompt
+    };
+
+    // Legacy auto-detect/install flow below is intentionally unreachable.
+    // Manual settings checks still use the codebuddy:status IPC handler.
     const hasCodeBuddyKey = Boolean(codeBuddyApiKey || getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY"));
 
     if (!codeBuddyStatus.runnable) {
@@ -4305,7 +4507,9 @@ function createPipeTerminal(webContents, id, options, launch = resolveTerminalLa
     write: (data) => {
       if (child.stdin?.writable) {
         child.stdin.write(data);
+        return true;
       }
+      return false;
     },
     resize: () => {},
     kill: () => child.kill(),
@@ -4313,6 +4517,304 @@ function createPipeTerminal(webContents, id, options, launch = resolveTerminalLa
     pid: child.pid,
     launch
   };
+}
+
+function shouldUsePipeTerminalBackend(launch = {}) {
+  return process.env.COSS_FORCE_AGENT_PIPE_BACKEND === "1"
+    && process.platform === "win32"
+    && ["codex", "codebuddy"].includes(String(launch.activeMode || "").toLowerCase());
+}
+
+let nativeTerminalHelperPathCache;
+
+function getNativeTerminalHelperExecutableNames() {
+  return process.platform === "win32"
+    ? ["CosS.TerminalHost.exe", "CosS.TerminalHelper.exe"]
+    : ["CosS.TerminalHost", "CosS.TerminalHelper"];
+}
+
+function getNativeTerminalHelperCandidates() {
+  const executableNames = getNativeTerminalHelperExecutableNames();
+  const candidates = [];
+  if (process.env.COSS_TERMINAL_HELPER_PATH) {
+    candidates.push(process.env.COSS_TERMINAL_HELPER_PATH);
+  }
+
+  const appRoot = path.resolve(__dirname, "..");
+  for (const executableName of executableNames) {
+    if (process.resourcesPath) {
+      candidates.push(path.join(process.resourcesPath, "coss-terminal-helper", executableName));
+    }
+    candidates.push(
+      path.join(appRoot, "native", "coss-terminal-helper", "bin", "Debug", "net10.0-windows", executableName),
+      path.join(appRoot, "native", "coss-terminal-helper", "bin", "Release", "net10.0-windows", executableName),
+      path.join(appRoot, "native", "coss-terminal-helper", "bin", "Release", "net10.0-windows", "win-x64", "publish", executableName)
+    );
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function getNativeTerminalHelperPath() {
+  if (nativeTerminalHelperPathCache !== undefined) {
+    return nativeTerminalHelperPathCache;
+  }
+  nativeTerminalHelperPathCache = "";
+  for (const candidate of getNativeTerminalHelperCandidates()) {
+    try {
+      if (candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        nativeTerminalHelperPathCache = candidate;
+        break;
+      }
+    } catch {
+      // Keep looking; a candidate may point to a protected or stale path.
+    }
+  }
+  return nativeTerminalHelperPathCache;
+}
+
+function shouldUseNativeTerminalBackend(launch = {}) {
+  if (process.platform !== "win32" || process.env.COSS_DISABLE_NATIVE_TERMINAL_HELPER === "1") {
+    return false;
+  }
+  if (launch.activeMode === "static" || launch.activeMode === "mock" || launch.activeMode === "error") {
+    return false;
+  }
+  return Boolean(getNativeTerminalHelperPath());
+}
+
+function sendNativeTerminalCommand(child, message) {
+  if (!child.stdin?.writable) {
+    return false;
+  }
+  child.stdin.write(`${JSON.stringify(message)}\n`);
+  return true;
+}
+
+function createNativeTerminal(webContents, id, options, launch = resolveTerminalLaunch(options)) {
+  const helperPath = getNativeTerminalHelperPath();
+  if (!helperPath) {
+    throw new Error("native terminal helper is unavailable");
+  }
+
+  const cwd = normalizeCwd(options.cwd);
+  const cols = normalizeTerminalSize(options.cols, 80, 20, 240);
+  const rows = normalizeTerminalSize(options.rows, 24, 6, 80);
+  const helperArgs = [
+    "--cols",
+    String(cols),
+    "--rows",
+    String(rows),
+    "--cwd",
+    cwd,
+    "--",
+    launch.file,
+    ...(Array.isArray(launch.args) ? launch.args.map(String) : [])
+  ];
+
+  let child;
+  try {
+    child = childProcess.spawn(helperPath, helperArgs, {
+      cwd,
+      env: launch.env,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true
+    });
+  } catch (error) {
+    appendLogEvent("terminal.native-helper.spawn.failed", {
+      id,
+      helperPath,
+      file: launch.file,
+      args: launch.args,
+      cwd,
+      error: serializeError(error)
+    }, "error");
+    throw error;
+  }
+
+  let finished = false;
+  let stdoutBuffer = "";
+  const session = {
+    write: (data) => {
+      if (finished) {
+        return false;
+      }
+      try {
+        return sendNativeTerminalCommand(child, {
+          type: "input",
+          data: Buffer.from(String(data || ""), "utf8").toString("base64")
+        });
+      } catch (error) {
+        appendLogEvent("terminal.write.failed", {
+          id,
+          mode: "native-helper",
+          activeMode: launch.activeMode,
+          error: serializeError(error)
+        }, "warn");
+        return false;
+      }
+    },
+    resize: (nextCols, nextRows) => {
+      if (finished) {
+        return false;
+      }
+      const safeCols = normalizeTerminalSize(nextCols, cols, 20, 240);
+      const safeRows = normalizeTerminalSize(nextRows, rows, 6, 80);
+      try {
+        return sendNativeTerminalCommand(child, {
+          type: "resize",
+          cols: safeCols,
+          rows: safeRows
+        });
+      } catch (error) {
+        appendLogEvent("terminal.resize.failed", {
+          id,
+          mode: "native-helper",
+          activeMode: launch.activeMode,
+          cols: safeCols,
+          rows: safeRows,
+          error: serializeError(error)
+        }, "warn");
+        return false;
+      }
+    },
+    kill: () => {
+      if (finished) {
+        return false;
+      }
+      try {
+        sendNativeTerminalCommand(child, { type: "kill" });
+        const killTimer = setTimeout(() => {
+          if (!finished) {
+            child.kill();
+          }
+        }, 500);
+        if (typeof killTimer.unref === "function") {
+          killTimer.unref();
+        }
+        return true;
+      } catch (error) {
+        appendLogEvent("terminal.kill.failed", {
+          id,
+          mode: "native-helper",
+          activeMode: launch.activeMode,
+          error: serializeError(error)
+        }, "warn");
+        return false;
+      }
+    },
+    isAlive: () => !finished,
+    mode: "native-helper",
+    pid: child.pid,
+    helperPid: child.pid,
+    childPid: null,
+    launch: {
+      ...launch,
+      launchMethod: launch.launchMethod ? `${launch.launchMethod}+native-helper` : "native-helper",
+      nativeHelperPath: helperPath
+    }
+  };
+
+  function finish(exitCode, source = "helper") {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    appendLogEvent("terminal.exited", {
+      id,
+      mode: "native-helper",
+      activeMode: launch.activeMode,
+      exitCode,
+      source,
+      helperPid: session.helperPid || null,
+      childPid: session.childPid || null
+    }, exitCode === 0 || exitCode === null ? "info" : "warn");
+    terminalSessions.delete(id);
+    sendTerminalExit(webContents, id, exitCode);
+  }
+
+  function handleNativeTerminalEvent(message) {
+    if (!message || typeof message !== "object") {
+      return;
+    }
+    if (message.type === "ready") {
+      const childPid = Number(message.pid || 0);
+      session.childPid = Number.isFinite(childPid) && childPid > 0 ? childPid : null;
+      appendLogEvent("terminal.native-helper.ready", {
+        id,
+        helperPid: session.helperPid || null,
+        childPid: session.childPid || null,
+        activeMode: launch.activeMode,
+        helperPath
+      });
+      return;
+    }
+    if (message.type === "data" && typeof message.data === "string") {
+      const data = Buffer.from(message.data, "base64").toString("utf8");
+      emitAgentOutputEvents(webContents, id, data, launch);
+      sendTerminalData(webContents, id, data);
+      return;
+    }
+    if (message.type === "error") {
+      const text = sanitizeLogText(message.message || "native helper error", 1000);
+      appendLogEvent("terminal.native-helper.error", {
+        id,
+        activeMode: launch.activeMode,
+        message: text
+      }, "warn");
+      sendTerminalData(webContents, id, `\x1b[33mnative terminal helper: ${text}\x1b[0m\r\n`);
+      return;
+    }
+    if (message.type === "exit") {
+      finish(Number.isFinite(Number(message.exitCode)) ? Number(message.exitCode) : 0, "protocol");
+    }
+  }
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString("utf8");
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        handleNativeTerminalEvent(JSON.parse(line));
+      } catch (error) {
+        appendLogEvent("terminal.native-helper.protocol.invalid", {
+          id,
+          line: sanitizeLogText(line, 1000),
+          error: serializeError(error)
+        }, "warn");
+        sendTerminalData(webContents, id, `${line}\r\n`);
+      }
+    }
+  });
+
+  child.stderr.on("data", (chunk) => {
+    appendLogEvent("terminal.native-helper.stderr", {
+      id,
+      activeMode: launch.activeMode,
+      text: sanitizeLogText(chunk.toString("utf8"), 1000)
+    }, "warn");
+  });
+
+  child.on("error", (error) => {
+    appendLogEvent("terminal.native-helper.process.failed", {
+      id,
+      helperPath,
+      activeMode: launch.activeMode,
+      error: serializeError(error)
+    }, "error");
+    sendTerminalData(webContents, id, `\x1b[31mnative terminal helper failed: ${error.message}\x1b[0m\r\n`);
+    finish("spawn-error", "helper-error");
+  });
+
+  child.on("exit", (code) => {
+    finish(code, "helper-exit");
+  });
+
+  return session;
 }
 
 function createPtyTerminal(webContents, id, options, launch = resolveTerminalLaunch(options)) {
@@ -4556,29 +5058,56 @@ function createTerminalSession(event, options = {}) {
   }
 
   let session;
-  try {
-    if (!nodePty) {
-      throw new Error("node-pty is unavailable");
-    }
-    session = createPtyTerminal(webContents, id, { ...options, cwd }, launch);
-  } catch (error) {
-    appendLogEvent("terminal.pty.failed", {
-      id,
-      roleName,
-      launch: {
-        file: launch.file,
-        args: launch.args,
-        activeMode: launch.activeMode,
-        requestedMode: launch.requestedMode
-      },
-      error: serializeError(error)
-    }, "warn");
-    sendTerminalData(
-      webContents,
-      id,
-      `\x1b[33mnode-pty 启动失败，已切换到兼容终端: ${error.message}\x1b[0m\r\n`
-    );
+  if (shouldUsePipeTerminalBackend(launch)) {
     session = createPipeTerminal(webContents, id, { ...options, cwd }, launch);
+  }
+  if (!session && shouldUseNativeTerminalBackend(launch)) {
+    try {
+      session = createNativeTerminal(webContents, id, { ...options, cwd }, launch);
+    } catch (error) {
+      appendLogEvent("terminal.native-helper.failed", {
+        id,
+        roleName,
+        launch: {
+          file: launch.file,
+          args: launch.args,
+          activeMode: launch.activeMode,
+          requestedMode: launch.requestedMode
+        },
+        error: serializeError(error)
+      }, "warn");
+      sendTerminalData(
+        webContents,
+        id,
+        `\x1b[33mnative terminal helper 启动失败，已切换到 node-pty: ${error.message}\x1b[0m\r\n`
+      );
+    }
+  }
+  if (!session) {
+    try {
+      if (!nodePty) {
+        throw new Error("node-pty is unavailable");
+      }
+      session = createPtyTerminal(webContents, id, { ...options, cwd }, launch);
+    } catch (error) {
+      appendLogEvent("terminal.pty.failed", {
+        id,
+        roleName,
+        launch: {
+          file: launch.file,
+          args: launch.args,
+          activeMode: launch.activeMode,
+          requestedMode: launch.requestedMode
+        },
+        error: serializeError(error)
+      }, "warn");
+      sendTerminalData(
+        webContents,
+        id,
+        `\x1b[33mnode-pty 启动失败，已切换到兼容终端: ${error.message}\x1b[0m\r\n`
+      );
+      session = createPipeTerminal(webContents, id, { ...options, cwd }, launch);
+    }
   }
 
   if (session.launch?.warning) {
@@ -4606,6 +5135,8 @@ function createTerminalSession(event, options = {}) {
     launchMethod: session.launch?.launchMethod || "",
     scriptPath: session.launch?.scriptPath || "",
     pid: session.pid || null,
+    helperPid: session.helperPid || null,
+    childPid: session.childPid || null,
     sessionId: session.launch?.agentSession?.sessionId || "",
     taskId: session.launch?.taskContext?.taskId || session.launch?.agentSession?.taskId || ""
   });
@@ -5128,6 +5659,7 @@ function attachEmbeddedBrowserPopupPolicy(contents) {
 
 function createMainWindow() {
   creatingCosSMainWindow = true;
+  const iconPath = getAppIconPath();
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -5135,6 +5667,7 @@ function createMainWindow() {
     minHeight: 680,
     title: "CosS",
     frame: false,
+    ...(iconPath ? { icon: iconPath } : {}),
     backgroundColor: "#dfe8f7",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -5195,6 +5728,9 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === "win32") {
+    app.setAppUserModelId("CosS.Desktop");
+  }
   app.on("browser-window-created", (_event, createdWindow) => {
     if (creatingCosSMainWindow || cossMainWindowIds.has(createdWindow.id)) {
       return;
