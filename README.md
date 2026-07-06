@@ -185,4 +185,4 @@ CosS 使用了多个开源第三方库，它们的许可信息如下：
 
 感谢所有开源社区成员的支持与贡献。
 
-MIT License © 2026 xiaolizi0v0
+CC BY-NC-SA 4.0 © 2026 xiaolizi0v0
