@@ -39,6 +39,22 @@ npm.cmd start
 
 如果 PowerShell 拦截 `npm`，请使用 `npm.cmd`。
 
+## 发布 Release
+
+项目内置 GitHub Actions Release 工作流。推送 `v*` 标签或手动运行 `Release` workflow 后，会并行打包多平台版本并发布多个 Assets：
+
+- `CosS-Desktop-<tag>-win-x64-portable.zip` — Windows x64 便携版（内置原生终端辅助程序）
+- `CosS-Desktop-<tag>-linux-x64.zip` — Linux x64 版本
+- `CosS-Desktop-<tag>-macos-x64.zip` — macOS Intel 版本
+- `CosS-Desktop-<tag>-macos-arm64.zip` — macOS Apple Silicon 版本
+- `CosS-Desktop-<tag>-source.zip` — 源码归档
+- `checksums.txt` — SHA-256 校验和
+
+```powershell
+git tag v0.10.0
+git push origin v0.10.0
+```
+
 ## 系统架构
 
 ```
