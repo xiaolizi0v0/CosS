@@ -148,7 +148,7 @@ CosS/
 │   └── e2e/                     # Playwright E2E 测试
 ├── docs/
 │   ├── help.md                  # 帮助文档
-│   ├── LICENSE.md               # CC BY-NC-SA 4.0 许可证
+│   ├── license.md               # CC BY-NC-SA 4.0 许可证
 │   └── privacy.md               # 隐私声明
 ├── .mcp.json                    # MCP 服务器注册
 └── package.json
@@ -157,7 +157,7 @@ CosS/
 ## 文档
 
 - [帮助文档](docs/help.md)
-- [许可证](docs/LICENSE.md) — CC BY-NC-SA 4.0
+- [许可证](docs/license.md) — CC BY-NC-SA 4.0
 - [隐私声明](docs/privacy.md)
 
 ## 许可证
