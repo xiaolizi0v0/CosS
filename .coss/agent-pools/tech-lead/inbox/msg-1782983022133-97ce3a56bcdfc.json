@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "msg-1782983022133-97ce3a56bcdfc",
+  "projectId": "project-e2e",
+  "roleId": "tech-lead",
+  "fromRoleId": "qa-engineer",
+  "toRoleIds": [
+    "tech-lead"
+  ],
+  "taskId": "task-1782983022133-a0f1a580d6771",
+  "channelType": "task",
+  "channelId": "task:task-1782983022133-a0f1a580d6771",
+  "source": "task-kickoff",
+  "status": "queued",
+  "content": "任务ID：task-1782983022133-a0f1a580d6771\n任务目标：Verify model-selected first round agents\n技术负责人 首轮子任务：Define architecture direction\n执行说明：Confirm architecture constraints before implementation starts.\n后续协作角色：测试工程师\n\n请先作为 技术负责人 Agent 开始工作，不要直接跳过到下游实现角色。\n请优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。\n必须优先尝试工具：coss_get_context、coss_pool_read、coss_pool_claim、coss_claim_task、coss_report_status、coss_pool_send、coss_handoff。\n开始工作前，请通过 MCP 读取上下文和自己的角色消息池，领取自己的消息和任务；处理过程中通过 MCP 汇报状态和交接。\n如果看到系统提示 `mcp__coss: Still connecting`，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试，或直接重试 mcp__coss__coss_get_context。\n不要因为 ToolSearch 暂时找不到 coss_get_context、coss_pool_read 等工具就立刻判定阻塞；至少等待并重试 3 次。\n推荐顺序：coss_get_context -> coss_pool_read -> coss_pool_claim -> coss_claim_task -> coss_report_status -> coss_pool_send/coss_handoff。\n完成 技术负责人 阶段后，请写清楚需求、验收标准、字段定义、疑问点和下游嘱托，并通过 coss_handoff 或 COSS_AGENT_EVENT 交给 测试工程师。",
+  "createdAt": "2026-07-02T09:03:42.133Z",
+  "claimedAt": "",
+  "claimedBy": "",
+  "messageRef": {
+    "projectMessageId": "msg-1782983022133-97ce3a56bcdfc"
+  }
+}

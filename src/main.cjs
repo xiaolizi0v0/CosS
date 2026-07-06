@@ -5,6 +5,7 @@ const fs = require("fs");
 const childProcess = require("child_process");
 
 let nodePty = null;
+let initSqlJs = null;
 
 try {
   nodePty = require("node-pty");
@@ -12,27 +13,105 @@ try {
   console.warn("node-pty is unavailable, falling back to pipe-based shells.", error);
 }
 
+try {
+  initSqlJs = require("sql.js");
+} catch (error) {
+  console.warn("sql.js is unavailable, falling back to JSON state storage.", error);
+}
+
 const dataFileName = "coss-workspace-state.json";
+const sqliteFileName = "coss-workspace.sqlite";
+const storageSchemaVersion = 1;
+const maxStateBackups = 12;
 const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.5.7";
+    return "0.10.0";
   }
 })();
 const terminalSessions = new Map();
 const terminalTranscripts = new Map();
 const terminalWebContents = new Map();
 const agentOutputEventKeys = new Map();
+const terminalProcessTreeSnapshotDelaysMs = [500, 2000, 5000];
 const claudeCodeWingetPackage = "Anthropic.ClaudeCode";
 const codexNpmPackage = "@openai/codex";
 const codeBuddyNpmPackage = "@tencent-ai/codebuddy-code";
+const agentPermissionPolicies = {
+  readonly: {
+    id: "readonly",
+    label: "只读模式",
+    instruction: "当前 CosS Agent 权限模式：只读模式。只能阅读和分析项目内容，不能创建、修改、删除文件，不能安装依赖，不能运行部署、格式化磁盘或其他写入/破坏性命令。如确需修改，请先说明原因并等待用户调整权限。"
+  },
+  confirm: {
+    id: "confirm",
+    label: "每次编辑确认",
+    instruction: "当前 CosS Agent 权限模式：每次编辑确认。执行任何文件写入、依赖安装、删除、部署、网络发布或高风险命令前，必须先说明计划、影响范围和风险，并等待用户确认。"
+  },
+  sessionEdit: {
+    id: "sessionEdit",
+    label: "本会话允许编辑",
+    instruction: "当前 CosS Agent 权限模式：本会话允许编辑。可以在当前项目目录内创建和修改文件；安装依赖、删除文件、部署、格式化磁盘、访问敏感信息或其他高风险操作仍必须先等待用户确认。"
+  },
+  sessionInstall: {
+    id: "sessionInstall",
+    label: "本会话允许编辑与安装依赖",
+    instruction: "当前 CosS Agent 权限模式：本会话允许编辑与安装依赖。可以在当前项目目录内创建/修改文件并安装必要依赖；删除文件、部署、格式化磁盘、清理大范围目录、访问敏感信息或其他破坏性操作仍必须先等待用户确认。"
+  }
+};
+const terminalPermissionRiskRules = [
+  {
+    id: "delete-files",
+    category: "delete",
+    severity: "high",
+    label: "文件删除",
+    pattern: /\b(remove-item|rm|del|erase|rmdir|rd)\b/i
+  },
+  {
+    id: "dependency-install",
+    category: "install",
+    severity: "medium",
+    label: "依赖或软件安装",
+    pattern: /\b(winget|npm|pnpm|yarn|pip|choco|scoop|cargo|dotnet)\s+(install|i|add|update|upgrade)\b/i
+  },
+  {
+    id: "file-write",
+    category: "write",
+    severity: "medium",
+    label: "文件写入",
+    pattern: /\b(set-content|add-content|out-file|new-item|copy-item|move-item)\b|(^|[^>])>\s*[^&|]/i
+  },
+  {
+    id: "environment-change",
+    category: "environment",
+    severity: "high",
+    label: "环境变量或注册表修改",
+    pattern: /\b(setx|reg\s+add|\[environment\]::setenvironmentvariable)\b|\$env:[\w()\\.-]+\s*=/i
+  },
+  {
+    id: "deployment",
+    category: "deployment",
+    severity: "high",
+    label: "发布或部署",
+    pattern: /\b(git\s+push|npm\s+publish|docker\s+push|kubectl\s+(apply|delete)|terraform\s+(apply|destroy))\b/i
+  },
+  {
+    id: "script-execution",
+    category: "script",
+    severity: "medium",
+    label: "动态脚本执行",
+    pattern: /\b(iex|invoke-expression|powershell\s+-encodedcommand)\b|(\|\s*(powershell|pwsh|sh|bash)\b)/i
+  }
+];
 const defaultLlmRequestTimeoutMs = 60000;
 const maxEditableFileBytes = 1024 * 1024 * 2;
 const fileListLimit = 240;
 let windowsEnvCache = null;
 const cossMainWindowIds = new Set();
 let creatingCosSMainWindow = false;
+let lastStateBackupAt = 0;
+let sqlJsRuntimePromise = null;
 
 if (process.env.COSS_TEST_USER_DATA) {
   app.setPath("userData", process.env.COSS_TEST_USER_DATA);
@@ -40,6 +119,22 @@ if (process.env.COSS_TEST_USER_DATA) {
 
 function getDataFilePath() {
   return path.join(app.getPath("userData"), dataFileName);
+}
+
+function getSqliteFilePath() {
+  return path.join(app.getPath("userData"), sqliteFileName);
+}
+
+function getStorageDirectory() {
+  return app.getPath("userData");
+}
+
+function getStateBackupDirectory() {
+  return path.join(getStorageDirectory(), "backups");
+}
+
+function getDiagnosticsDirectory() {
+  return path.join(getStorageDirectory(), "diagnostics");
 }
 
 function getLogDirectory() {
@@ -83,11 +178,40 @@ function getLlmRequestTimeoutMs() {
 }
 
 function serializeError(error) {
-  return {
+  const serialized = {
+    name: error?.name || "",
     message: error?.message || String(error || "unknown error"),
-    stack: typeof error?.stack === "string" ? error.stack.split("\n").slice(0, 8).join("\n") : ""
+    stack: typeof error?.stack === "string" ? error.stack.split("\n").slice(0, 8).join("\n") : "",
+    code: error?.code || "",
+    errno: Number.isFinite(error?.errno) ? error.errno : undefined
   };
+  for (const key of ["Pa", "errnoCode", "sqlCode"]) {
+    if (error && Object.prototype.hasOwnProperty.call(error, key)) {
+      serialized[key] = error[key];
+    }
+  }
+  return serialized;
 }
+
+function isExitedPtyResizeError(error) {
+  const message = String(error?.message || error || "");
+  const stack = String(error?.stack || "");
+  return message.includes("Cannot resize a pty that has already exited")
+    || (message.includes("resize") && message.includes("pty") && stack.includes("node-pty"));
+}
+
+function handleMainUncaughtException(error) {
+  if (isExitedPtyResizeError(error)) {
+    appendLogEvent("terminal.resize.ignored-after-exit", {
+      error: serializeError(error)
+    }, "warn");
+    return;
+  }
+  process.removeListener("uncaughtException", handleMainUncaughtException);
+  throw error;
+}
+
+process.on("uncaughtException", handleMainUncaughtException);
 
 function summarizeModelConfig(model = {}) {
   return {
@@ -126,30 +250,168 @@ function getClaudeConfigPath() {
   return process.env.COSS_CLAUDE_CONFIG_PATH || path.join(app.getPath("home"), ".claude.json");
 }
 
-function readState() {
+async function readState() {
+  const sqlitePath = getSqliteFilePath();
   const filePath = getDataFilePath();
-  if (!fs.existsSync(filePath)) {
+  let db = null;
+
+  try {
+    db = await openSqliteDatabase();
+    const sqliteState = readWorkspaceStateFromDb(db);
+    if (sqliteState) {
+      const jsonState = readStateFile(filePath);
+      if (jsonState.ok && isJsonStateNewerThanSqlite(
+        jsonState.state,
+        sqliteState,
+        safeFileStat(filePath),
+        safeFileStat(sqlitePath)
+      )) {
+        writeWorkspaceStateToDb(db, jsonState.state);
+        persistSqliteDatabase(db);
+        appendLogEvent("storage.state.loaded", {
+          mode: "json-newer-than-sqlite",
+          schemaVersion: storageSchemaVersion,
+          filePath,
+          sqlitePath,
+          recovered: true
+        }, "warn");
+        return jsonState.state;
+      }
+      appendLogEvent("storage.state.loaded", {
+        mode: "sqlite",
+        schemaVersion: storageSchemaVersion,
+        filePath: sqlitePath,
+        recovered: false
+      });
+      return sqliteState;
+    }
+
+    const jsonState = readStateFile(filePath);
+    if (jsonState.ok) {
+      writeWorkspaceStateToDb(db, jsonState.state);
+      persistSqliteDatabase(db);
+      appendLogEvent("storage.state.migrated", {
+        from: filePath,
+        to: sqlitePath,
+        mode: "json-to-sqlite"
+      });
+      return jsonState.state;
+    }
+
+    return null;
+  } catch (error) {
+    const quarantinePath = fs.existsSync(sqlitePath) ? quarantineInvalidStateFile(sqlitePath, error.message) : "";
+    appendLogEvent("storage.sqlite.read.failed", { filePath: sqlitePath, quarantinePath, error: serializeError(error) }, "error");
+    const recovered = await recoverSqliteStateFromBackup();
+    if (recovered) {
+      return recovered;
+    }
+  } finally {
+    closeSqliteDatabase(db);
+  }
+
+  const primary = readStateFile(filePath);
+  if (primary.ok) {
+    appendLogEvent("storage.state.loaded", {
+      mode: "json-fallback",
+      schemaVersion: storageSchemaVersion,
+      filePath,
+      recovered: false
+    });
+    return primary.state;
+  }
+  if (primary.exists) {
+    const quarantinePath = quarantineInvalidStateFile(filePath, primary.error);
+    appendLogEvent("state.read.failed", { filePath, quarantinePath, error: primary.error }, "error");
+  }
+
+  const latestBackup = getLatestStateBackupPath();
+  if (!latestBackup) {
+    return null;
+  }
+
+  const backup = readStateFile(latestBackup);
+  if (!backup.ok) {
+    appendLogEvent("storage.state.recovery.failed", { backupPath: latestBackup, error: backup.error }, "error");
     return null;
   }
 
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    writeJsonAtomic(filePath, backup.state);
+    appendLogEvent("storage.state.recovered", {
+      filePath,
+      backupPath: latestBackup,
+      quarantineUsed: Boolean(primary.exists)
+    }, "warn");
   } catch (error) {
-    console.error("Failed to read workspace state", error);
-    appendLogEvent("state.read.failed", { filePath, error: serializeError(error) }, "error");
-    return null;
+    appendLogEvent("storage.state.recovery.write-failed", {
+      filePath,
+      backupPath: latestBackup,
+      error: serializeError(error)
+    }, "error");
   }
+
+  return backup.state;
 }
 
-function writeState(state) {
+async function writeState(state) {
   const filePath = getDataFilePath();
+  const sqlitePath = getSqliteFilePath();
+  state.updatedAt = new Date().toISOString();
+  const projectCount = Array.isArray(state?.projects) ? state.projects.length : 0;
+  let backupPath = "";
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(state, null, 2), "utf8");
-    return true;
+    backupPath = createStateBackup("before-write");
+    writeJsonAtomic(filePath, state);
   } catch (error) {
     appendLogEvent("state.write.failed", { filePath, error: serializeError(error) }, "error");
     throw error;
+  }
+
+  if (!initSqlJs) {
+    return {
+      ok: true,
+      mode: "json",
+      schemaVersion: storageSchemaVersion,
+      filePath,
+      sqliteEnabled: false,
+      backupPath
+    };
+  }
+
+  let db = null;
+  try {
+    db = await openSqliteDatabase();
+    writeWorkspaceStateToDb(db, state);
+    persistSqliteDatabase(db);
+    return {
+      ok: true,
+      mode: "sqlite",
+      schemaVersion: storageSchemaVersion,
+      filePath: sqlitePath,
+      jsonMirrorPath: filePath,
+      backupPath
+    };
+  } catch (error) {
+    appendLogEvent("storage.sqlite.write.failed", {
+      filePath: sqlitePath,
+      jsonMirrorPath: filePath,
+      projects: projectCount,
+      error: serializeError(error)
+    }, "error");
+    return {
+      ok: true,
+      mode: "json-fallback",
+      schemaVersion: storageSchemaVersion,
+      filePath,
+      sqlitePath,
+      sqliteEnabled: true,
+      sqliteError: serializeError(error),
+      backupPath
+    };
+  } finally {
+    closeSqliteDatabase(db);
   }
 }
 
@@ -246,34 +508,67 @@ function normalizePlannerResult(payload, roles = []) {
   const fallbackRole = roles[0]?.id || "product-manager";
   const placeholderTexts = new Set(["一句话总结", "子任务标题", "子任务描述", "角色ID", "协作消息"]);
   const isPlaceholder = (value) => placeholderTexts.has(String(value || "").trim());
-  const subtasks = (Array.isArray(payload?.subtasks) ? payload.subtasks : [])
-    .map((item) => ({
-      roleId: allowedRoles.has(item?.roleId) ? item.roleId : fallbackRole,
-      title: sanitizeLlmText(item?.title, 60),
-      description: sanitizeLlmText(item?.description, 240)
-    }))
+  const readRoleList = (...keys) => {
+    for (const key of keys) {
+      if (Array.isArray(payload?.[key])) {
+        const values = Array.from(new Set(payload[key].filter((roleId) => allowedRoles.has(roleId))));
+        if (values.length > 0) {
+          return values;
+        }
+      }
+    }
+    return [];
+  };
+  const rawSubtasks = (Array.isArray(payload?.subtasks) ? payload.subtasks : [])
+    .map((item, index) => {
+      const rawId = sanitizeLlmText(item?.id || item?.stepId || `step-${index + 1}`, 60)
+        .replace(/[^\w.-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "") || `step-${index + 1}`;
+      return {
+        id: rawId,
+        roleId: allowedRoles.has(item?.roleId) ? item.roleId : fallbackRole,
+        title: sanitizeLlmText(item?.title, 80),
+        description: sanitizeLlmText(item?.description, 500),
+        dependsOn: Array.isArray(item?.dependsOn)
+          ? item.dependsOn.map((value) => sanitizeLlmText(value, 60)).filter(Boolean)
+          : Array.isArray(item?.dependencies)
+            ? item.dependencies.map((value) => sanitizeLlmText(value, 60)).filter(Boolean)
+            : [],
+        riskLevel: ["low", "medium", "high"].includes(item?.riskLevel) ? item.riskLevel : "low"
+      };
+    })
     .filter((item) => item.title && item.description && !isPlaceholder(item.title) && !isPlaceholder(item.description))
-    .slice(0, 8);
+    .slice(0, 12);
+  const neededAgentRoleIds = Array.from(new Set([
+    ...readRoleList("neededAgentRoleIds", "agentRoleIds", "terminalRoleIds", "involvedRoleIds"),
+    ...rawSubtasks.map((item) => item.roleId)
+  ])).slice(0, 9);
+  const subtasks = rawSubtasks.map((item, index) => {
+    return {
+      ...item,
+      id: `step-${index + 1}`,
+      dependsOn: index === 0 ? [] : [`step-${index}`],
+      isEntryStep: index === 0,
+      order: index + 1
+    };
+  });
+  const effectiveFirstRoundRoleIds = subtasks[0]?.roleId ? [subtasks[0].roleId] : [];
+  const effectiveNeededAgentRoleIds = Array.from(new Set([
+    ...neededAgentRoleIds,
+    ...subtasks.map((item) => item.roleId)
+  ])).slice(0, 9);
 
-  if (subtasks.length < 3) {
-    throw new Error(`模型返回的 subtasks 少于 3 个，或返回了格式占位词。有效子任务数：${subtasks.length}。`);
+  if (effectiveFirstRoundRoleIds.length < 1 || subtasks.length < 1) {
+    throw new Error(`模型未返回有效的 Kernel Step 图。有效首轮 Agent 数：${effectiveFirstRoundRoleIds.length}，有效 Step 数：${subtasks.length}。`);
   }
-
-  const messages = (Array.isArray(payload?.messages) ? payload.messages : [])
-    .map((item) => ({
-      fromRoleId: allowedRoles.has(item?.fromRoleId) ? item.fromRoleId : fallbackRole,
-      toRoleIds: Array.isArray(item?.toRoleIds)
-        ? item.toRoleIds.filter((roleId) => allowedRoles.has(roleId)).slice(0, 6)
-        : [],
-      content: sanitizeLlmText(item?.content, 240)
-    }))
-    .filter((item) => item.content && item.toRoleIds.length > 0)
-    .slice(0, 8);
 
   return {
     summary: isPlaceholder(payload?.summary) ? "" : sanitizeLlmText(payload?.summary, 240),
+    neededAgentRoleIds: effectiveNeededAgentRoleIds,
+    firstRoundRoleIds: effectiveFirstRoundRoleIds,
     subtasks,
-    messages
+    messages: []
   };
 }
 
@@ -295,28 +590,80 @@ function buildLlmHeaders(model = {}) {
   return headers;
 }
 
-function buildPlannerMessages({ goal, projectName, roles }) {
+function sanitizePromptText(value, limit = 1200) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function formatPlannerProjectMemory(projectMemory = {}) {
+  if (!projectMemory || projectMemory.enabled === false) {
+    return "Project memory is disabled or empty.";
+  }
+  const lines = [];
+  if (projectMemory.manualNotes) {
+    lines.push("Manual project notes:");
+    lines.push(String(projectMemory.manualNotes).trim().slice(0, 4000));
+  }
+  if (projectMemory.summary) {
+    lines.push("Auto project memory:");
+    lines.push(String(projectMemory.summary).trim().slice(0, 8000));
+  }
+  const tasks = Array.isArray(projectMemory.taskHistory) ? projectMemory.taskHistory.slice(0, 6) : [];
+  if (tasks.length > 0) {
+    lines.push("Recent task state:");
+    tasks.forEach((task, index) => {
+      lines.push(`${index + 1}. [${sanitizePromptText(task.status, 40)}] ${sanitizePromptText(task.title || task.goal, 120)} (${Number(task.doneCount) || 0}/${Number(task.totalCount) || 0} done)`);
+      if (task.summary) {
+        lines.push(`   ${sanitizePromptText(task.summary, 220)}`);
+      }
+    });
+  }
+  const artifacts = Array.isArray(projectMemory.artifacts) ? projectMemory.artifacts.slice(0, 8) : [];
+  if (artifacts.length > 0) {
+    lines.push("Known artifacts:");
+    artifacts.forEach((artifact) => {
+      lines.push(`- ${sanitizePromptText(artifact.path || artifact.url, 220)}${artifact.description ? `: ${sanitizePromptText(artifact.description, 220)}` : ""}`);
+    });
+  }
+  const decisions = Array.isArray(projectMemory.decisions) ? projectMemory.decisions.slice(0, 8) : [];
+  if (decisions.length > 0) {
+    lines.push("Recent decisions:");
+    decisions.forEach((decision) => {
+      lines.push(`- ${sanitizePromptText(decision.roleName || decision.roleId, 80)}: ${sanitizePromptText(decision.summary, 360)}`);
+    });
+  }
+  return lines.join("\n").trim().slice(0, 14000) || "Project memory is empty.";
+}
+
+function buildPlannerMessages({ goal, projectName, roles, projectMemory }) {
   const roleText = roles
-    .map((role) => `- ${role.id}: ${role.name}，${role.description}`)
+    .map((role) => `- ${role.id}: ${role.name}, ${role.description}`)
     .join("\n");
+  const memoryText = formatPlannerProjectMemory(projectMemory);
 
   return [
     {
       role: "system",
       content:
-        "你是 CosS 的任务规划器。你必须把用户目标拆成多个角色可执行的任务。只返回严格 JSON，不要 Markdown，不要解释。" +
-        "硬性要求：subtasks 必须是 3 到 6 个；每个 title 和 description 必须结合用户目标写具体内容；" +
-        "roleId 必须来自用户给出的可用角色 ID；不要返回“子任务标题”“子任务描述”“一句话总结”“角色ID”等占位词。" +
-        "返回 JSON 对象字段只能包含 summary、subtasks、messages。"
+        "You are the CosS v0.10 Kernel Planner. The Kernel is the only scheduler. Generate one simple linear workflow when the task is created. Return strict JSON only; no Markdown and no explanation. " +
+        "Hard rules: neededAgentRoleIds must list every Agent terminal that may be needed, using only role IDs from the provided role list. Do not invent roles such as designer or developer. " +
+        "firstRoundRoleIds must contain exactly the roleId of the first workflow step. The first step may be one Agent only. " +
+        "subtasks must contain the complete sequential workflow, 1 to 12 steps. Every step must include id, roleId, title, description, dependsOn, and riskLevel. Step 1 uses dependsOn: []; every later step depends only on the immediately previous step. " +
+        "The Kernel will dispatch one step at a time. The next Agent starts only after the previous Agent reports done. Agent states are only idle, running, and done. " +
+        "Use project memory as the existing project context. Prefer incremental steps that continue current architecture, artifacts, conventions, and completed work. Do not plan bootstrap, scaffolding, or rediscovery steps unless the user goal explicitly asks for them. " +
+        "Return exactly these fields: summary, neededAgentRoleIds, firstRoundRoleIds, subtasks, messages. messages must be an empty array."
     },
     {
       role: "user",
       content:
-        `项目：${projectName || "未命名项目"}\n` +
-        `任务目标：${goal}\n\n` +
-        `可用角色：\n${roleText}\n\n` +
-        "请生成 3 到 6 个可执行子任务，并给出必要的角色协作消息。必须返回 JSON，格式为：" +
-        "{\"summary\":\"结合任务目标的一句话总结\",\"subtasks\":[{\"roleId\":\"product-manager\",\"title\":\"具体子任务标题\",\"description\":\"具体执行说明\"},{\"roleId\":\"frontend-engineer\",\"title\":\"具体子任务标题\",\"description\":\"具体执行说明\"},{\"roleId\":\"backend-engineer\",\"title\":\"具体子任务标题\",\"description\":\"具体执行说明\"}],\"messages\":[{\"fromRoleId\":\"product-manager\",\"toRoleIds\":[\"frontend-engineer\"],\"content\":\"具体协作消息\"}]}。"
+        `Project: ${projectName || "Untitled project"}\n` +
+        `Task goal: ${goal}\n\n` +
+        `Project memory:\n${memoryText}\n\n` +
+        `Available roles:\n${roleText}\n\n` +
+        "Create a complete linear workflow. Do not create parallel entry steps. Later steps must depend on the previous step only. Return JSON in this shape: " +
+        "{\"summary\":\"one sentence task summary\",\"neededAgentRoleIds\":[\"product-manager\",\"tech-lead\",\"frontend-engineer\",\"backend-engineer\",\"test-engineer\"],\"firstRoundRoleIds\":[\"product-manager\"],\"subtasks\":[{\"id\":\"step-1\",\"roleId\":\"product-manager\",\"title\":\"Define requirements and acceptance criteria\",\"description\":\"Write PRD, acceptance criteria, and boundaries.\",\"dependsOn\":[],\"riskLevel\":\"low\"},{\"id\":\"step-2\",\"roleId\":\"tech-lead\",\"title\":\"Design technical approach\",\"description\":\"Use step-1 output to define architecture and interface constraints.\",\"dependsOn\":[\"step-1\"],\"riskLevel\":\"low\"}],\"messages\":[]}."
     }
   ];
 }
@@ -352,7 +699,7 @@ async function requestJson(url, options) {
 
 async function planTaskWithLlm(request = {}) {
   if (process.env.COSS_LLM_FORCE_ERROR === "1") {
-    throw new Error("测试环境强制模拟 LLM Gateway 失败。");
+    throw new Error("测试环境强制模拟 Kernel Planner 失败。");
   }
 
   const roles = Array.isArray(request.roles) ? request.roles : [];
@@ -379,7 +726,8 @@ async function planTaskWithLlm(request = {}) {
     messages: buildPlannerMessages({
       goal: request.goal,
       projectName: request.projectName,
-      roles
+      roles,
+      projectMemory: request.projectMemory || null
     }),
     temperature: 0.2,
     stream: false
@@ -404,7 +752,7 @@ async function planTaskWithLlm(request = {}) {
 
 async function testModelConnectivityWithLlm(request = {}) {
   if (process.env.COSS_LLM_FORCE_ERROR === "1") {
-    throw new Error("测试环境强制模拟 LLM Gateway 失败。");
+    throw new Error("测试环境强制模拟 Kernel Planner 失败。");
   }
 
   const model = request.model || {};
@@ -643,12 +991,1283 @@ function getShellEnv(overrides = {}) {
   };
 }
 
+function safeFileStat(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return {
+      exists: true,
+      size: stat.size,
+      modifiedAt: stat.mtime.toISOString()
+    };
+  } catch {
+    return { exists: false, size: 0, modifiedAt: "" };
+  }
+}
+
+function sleepSync(ms) {
+  const buffer = new SharedArrayBuffer(4);
+  const view = new Int32Array(buffer);
+  Atomics.wait(view, 0, 0, ms);
+}
+
+function renameAtomicWithRetry(tempPath, filePath, context = {}) {
+  const maxAttempts = Math.max(1, Number(context.maxAttempts) || 6);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fs.renameSync(tempPath, filePath);
+      return;
+    } catch (error) {
+      const retryable = ["EPERM", "EACCES", "EBUSY"].includes(error?.code);
+      if (!retryable || attempt >= maxAttempts) {
+        throw error;
+      }
+      sleepSync(Math.min(30 * attempt, 180));
+    }
+  }
+}
+
 function writeJsonAtomic(filePath, data) {
   const dir = path.dirname(filePath);
-  const tempPath = path.join(dir, `${path.basename(filePath)}.${process.pid}.tmp`);
+  cleanupStaleAtomicTempFiles(filePath);
+  const tempPath = path.join(dir, `${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID().slice(0, 8)}.tmp`);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.renameSync(tempPath, filePath);
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    renameAtomicWithRetry(tempPath, filePath);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch {
+      // Best effort cleanup only.
+    }
+    throw error;
+  }
+}
+
+function writeFileAtomic(filePath, data) {
+  const dir = path.dirname(filePath);
+  cleanupStaleAtomicTempFiles(filePath);
+  const tempPath = path.join(dir, `${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID().slice(0, 8)}.tmp`);
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.writeFileSync(tempPath, data);
+    renameAtomicWithRetry(tempPath, filePath);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch {
+      // Best effort cleanup only.
+    }
+    throw error;
+  }
+}
+
+function cleanupStaleAtomicTempFiles(filePath, maxAgeMs = 60 * 60 * 1000) {
+  const dir = path.dirname(filePath);
+  const baseName = path.basename(filePath);
+  const now = Date.now();
+  try {
+    if (!fs.existsSync(dir)) {
+      return;
+    }
+    fs.readdirSync(dir)
+      .filter((name) => name.startsWith(`${baseName}.`) && name.endsWith(".tmp"))
+      .forEach((name) => {
+        const tempPath = path.join(dir, name);
+        const stat = fs.statSync(tempPath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(tempPath);
+        }
+      });
+  } catch (error) {
+    appendLogEvent("storage.atomic-temp.cleanup.failed", {
+      filePath,
+      error: serializeError(error)
+    }, "warn");
+  }
+}
+
+async function getSqlJsRuntime() {
+  if (!initSqlJs) {
+    throw new Error("sql.js 依赖不可用。");
+  }
+
+  if (!sqlJsRuntimePromise) {
+    const distDir = path.dirname(require.resolve("sql.js/dist/sql-wasm.js"));
+    sqlJsRuntimePromise = initSqlJs({
+      locateFile: (fileName) => path.join(distDir, fileName)
+    });
+  }
+
+  return sqlJsRuntimePromise;
+}
+
+function ensureSqliteSchema(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  const now = new Date().toISOString();
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ["schema_version", String(storageSchemaVersion)]);
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ["app_version", appVersion]);
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ["updated_at", now]);
+}
+
+async function openSqliteDatabase() {
+  const SQL = await getSqlJsRuntime();
+  const sqlitePath = getSqliteFilePath();
+  let db;
+  if (fs.existsSync(sqlitePath)) {
+    db = new SQL.Database(fs.readFileSync(sqlitePath));
+  } else {
+    db = new SQL.Database();
+  }
+  ensureSqliteSchema(db);
+  return db;
+}
+
+function readWorkspaceStateFromDb(db) {
+  const rows = db.exec("SELECT value FROM app_state WHERE key = 'workspace_state' LIMIT 1");
+  const value = rows?.[0]?.values?.[0]?.[0];
+  if (!value) {
+    return null;
+  }
+  const state = JSON.parse(value);
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    throw new Error("SQLite 中的工作区状态不是有效对象。");
+  }
+  return state;
+}
+
+function writeWorkspaceStateToDb(db, state) {
+  const now = new Date().toISOString();
+  db.run(
+    "INSERT OR REPLACE INTO app_state (key, value, updated_at) VALUES (?, ?, ?)",
+    ["workspace_state", JSON.stringify(state), now]
+  );
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ["updated_at", now]);
+}
+
+function persistSqliteDatabase(db) {
+  writeFileAtomic(getSqliteFilePath(), Buffer.from(db.export()));
+}
+
+function closeSqliteDatabase(db) {
+  if (!db || typeof db.close !== "function") {
+    return;
+  }
+  try {
+    db.close();
+  } catch (error) {
+    appendLogEvent("storage.sqlite.close.failed", { error: serializeError(error) }, "warn");
+  }
+}
+
+function readStateFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { ok: false, exists: false, state: null, error: "" };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      throw new Error("状态文件不是有效对象。");
+    }
+    return { ok: true, exists: true, state, error: "" };
+  } catch (error) {
+    return { ok: false, exists: true, state: null, error: error.message };
+  }
+}
+
+function cloneStateValue(value) {
+  if (value == null) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function getTimestampMs(value) {
+  const ms = new Date(value || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function getStateFreshnessMs(state, fileStat = {}) {
+  return Math.max(getTimestampMs(state?.updatedAt), getTimestampMs(fileStat.modifiedAt));
+}
+
+function isJsonStateNewerThanSqlite(jsonState, sqliteState, jsonStat = {}, sqliteStat = {}) {
+  const jsonFreshness = getStateFreshnessMs(jsonState, jsonStat);
+  const sqliteFreshness = getStateFreshnessMs(sqliteState, sqliteStat);
+  return jsonFreshness > sqliteFreshness + 2;
+}
+
+function mergeUniqueStrings(...lists) {
+  const result = [];
+  lists.flat().forEach((value) => {
+    const item = String(value || "").trim();
+    if (item && !result.includes(item)) {
+      result.push(item);
+    }
+  });
+  return result;
+}
+
+const durableSubtaskStatusRank = {
+  idle: 0,
+  running: 1,
+  done: 2
+};
+
+const durableStepPhaseRank = {
+  idle: 0,
+  running: 1,
+  done: 2
+};
+
+function pickDurableProgressValue(incomingValue, durableValue, rankMap) {
+  const incomingRank = rankMap[String(incomingValue || "").trim()] ?? -1;
+  const durableRank = rankMap[String(durableValue || "").trim()] ?? -1;
+  return durableRank > incomingRank ? durableValue : incomingValue;
+}
+
+function mergeRecordsById(incomingRecords = [], durableRecords = [], mergeRecord = null) {
+  const result = [];
+  const indexById = new Map();
+  (Array.isArray(incomingRecords) ? incomingRecords : []).forEach((record) => {
+    if (!record?.id) {
+      result.push(cloneStateValue(record));
+      return;
+    }
+    indexById.set(record.id, result.length);
+    result.push(cloneStateValue(record));
+  });
+
+  (Array.isArray(durableRecords) ? durableRecords : []).forEach((record) => {
+    if (!record?.id) {
+      return;
+    }
+    const existingIndex = indexById.get(record.id);
+    if (existingIndex === undefined) {
+      indexById.set(record.id, result.length);
+      result.push(cloneStateValue(record));
+      return;
+    }
+    result[existingIndex] = mergeRecord
+      ? mergeRecord(result[existingIndex], record)
+      : { ...cloneStateValue(record), ...result[existingIndex] };
+  });
+  return result;
+}
+
+function normalizeDeletedProjectIds(state = {}) {
+  return new Set(
+    (Array.isArray(state?.deletedProjectIds) ? state.deletedProjectIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+}
+
+function mergeDurableMessage(incomingMessage, durableMessage) {
+  return {
+    ...incomingMessage,
+    agentPoolPaths: {
+      ...(durableMessage.agentPoolPaths || {}),
+      ...(incomingMessage.agentPoolPaths || {})
+    },
+    readBy: mergeUniqueStrings(durableMessage.readBy || [], incomingMessage.readBy || []),
+    injectedWindowIds: mergeUniqueStrings(durableMessage.injectedWindowIds || [], incomingMessage.injectedWindowIds || []),
+    autoWorkflow: Boolean(incomingMessage.autoWorkflow || durableMessage.autoWorkflow),
+    autoWorkflowStatus: incomingMessage.autoWorkflowStatus || durableMessage.autoWorkflowStatus || "",
+    autoWorkflowDispatchedAt: incomingMessage.autoWorkflowDispatchedAt || durableMessage.autoWorkflowDispatchedAt || "",
+    autoWorkflowStoppedAt: incomingMessage.autoWorkflowStoppedAt || durableMessage.autoWorkflowStoppedAt || "",
+    agentPoolStatus: incomingMessage.agentPoolStatus || durableMessage.agentPoolStatus || "idle",
+    subtaskRefs: {
+      ...(durableMessage.subtaskRefs || {}),
+      ...(incomingMessage.subtaskRefs || {})
+    }
+  };
+}
+
+function mergeDurableSubtask(incomingSubtask, durableSubtask) {
+  const status = pickDurableProgressValue(incomingSubtask.status, durableSubtask.status, durableSubtaskStatusRank);
+  return {
+    ...incomingSubtask,
+    status,
+    assignedMessageId: incomingSubtask.assignedMessageId || durableSubtask.assignedMessageId || "",
+    dependsOn: mergeUniqueStrings(durableSubtask.dependsOn || [], incomingSubtask.dependsOn || []),
+    updatedAt: getTimestampMs(durableSubtask.updatedAt) > getTimestampMs(incomingSubtask.updatedAt)
+      ? durableSubtask.updatedAt
+      : incomingSubtask.updatedAt,
+    lastStatusChangedAt: getTimestampMs(durableSubtask.lastStatusChangedAt) > getTimestampMs(incomingSubtask.lastStatusChangedAt)
+      ? durableSubtask.lastStatusChangedAt
+      : incomingSubtask.lastStatusChangedAt
+  };
+}
+
+function getStepMergeKey(step) {
+  return step?.id || (step?.subtaskId ? `subtask:${step.subtaskId}` : "");
+}
+
+function mergeDurableStep(incomingStep, durableStep) {
+  const phase = pickDurableProgressValue(incomingStep.phase || incomingStep.status, durableStep.phase || durableStep.status, durableStepPhaseRank);
+  const status = pickDurableProgressValue(incomingStep.status, durableStep.status, durableSubtaskStatusRank);
+  const durableLeaseNewer = getTimestampMs(durableStep.lease?.heartbeatAt) > getTimestampMs(incomingStep.lease?.heartbeatAt);
+  const durableUpdatedNewer = getTimestampMs(durableStep.updatedAt) > getTimestampMs(incomingStep.updatedAt);
+  return {
+    ...incomingStep,
+    phase,
+    status,
+    assignedMessageId: incomingStep.assignedMessageId || durableStep.assignedMessageId || "",
+    claimedBy: incomingStep.claimedBy || durableStep.claimedBy || "",
+    lease: phase === "done"
+      ? null
+      : (durableLeaseNewer || !incomingStep.lease ? cloneStateValue(durableStep.lease || incomingStep.lease || null) : incomingStep.lease),
+    dependsOn: mergeUniqueStrings(durableStep.dependsOn || [], incomingStep.dependsOn || []),
+    allowedCapabilities: mergeUniqueStrings(durableStep.allowedCapabilities || [], incomingStep.allowedCapabilities || []),
+    updatedAt: durableUpdatedNewer ? durableStep.updatedAt : incomingStep.updatedAt
+  };
+}
+
+function mergeDurableOrchestrator(incomingOrchestrator = {}, durableOrchestrator = {}) {
+  const merged = {
+    ...cloneStateValue(durableOrchestrator || {}),
+    ...cloneStateValue(incomingOrchestrator || {})
+  };
+  const incomingSteps = Array.isArray(incomingOrchestrator.steps) ? incomingOrchestrator.steps : [];
+  const durableSteps = Array.isArray(durableOrchestrator.steps) ? durableOrchestrator.steps : [];
+  const resultSteps = [];
+  const stepIndex = new Map();
+  incomingSteps.forEach((step) => {
+    const key = getStepMergeKey(step);
+    if (key) {
+      stepIndex.set(key, resultSteps.length);
+    }
+    resultSteps.push(cloneStateValue(step));
+  });
+  durableSteps.forEach((step) => {
+    const key = getStepMergeKey(step);
+    const existingIndex = key ? stepIndex.get(key) : undefined;
+    if (existingIndex === undefined) {
+      if (key) {
+        stepIndex.set(key, resultSteps.length);
+      }
+      resultSteps.push(cloneStateValue(step));
+      return;
+    }
+    resultSteps[existingIndex] = mergeDurableStep(resultSteps[existingIndex], step);
+  });
+  merged.steps = resultSteps;
+  merged.events = mergeRecordsById(incomingOrchestrator.events || [], durableOrchestrator.events || []);
+  merged.locks = mergeRecordsById(incomingOrchestrator.locks || [], durableOrchestrator.locks || []);
+  merged.approvals = mergeRecordsById(incomingOrchestrator.approvals || [], durableOrchestrator.approvals || []);
+  merged.sharedState = {
+    ...(durableOrchestrator.sharedState || {}),
+    ...(incomingOrchestrator.sharedState || {}),
+    artifacts: mergeRecordsById(incomingOrchestrator.sharedState?.artifacts || [], durableOrchestrator.sharedState?.artifacts || []),
+    decisions: mergeRecordsById(incomingOrchestrator.sharedState?.decisions || [], durableOrchestrator.sharedState?.decisions || []),
+    constraints: mergeUniqueStrings(durableOrchestrator.sharedState?.constraints || [], incomingOrchestrator.sharedState?.constraints || [])
+  };
+  return merged;
+}
+
+function mergeDurableTask(incomingTask, durableTask) {
+  const merged = {
+    ...incomingTask,
+    status: pickDurableProgressValue(incomingTask.status, durableTask.status, durableSubtaskStatusRank),
+    updatedAt: getTimestampMs(durableTask.updatedAt) > getTimestampMs(incomingTask.updatedAt)
+      ? durableTask.updatedAt
+      : incomingTask.updatedAt
+  };
+  merged.subtasks = mergeRecordsById(incomingTask.subtasks || [], durableTask.subtasks || [], mergeDurableSubtask);
+  merged.orchestrator = mergeDurableOrchestrator(incomingTask.orchestrator || {}, durableTask.orchestrator || {});
+  return merged;
+}
+
+function mergeDurableProject(incomingProject, durableProject) {
+  const merged = {
+    ...incomingProject,
+    messages: mergeRecordsById(incomingProject.messages || [], durableProject.messages || [], mergeDurableMessage),
+    agentEvents: mergeRecordsById(incomingProject.agentEvents || [], durableProject.agentEvents || []),
+    agentDeliveries: mergeRecordsById(incomingProject.agentDeliveries || [], durableProject.agentDeliveries || []),
+    terminalOutputRefs: mergeRecordsById(incomingProject.terminalOutputRefs || [], durableProject.terminalOutputRefs || []),
+    kernelEvents: mergeRecordsById(incomingProject.kernelEvents || [], durableProject.kernelEvents || []),
+    commandLogs: mergeRecordsById(incomingProject.commandLogs || [], durableProject.commandLogs || [])
+  };
+  merged.tasks = mergeRecordsById(incomingProject.tasks || [], durableProject.tasks || [], mergeDurableTask);
+  return merged;
+}
+
+function mergeStateForRendererSave(incomingState, durableState) {
+  if (!incomingState || !durableState || !Array.isArray(durableState.projects)) {
+    return cloneStateValue(incomingState);
+  }
+  const merged = cloneStateValue(incomingState);
+  const deletedProjectIds = new Set([
+    ...normalizeDeletedProjectIds(durableState),
+    ...normalizeDeletedProjectIds(incomingState)
+  ]);
+  const projects = [];
+  const projectIndex = new Map();
+  (merged.projects || []).forEach((project) => {
+    if (!project?.id || deletedProjectIds.has(project.id)) {
+      return;
+    }
+    projectIndex.set(project.id, projects.length);
+    projects.push(project);
+  });
+  (durableState.projects || []).forEach((project) => {
+    if (!project?.id || deletedProjectIds.has(project.id)) {
+      return;
+    }
+    const index = projectIndex.get(project.id);
+    if (index === undefined) {
+      projectIndex.set(project.id, projects.length);
+      projects.push(cloneStateValue(project));
+      return;
+    }
+    projects[index] = mergeDurableProject(projects[index], project);
+  });
+  merged.projects = projects;
+  merged.settings = {
+    ...(durableState.settings || {}),
+    ...(incomingState.settings || {})
+  };
+  const activeProjectId = [incomingState.activeProjectId, durableState.activeProjectId]
+    .map((id) => String(id || "").trim())
+    .find((id) => id && !deletedProjectIds.has(id) && projects.some((project) => project.id === id));
+  merged.activeProjectId = activeProjectId || projects[0]?.id || null;
+  merged.deletedProjectIds = [...deletedProjectIds];
+  merged.updatedAt = new Date().toISOString();
+  return merged;
+}
+
+function getStateBackupFiles() {
+  const backupDirectory = getStateBackupDirectory();
+  try {
+    if (!fs.existsSync(backupDirectory)) {
+      return [];
+    }
+    return fs.readdirSync(backupDirectory)
+      .filter((name) => (
+        (name.startsWith("coss-workspace-state.") && name.endsWith(".json")) ||
+        (name.startsWith("coss-workspace.") && name.endsWith(".sqlite"))
+      ))
+      .map((name) => {
+        const filePath = path.join(backupDirectory, name);
+        const stat = fs.statSync(filePath);
+        return {
+          name,
+          path: filePath,
+          type: name.endsWith(".sqlite") ? "sqlite" : "json",
+          size: stat.size,
+          createdAt: stat.mtime.toISOString(),
+          timestamp: stat.mtime.getTime()
+        };
+      })
+      .sort((a, b) => b.timestamp - a.timestamp);
+  } catch (error) {
+    appendLogEvent("storage.backup.list.failed", { error: serializeError(error) }, "error");
+    return [];
+  }
+}
+
+function pruneStateBackups() {
+  getStateBackupFiles().slice(maxStateBackups).forEach((backup) => {
+    try {
+      fs.unlinkSync(backup.path);
+    } catch (error) {
+      appendLogEvent("storage.backup.prune.failed", { path: backup.path, error: serializeError(error) }, "warn");
+    }
+  });
+}
+
+function createStateBackup(reason = "manual", options = {}) {
+  const sqlitePath = getSqliteFilePath();
+  const jsonPath = getDataFilePath();
+  const sourcePath = fs.existsSync(sqlitePath) ? sqlitePath : jsonPath;
+  if (!fs.existsSync(sourcePath)) {
+    return "";
+  }
+  try {
+    if (!fs.statSync(sourcePath).isFile()) {
+      appendLogEvent("storage.backup.skipped", { sourcePath, reason: "source-not-file" }, "warn");
+      return "";
+    }
+  } catch (error) {
+    appendLogEvent("storage.backup.skipped", { sourcePath, reason: "source-stat-failed", error: serializeError(error) }, "warn");
+    return "";
+  }
+
+  const now = Date.now();
+  if (!options.force && reason === "before-write" && now - lastStateBackupAt < 30000) {
+    return "";
+  }
+
+  const backupDirectory = getStateBackupDirectory();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const extension = path.extname(sourcePath) || ".json";
+  const baseName = extension === ".sqlite" ? "coss-workspace" : "coss-workspace-state";
+  const backupPath = path.join(backupDirectory, `${baseName}.${stamp}.${reason}${extension}`);
+  try {
+    fs.mkdirSync(backupDirectory, { recursive: true });
+    fs.copyFileSync(sourcePath, backupPath);
+    lastStateBackupAt = now;
+    pruneStateBackups();
+    appendLogEvent("storage.backup.created", { path: backupPath, sourcePath, reason });
+    return backupPath;
+  } catch (error) {
+    appendLogEvent("storage.backup.create.failed", { sourcePath, backupPath, reason, error: serializeError(error) }, "warn");
+    return "";
+  }
+}
+
+function getLatestStateBackupPath() {
+  return getStateBackupFiles()[0]?.path || "";
+}
+
+async function recoverSqliteStateFromBackup() {
+  const backups = getStateBackupFiles();
+  for (const backup of backups) {
+    let db = null;
+    try {
+      if (backup.type === "sqlite") {
+        fs.copyFileSync(backup.path, getSqliteFilePath());
+        db = await openSqliteDatabase();
+        const state = readWorkspaceStateFromDb(db);
+        if (state) {
+          writeJsonAtomic(getDataFilePath(), state);
+          appendLogEvent("storage.sqlite.recovered", { backupPath: backup.path }, "warn");
+          return state;
+        }
+      } else {
+        const parsed = readStateFile(backup.path);
+        if (parsed.ok) {
+          db = await openSqliteDatabase();
+          writeWorkspaceStateToDb(db, parsed.state);
+          persistSqliteDatabase(db);
+          writeJsonAtomic(getDataFilePath(), parsed.state);
+          appendLogEvent("storage.sqlite.recovered", { backupPath: backup.path, mode: "json-backup-to-sqlite" }, "warn");
+          return parsed.state;
+        }
+      }
+    } catch (error) {
+      appendLogEvent("storage.sqlite.recover-attempt.failed", {
+        backupPath: backup.path,
+        error: serializeError(error)
+      }, "warn");
+    } finally {
+      closeSqliteDatabase(db);
+    }
+  }
+
+  return null;
+}
+
+function quarantineInvalidStateFile(filePath, errorMessage = "") {
+  if (!fs.existsSync(filePath)) {
+    return "";
+  }
+
+  try {
+    const backupDirectory = getStateBackupDirectory();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const extension = path.extname(filePath) || ".json";
+    const baseName = extension === ".sqlite" ? "coss-workspace" : "coss-workspace-state";
+    const targetPath = path.join(backupDirectory, `${baseName}.${stamp}.invalid${extension}`);
+    fs.mkdirSync(backupDirectory, { recursive: true });
+    fs.copyFileSync(filePath, targetPath);
+    appendLogEvent("storage.state.quarantined", { filePath, targetPath, error: errorMessage }, "error");
+    return targetPath;
+  } catch (error) {
+    appendLogEvent("storage.state.quarantine.failed", { filePath, error: serializeError(error) }, "error");
+    return "";
+  }
+}
+
+function getStorageInfo() {
+  const statePath = getDataFilePath();
+  const sqlitePath = getSqliteFilePath();
+  const stateStat = safeFileStat(statePath);
+  const sqliteStat = safeFileStat(sqlitePath);
+  const backups = getStateBackupFiles();
+  return {
+    mode: initSqlJs ? "sqlite" : "json-fallback",
+    sqliteEnabled: Boolean(initSqlJs),
+    sqliteReason: initSqlJs ? "SQLite 已启用，使用 sql.js WASM 数据库文件。" : "sql.js 依赖不可用，已回退到 JSON 状态文件。",
+    schemaVersion: storageSchemaVersion,
+    appVersion,
+    storageDirectory: getStorageDirectory(),
+    sqlitePath,
+    sqliteExists: sqliteStat.exists,
+    sqliteSize: sqliteStat.size,
+    sqliteModifiedAt: sqliteStat.modifiedAt,
+    statePath,
+    stateExists: stateStat.exists,
+    stateSize: stateStat.size,
+    stateModifiedAt: stateStat.modifiedAt,
+    backupDirectory: getStateBackupDirectory(),
+    backupCount: backups.length,
+    latestBackupPath: backups[0]?.path || "",
+    backups: backups.slice(0, 8),
+    logDirectory: getLogDirectory(),
+    diagnosticsDirectory: getDiagnosticsDirectory()
+  };
+}
+
+function getStateMeta() {
+  const stateStat = safeFileStat(getDataFilePath());
+  const sqliteStat = safeFileStat(getSqliteFilePath());
+  return {
+    storageDirectory: getStorageDirectory(),
+    statePath: getDataFilePath(),
+    stateModifiedAt: stateStat.modifiedAt,
+    stateSize: stateStat.size,
+    sqlitePath: getSqliteFilePath(),
+    sqliteModifiedAt: sqliteStat.modifiedAt,
+    sqliteSize: sqliteStat.size,
+    stamp: [
+      stateStat.modifiedAt,
+      stateStat.size,
+      sqliteStat.modifiedAt,
+      sqliteStat.size
+    ].join("|")
+  };
+}
+
+function resolveCommandOnPath(commandName) {
+  const pathValue = process.env.PATH || process.env.Path || "";
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, process.platform === "win32" ? `${commandName}${extension.toLowerCase()}` : commandName);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+      const upperCandidate = path.join(directory, process.platform === "win32" ? `${commandName}${extension.toUpperCase()}` : commandName);
+      if (upperCandidate !== candidate && fs.existsSync(upperCandidate)) {
+        return upperCandidate;
+      }
+    }
+  }
+  return "";
+}
+
+function resolveNodeCommandForMcp() {
+  const configured = String(process.env.COSS_NODE_COMMAND || "").trim();
+  if (configured) {
+    return configured;
+  }
+
+  const npmNode = String(process.env.npm_node_execpath || "").trim();
+  if (npmNode && fs.existsSync(npmNode)) {
+    return npmNode;
+  }
+
+  const currentExecutable = process.execPath || "";
+  if (currentExecutable && /^node(?:\.exe)?$/i.test(path.basename(currentExecutable))) {
+    return currentExecutable;
+  }
+
+  return resolveCommandOnPath("node") || "node";
+}
+
+function getMcpServerInfo(context = {}) {
+  const serverPath = path.join(__dirname, "coss-mcp-server.cjs");
+  const command = resolveNodeCommandForMcp();
+  const args = [
+    serverPath,
+    "--user-data",
+    getStorageDirectory()
+  ];
+  if (context.projectId) {
+    args.push("--project-id", context.projectId);
+  }
+  if (context.roleId) {
+    args.push("--role-id", context.roleId);
+  }
+  if (context.taskId) {
+    args.push("--task-id", context.taskId);
+  }
+  if (context.sessionId) {
+    args.push("--session-id", context.sessionId);
+  }
+  return {
+    name: "coss-mcp",
+    command,
+    args,
+    serverPath,
+    cwd: path.dirname(path.dirname(serverPath)),
+    userData: getStorageDirectory(),
+    projectId: context.projectId || "",
+    roleId: context.roleId || "",
+    taskId: context.taskId || "",
+    sessionId: context.sessionId || ""
+  };
+}
+
+function buildMcpServerEntry(context = {}) {
+  const info = getMcpServerInfo(context);
+  const env = {
+    COSS_MCP_USER_DATA: info.userData
+  };
+  if (info.projectId) {
+    env.COSS_MCP_PROJECT_ID = info.projectId;
+  }
+
+  return {
+    type: "stdio",
+    description: "CosS v0.10 Kernel MCP tools for durable task context, leased steps, structured results, locks, approvals, and projections.",
+    defer_loading: false,
+    command: info.command,
+    args: info.args,
+    env
+  };
+}
+
+function readProjectMcpJsonConfig(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { data: {}, backupPath: "" };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(".mcp.json must be a JSON object");
+    }
+    return { data: parsed, backupPath: "" };
+  } catch (error) {
+    const backupPath = `${filePath}.invalid-${Date.now()}.bak`;
+    fs.copyFileSync(filePath, backupPath);
+    appendLogEvent("mcp.project-config.invalid-backed-up", {
+      filePath,
+      backupPath,
+      error: serializeError(error)
+    }, "warn");
+    return { data: {}, backupPath };
+  }
+}
+
+function writeProjectMcpConfig(_event, request = {}) {
+  try {
+    const root = getProjectRoot(request.projectPath);
+    const projectId = String(request.projectId || "").trim();
+    const generatedAt = new Date().toISOString();
+    const serverEntry = buildMcpServerEntry({ projectId });
+    const rootConfigPath = path.join(root, ".mcp.json");
+    const cossConfigPath = path.join(root, ".coss", "mcp", "coss-mcp.json");
+    const existingRootConfig = readProjectMcpJsonConfig(rootConfigPath);
+    const rootConfig = existingRootConfig.data;
+    const existingServers = rootConfig.mcpServers && typeof rootConfig.mcpServers === "object" && !Array.isArray(rootConfig.mcpServers)
+      ? rootConfig.mcpServers
+      : {};
+
+    rootConfig.mcpServers = {
+      ...existingServers,
+      coss: serverEntry
+    };
+
+    const cossConfig = {
+      generatedBy: "CosS",
+      appVersion,
+      generatedAt,
+      projectId,
+      projectPath: root,
+      mcpServers: {
+        coss: serverEntry
+      },
+      tools: [
+        "coss_get_context",
+        "coss_list_roles",
+        "coss_get_task_board",
+        "coss_pool_read",
+        "coss_pool_claim",
+        "coss_list_tasks",
+        "coss_claim_task",
+        "coss_claim_step",
+        "coss_heartbeat_step",
+        "coss_release_step",
+        "coss_get_kernel_events",
+        "coss_report_status",
+        "coss_submit_result",
+        "coss_acquire_lock",
+        "coss_release_lock",
+        "coss_request_approval"
+      ],
+      note: "CosS v0.10 Agents must use the Kernel task board, leased step claiming, structured results, locks, and approvals."
+    };
+
+    writeJsonAtomic(cossConfigPath, cossConfig);
+    writeJsonAtomic(rootConfigPath, rootConfig);
+    appendLogEvent("mcp.project-config.written", {
+      projectPath: root,
+      projectId,
+      rootConfigPath,
+      cossConfigPath,
+      backupPath: existingRootConfig.backupPath,
+      serverName: "coss"
+    });
+
+    return {
+      ok: true,
+      projectPath: root,
+      projectId,
+      rootConfigPath,
+      cossConfigPath,
+      backupPath: existingRootConfig.backupPath,
+      server: serverEntry
+    };
+  } catch (error) {
+    appendLogEvent("mcp.project-config.write.failed", {
+      projectPath: request.projectPath,
+      projectId: request.projectId,
+      error: serializeError(error)
+    }, "error");
+    return { ok: false, error: error.message };
+  }
+}
+
+function readJsonConfigSnapshot(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return {
+      path: filePath,
+      exists: false,
+      valid: false,
+      error: "",
+      data: null,
+      modifiedAt: "",
+      size: 0
+    };
+  }
+
+  const stat = fs.statSync(filePath);
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const isObject = data && typeof data === "object" && !Array.isArray(data);
+    return {
+      path: filePath,
+      exists: true,
+      valid: isObject,
+      error: isObject ? "" : "JSON root is not an object.",
+      data: isObject ? data : null,
+      modifiedAt: stat.mtime.toISOString(),
+      size: stat.size
+    };
+  } catch (error) {
+    return {
+      path: filePath,
+      exists: true,
+      valid: false,
+      error: error.message,
+      data: null,
+      modifiedAt: stat.mtime.toISOString(),
+      size: stat.size
+    };
+  }
+}
+
+function areStringArraysEqual(left = [], right = []) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false;
+  }
+  return left.every((item, index) => String(item) === String(right[index]));
+}
+
+function getMcpServerMatchStatus(actual, expected) {
+  const server = actual && typeof actual === "object" && !Array.isArray(actual) ? actual : null;
+  if (!server) {
+    return {
+      hasServer: false,
+      commandMatches: false,
+      argsMatches: false,
+      envMatches: false,
+      matches: false,
+      command: "",
+      args: [],
+      env: {}
+    };
+  }
+
+  const env = server.env && typeof server.env === "object" && !Array.isArray(server.env) ? server.env : {};
+  const expectedEnv = expected.env || {};
+  const envMatches = Object.keys(expectedEnv).every((key) => String(env[key] || "") === String(expectedEnv[key] || ""));
+  const typeMatches = String(server.type || "stdio") === String(expected.type || "stdio");
+  const commandMatches = String(server.command || "") === String(expected.command || "");
+  const argsMatches = areStringArraysEqual(server.args || [], expected.args || []);
+
+  return {
+    hasServer: true,
+    typeMatches,
+    commandMatches,
+    argsMatches,
+    envMatches,
+    matches: typeMatches && commandMatches && argsMatches && envMatches,
+    type: String(server.type || ""),
+    command: String(server.command || ""),
+    args: Array.isArray(server.args) ? server.args : [],
+    env
+  };
+}
+
+function checkProjectMcpConfig(_event, request = {}) {
+  try {
+    const root = getProjectRoot(request.projectPath);
+    const projectId = String(request.projectId || "").trim();
+    const expectedServer = buildMcpServerEntry({ projectId });
+    const rootConfigPath = path.join(root, ".mcp.json");
+    const cossConfigPath = path.join(root, ".coss", "mcp", "coss-mcp.json");
+    const rootSnapshot = readJsonConfigSnapshot(rootConfigPath);
+    const cossSnapshot = readJsonConfigSnapshot(cossConfigPath);
+    const rootServerStatus = getMcpServerMatchStatus(rootSnapshot.data?.mcpServers?.coss, expectedServer);
+    const cossServerStatus = getMcpServerMatchStatus(cossSnapshot.data?.mcpServers?.coss, expectedServer);
+    const cossMetaMatches = cossSnapshot.valid
+      && String(cossSnapshot.data?.projectId || "") === projectId
+      && String(cossSnapshot.data?.generatedBy || "") === "CosS";
+    const ok = rootSnapshot.valid
+      && cossSnapshot.valid
+      && rootServerStatus.matches
+      && cossServerStatus.matches
+      && cossMetaMatches;
+
+    const result = {
+      ok,
+      projectPath: root,
+      projectId,
+      checkedAt: new Date().toISOString(),
+      rootConfig: {
+        path: rootConfigPath,
+        exists: rootSnapshot.exists,
+        valid: rootSnapshot.valid,
+        error: rootSnapshot.error,
+        modifiedAt: rootSnapshot.modifiedAt,
+        size: rootSnapshot.size,
+        ...rootServerStatus
+      },
+      cossConfig: {
+        path: cossConfigPath,
+        exists: cossSnapshot.exists,
+        valid: cossSnapshot.valid,
+        error: cossSnapshot.error,
+        modifiedAt: cossSnapshot.modifiedAt,
+        size: cossSnapshot.size,
+        metaMatches: cossMetaMatches,
+        ...cossServerStatus
+      },
+      expectedServer,
+      fixAvailable: true
+    };
+
+    appendLogEvent("mcp.project-config.checked", {
+      projectPath: root,
+      projectId,
+      ok,
+      rootConfig: {
+        exists: result.rootConfig.exists,
+        valid: result.rootConfig.valid,
+        matches: result.rootConfig.matches
+      },
+      cossConfig: {
+        exists: result.cossConfig.exists,
+        valid: result.cossConfig.valid,
+        matches: result.cossConfig.matches,
+        metaMatches: result.cossConfig.metaMatches
+      }
+    }, ok ? "info" : "warn");
+
+    return result;
+  } catch (error) {
+    appendLogEvent("mcp.project-config.check.failed", {
+      projectPath: request.projectPath,
+      projectId: request.projectId,
+      error: serializeError(error)
+    }, "error");
+    return { ok: false, error: error.message, fixAvailable: false };
+  }
+}
+
+function readMcpAuditEvents(_event, request = {}) {
+  const limit = Math.min(Math.max(Number.parseInt(request.limit || "80", 10) || 80, 1), 200);
+  const roleId = String(request.roleId || "").trim();
+  const taskId = String(request.taskId || "").trim();
+  const tool = String(request.tool || "").trim().toLowerCase();
+  const query = String(request.query || "").trim().toLowerCase();
+  const logDirectory = getLogDirectory();
+  const matchesAuditFilters = (entry) => {
+    const payload = entry.payload || {};
+    const text = JSON.stringify({ event: entry.event, payload }).toLowerCase();
+    if (roleId) {
+      const roleValues = [
+        payload.roleId,
+        payload.fromRoleId,
+        ...(Array.isArray(payload.toRoleIds) ? payload.toRoleIds : [])
+      ].map((value) => String(value || ""));
+      if (!roleValues.includes(roleId)) {
+        return false;
+      }
+    }
+    if (taskId && String(payload.taskId || "") !== taskId) {
+      return false;
+    }
+    if (tool) {
+      const payloadTool = String(payload.tool || payload.toolName || "").toLowerCase();
+      if (payloadTool !== tool && !String(entry.event || "").toLowerCase().includes(tool)) {
+        return false;
+      }
+    }
+    if (query && !text.includes(query)) {
+      return false;
+    }
+    return true;
+  };
+
+  try {
+    if (!fs.existsSync(logDirectory)) {
+      return { ok: true, logDirectory, events: [] };
+    }
+
+    const files = fs.readdirSync(logDirectory)
+      .filter((name) => name.endsWith(".jsonl"))
+      .sort()
+      .reverse()
+      .slice(0, 8);
+    const events = [];
+
+    for (const fileName of files) {
+      const filePath = path.join(logDirectory, fileName);
+      const lines = fs.readFileSync(filePath, "utf8").trim().split(/\r?\n/).filter(Boolean).reverse();
+      for (const line of lines) {
+        if (events.length >= limit) {
+          break;
+        }
+        try {
+          const entry = JSON.parse(line);
+          if (String(entry.event || "").startsWith("mcp.") && matchesAuditFilters(entry)) {
+            events.push({
+              timestamp: entry.timestamp || "",
+              level: entry.level || "info",
+              event: entry.event || "",
+              payload: entry.payload || {},
+              fileName
+            });
+          }
+        } catch {
+          // Ignore malformed log lines in the audit reader.
+        }
+      }
+      if (events.length >= limit) {
+        break;
+      }
+    }
+
+    appendLogEvent("mcp.audit-events.read", { count: events.length, limit, roleId, taskId, tool, query });
+    return { ok: true, logDirectory, events, filters: { roleId, taskId, tool, query } };
+  } catch (error) {
+    appendLogEvent("mcp.audit-events.read.failed", {
+      logDirectory,
+      error: serializeError(error)
+    }, "error");
+    return { ok: false, logDirectory, error: error.message, events: [] };
+  }
+}
+
+function normalizeExportedStatePayload(payload) {
+  const value = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  if (!value) {
+    throw new Error("导入文件不是有效 JSON 对象。");
+  }
+  const state = value.type === "coss-state-export" ? value.state : value;
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    throw new Error("导入文件不包含有效 CosS 状态。");
+  }
+  return state;
+}
+
+function getDialogOwner(event) {
+  return event?.sender ? (BrowserWindow.fromWebContents(event.sender) || getTargetWindow()) : getTargetWindow();
+}
+
+async function pickSavePath(event, options, mockEnvKey) {
+  if (mockEnvKey && process.env[mockEnvKey]) {
+    return { canceled: false, filePath: process.env[mockEnvKey] };
+  }
+  const owner = getDialogOwner(event);
+  return owner ? dialog.showSaveDialog(owner, options) : dialog.showSaveDialog(options);
+}
+
+async function pickOpenPath(event, options, mockEnvKey) {
+  if (mockEnvKey && process.env[mockEnvKey]) {
+    return { canceled: false, filePaths: [process.env[mockEnvKey]] };
+  }
+  const owner = getDialogOwner(event);
+  return owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options);
+}
+
+async function exportStorageState(event, request = {}) {
+  const state = await readState() || {};
+  const defaultPath = path.join(getStorageDirectory(), `coss-state-export-${new Date().toISOString().slice(0, 10)}.json`);
+  const targetPath = request.targetPath || request.path || "";
+  const dialogResult = targetPath
+    ? { canceled: false, filePath: targetPath }
+    : await pickSavePath(event, {
+      title: "导出 CosS 状态数据",
+      defaultPath,
+      filters: [{ name: "CosS State Export", extensions: ["json"] }]
+    }, "COSS_MOCK_STORAGE_EXPORT_PATH");
+
+  if (dialogResult.canceled || !dialogResult.filePath) {
+    appendLogEvent("storage.export.canceled");
+    return { ok: false, canceled: true };
+  }
+
+  const payload = {
+    type: "coss-state-export",
+    appVersion,
+    schemaVersion: storageSchemaVersion,
+    exportedAt: new Date().toISOString(),
+    state
+  };
+  writeJsonAtomic(dialogResult.filePath, payload);
+  const stat = safeFileStat(dialogResult.filePath);
+  appendLogEvent("storage.export.succeeded", { path: dialogResult.filePath, size: stat.size });
+  return { ok: true, path: dialogResult.filePath, size: stat.size };
+}
+
+async function importStorageState(event, request = {}) {
+  const sourcePath = request.sourcePath || request.path || "";
+  const dialogResult = sourcePath
+    ? { canceled: false, filePaths: [sourcePath] }
+    : await pickOpenPath(event, {
+      title: "导入 CosS 状态数据",
+      properties: ["openFile"],
+      filters: [{ name: "CosS State Export", extensions: ["json"] }]
+    }, "COSS_MOCK_STORAGE_IMPORT_PATH");
+
+  if (dialogResult.canceled || !dialogResult.filePaths?.[0]) {
+    appendLogEvent("storage.import.canceled");
+    return { ok: false, canceled: true };
+  }
+
+  const importPath = dialogResult.filePaths[0];
+  try {
+    const payload = JSON.parse(fs.readFileSync(importPath, "utf8"));
+    const state = normalizeExportedStatePayload(payload);
+    const backupPath = createStateBackup("before-import", { force: true });
+    const writeResult = await writeState(state);
+    appendLogEvent("storage.import.succeeded", {
+      path: importPath,
+      backupPath,
+      mode: writeResult.mode,
+      projects: Array.isArray(state.projects) ? state.projects.length : 0
+    });
+    return {
+      ok: true,
+      path: importPath,
+      backupPath,
+      mode: writeResult.mode,
+      projects: Array.isArray(state.projects) ? state.projects.length : 0
+    };
+  } catch (error) {
+    appendLogEvent("storage.import.failed", { path: importPath, error: serializeError(error) }, "error");
+    return { ok: false, path: importPath, error: error.message };
+  }
+}
+
+function redactDiagnosticValue(value, keyName = "") {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactDiagnosticValue(item, keyName));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactDiagnosticValue(child, key)]));
+  }
+  if (/api.?key|token|secret|password|credential/i.test(keyName) && value) {
+    return "[redacted]";
+  }
+  return value;
+}
+
+function readRecentLogLines(maxLines = 300) {
+  const logDirectory = getLogDirectory();
+  try {
+    if (!fs.existsSync(logDirectory)) {
+      return [];
+    }
+    return fs.readdirSync(logDirectory)
+      .filter((name) => name.endsWith(".jsonl"))
+      .sort()
+      .slice(-3)
+      .flatMap((name) => fs.readFileSync(path.join(logDirectory, name), "utf8").split(/\r?\n/).filter(Boolean))
+      .slice(-maxLines);
+  } catch (error) {
+    return [`failed to read logs: ${error.message}`];
+  }
+}
+
+async function exportDiagnosticsPackage(event, request = {}) {
+  const defaultPath = path.join(getDiagnosticsDirectory(), `coss-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+  const targetPath = request.targetPath || request.path || "";
+  const dialogResult = targetPath
+    ? { canceled: false, filePath: targetPath }
+    : await pickSavePath(event, {
+      title: "导出 CosS 诊断资料",
+      defaultPath,
+      filters: [{ name: "CosS Diagnostics", extensions: ["json"] }]
+    }, "COSS_MOCK_DIAGNOSTICS_EXPORT_PATH");
+
+  if (dialogResult.canceled || !dialogResult.filePath) {
+    appendLogEvent("storage.diagnostics.canceled");
+    return { ok: false, canceled: true };
+  }
+
+  const payload = {
+    type: "coss-diagnostics",
+    appVersion,
+    exportedAt: new Date().toISOString(),
+    storage: getStorageInfo(),
+    state: redactDiagnosticValue(await readState() || {}),
+    recentLogs: readRecentLogLines()
+  };
+  writeJsonAtomic(dialogResult.filePath, payload);
+  const stat = safeFileStat(dialogResult.filePath);
+  appendLogEvent("storage.diagnostics.exported", { path: dialogResult.filePath, size: stat.size });
+  return { ok: true, path: dialogResult.filePath, size: stat.size };
+}
+
+function createManualStateBackup() {
+  try {
+    const backupPath = createStateBackup("manual", { force: true });
+    return { ok: Boolean(backupPath), path: backupPath, storage: getStorageInfo() };
+  } catch (error) {
+    appendLogEvent("storage.backup.manual.failed", { error: serializeError(error) }, "error");
+    return { ok: false, error: error.message, storage: getStorageInfo() };
+  }
+}
+
+async function openStorageDirectory() {
+  const storageDirectory = getStorageDirectory();
+  fs.mkdirSync(storageDirectory, { recursive: true });
+  appendLogEvent("storage.open-directory", { path: storageDirectory });
+
+  if (process.env.COSS_DISABLE_OPEN_STORAGE_DIR === "1") {
+    return { ok: true, path: storageDirectory, skipped: true };
+  }
+
+  const error = await shell.openPath(storageDirectory);
+  if (error) {
+    appendLogEvent("storage.open-directory.failed", { path: storageDirectory, error }, "error");
+  }
+  return { ok: !error, path: storageDirectory, error };
 }
 
 function ensureClaudeOnboardingCompleted() {
@@ -855,6 +2474,28 @@ function findCommandPaths(command, env = getWindowsShellEnv()) {
     .filter(Boolean);
 }
 
+function preferWindowsCmdShim(command, lookupPaths = []) {
+  if (process.platform !== "win32") {
+    return command;
+  }
+
+  const candidates = [command, ...lookupPaths].filter(Boolean);
+  for (const candidate of candidates) {
+    const extension = path.extname(candidate).toLowerCase();
+    if (extension === ".cmd" && fs.existsSync(candidate)) {
+      return candidate;
+    }
+    if ((extension === "" || extension === ".ps1") && (candidate.includes("\\") || candidate.includes("/") || path.isAbsolute(candidate))) {
+      const cmdPath = `${candidate.slice(0, candidate.length - extension.length)}.cmd`;
+      if (fs.existsSync(cmdPath)) {
+        return cmdPath;
+      }
+    }
+  }
+
+  return command;
+}
+
 function commandOutput(result) {
   return `${result.stdout || ""}${result.stderr || ""}`.trim();
 }
@@ -873,6 +2514,20 @@ function commandErrorDetail(result, fallbackCommand) {
 function buildPowerShellInvocation(command, args = []) {
   const renderedArgs = args.map((arg) => powerShellQuote(arg)).join(" ");
   return `& ${powerShellQuote(command)}${renderedArgs ? ` ${renderedArgs}` : ""}`;
+}
+
+function cmdQuote(value) {
+  return `"${String(value).replace(/(["^&|<>%])/g, "^$1")}"`;
+}
+
+function isWindowsBatchCommand(command) {
+  const extension = path.extname(String(command || "")).toLowerCase();
+  return extension === ".cmd" || extension === ".bat";
+}
+
+function buildCmdInvocation(command, args = []) {
+  const invocation = [cmdQuote(command), ...args.map((arg) => cmdQuote(arg))].join(" ");
+  return isWindowsBatchCommand(command) ? `call ${invocation}` : invocation;
 }
 
 function runWindowsPowerShellInvocation(invocation, env, timeout = 5000) {
@@ -936,8 +2591,12 @@ function getCodexCommandStatus(env = getWindowsShellEnv()) {
   const primaryStatus = attempts[0]?.status || checkCodexVersion(requestedCommand, env);
   const hasWindowsAppsPackagePath = lookupPaths.some((item) => item.toLowerCase().includes("\\windowsapps\\openai.codex_"));
 
+  const command = runnableAttempt
+    ? preferWindowsCmdShim(runnableAttempt.command, lookupPaths)
+    : requestedCommand;
+
   return {
-    command: runnableAttempt?.command || requestedCommand,
+    command,
     requestedCommand,
     lookupPaths,
     runnable: Boolean(runnableAttempt),
@@ -969,9 +2628,12 @@ function getCodeBuddyCommandStatus(env = getWindowsShellEnv()) {
   }));
   const runnableAttempt = attempts.find((attempt) => attempt.status.runnable);
   const primaryStatus = attempts[0]?.status || checkCodeBuddyVersion(requestedCommand, env);
+  const command = runnableAttempt
+    ? preferWindowsCmdShim(runnableAttempt.command, lookupPaths)
+    : requestedCommand;
 
   return {
-    command: runnableAttempt?.command || requestedCommand,
+    command,
     requestedCommand,
     aliasCommand,
     lookupPaths,
@@ -988,6 +2650,10 @@ function getCodeBuddyCommandStatus(env = getWindowsShellEnv()) {
 
 function getNpmCommand() {
   return process.env.COSS_NPM_COMMAND || (process.platform === "win32" ? "npm.cmd" : "npm");
+}
+
+function getNpxCommand() {
+  return process.env.COSS_NPX_COMMAND || (process.platform === "win32" ? "npx.cmd" : "npx");
 }
 
 function renderCommandForDisplay(command) {
@@ -1029,6 +2695,145 @@ function getNpmCandidates(env) {
   return [command, ...findCommandPaths(command, env), ...getNpmCommonPaths(env)].filter((item, index, list) => (
     item && list.indexOf(item) === index
   ));
+}
+
+function getNpxCandidates(env) {
+  const command = getNpxCommand();
+  const npxFromNpmPaths = getNpmCommonPaths(env)
+    .map((npmPath) => path.join(path.dirname(npmPath), process.platform === "win32" ? "npx.cmd" : "npx"))
+    .filter((item) => item && fs.existsSync(item));
+  return [command, ...findCommandPaths(command, env), ...npxFromNpmPaths].filter((item, index, list) => (
+    item && list.indexOf(item) === index
+  ));
+}
+
+function resolveNpxCommand(env = getWindowsShellEnv()) {
+  return getNpxCandidates(env)[0] || getNpxCommand();
+}
+
+function getNodeCommonPaths(env) {
+  if (process.platform !== "win32") {
+    return [];
+  }
+
+  const candidates = [
+    path.join(getCaseInsensitiveEnvValue(env, "ProgramFiles") || "C:\\Program Files", "nodejs", "node.exe"),
+    path.join(getCaseInsensitiveEnvValue(env, "ProgramFiles(x86)") || "C:\\Program Files (x86)", "nodejs", "node.exe")
+  ];
+
+  return candidates.filter((item) => item && fs.existsSync(item));
+}
+
+function resolveNodeCommandForAgent(env = getWindowsShellEnv()) {
+  const configured = String(process.env.COSS_NODE_COMMAND || "").trim();
+  if (configured && (commandExists(configured, env) || fs.existsSync(configured))) {
+    return configured;
+  }
+
+  const npmNode = String(process.env.npm_node_execpath || "").trim();
+  if (npmNode && fs.existsSync(npmNode)) {
+    return npmNode;
+  }
+
+  const currentExecutable = process.execPath || "";
+  if (currentExecutable && /^node(?:\.exe)?$/i.test(path.basename(currentExecutable))) {
+    return currentExecutable;
+  }
+
+  return [...findCommandPaths("node", env), ...getNodeCommonPaths(env)][0] || "node";
+}
+
+function resolveNpmPackageBinScript(command, lookupPaths = [], packagePath = [], binPath = []) {
+  const candidates = [command, ...lookupPaths]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!(candidate.includes("\\") || candidate.includes("/") || path.isAbsolute(candidate))) {
+      continue;
+    }
+
+    const extension = path.extname(candidate).toLowerCase();
+    const shimDir = path.dirname(candidate);
+    const baseDir = [".cmd", ".bat", ".ps1", ""].includes(extension) ? shimDir : path.dirname(candidate);
+    const scriptPath = path.join(baseDir, "node_modules", ...packagePath, ...binPath);
+    if (fs.existsSync(scriptPath)) {
+      return scriptPath;
+    }
+  }
+
+  return "";
+}
+
+function resolveCodexBinScript(command, lookupPaths = []) {
+  return resolveNpmPackageBinScript(command, lookupPaths, ["@openai", "codex"], ["bin", "codex.js"]);
+}
+
+function resolveCodeBuddyBinScript(command, lookupPaths = []) {
+  return resolveNpmPackageBinScript(command, lookupPaths, ["@tencent-ai", "codebuddy-code"], ["bin", "codebuddy"]);
+}
+
+function buildNodeAgentLaunch(scriptPath, args, env, launchMethod) {
+  if (!scriptPath) {
+    return null;
+  }
+
+  const nodeCommand = resolveNodeCommandForAgent(env);
+  return {
+    file: nodeCommand,
+    args: [scriptPath, ...args],
+    launchMethod,
+    nodeCommand,
+    scriptPath
+  };
+}
+
+function buildCodexWindowsLaunch(codexStatus, env = getWindowsShellEnv()) {
+  const directLaunch = buildNodeAgentLaunch(
+    resolveCodexBinScript(codexStatus.command, codexStatus.lookupPaths),
+    ["-c", "windows.sandbox_private_desktop=false"],
+    env,
+    "node-codex-bin"
+  );
+
+  if (directLaunch) {
+    return directLaunch;
+  }
+
+  return {
+    file: "powershell.exe",
+    args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", buildPowerShellInvocation(codexStatus.command, ["-c", "windows.sandbox_private_desktop=false"])],
+    launchMethod: "powershell-codex"
+  };
+}
+
+function buildCodeBuddyWindowsLaunch(codeBuddyStatus, options = {}, env = getWindowsShellEnv()) {
+  const codeBuddyArgs = buildCodeBuddyArgs({ cwd: options.cwd });
+  const directLaunch = buildNodeAgentLaunch(
+    resolveCodeBuddyBinScript(codeBuddyStatus.command, codeBuddyStatus.lookupPaths),
+    codeBuddyArgs,
+    env,
+    "node-codebuddy-bin"
+  );
+
+  if (directLaunch) {
+    return directLaunch;
+  }
+
+  const npxCommand = resolveNpxCommand(env);
+  return {
+    file: "powershell.exe",
+    args: [
+      "-NoLogo",
+      "-NoExit",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      buildPowerShellInvocation(npxCommand, ["codebuddy", ...codeBuddyArgs])
+    ],
+    launchMethod: "npx-codebuddy",
+    npxCommand
+  };
 }
 
 function buildCodexInstallPowerShellCommand(codexStatus, installCommand) {
@@ -1390,8 +3195,49 @@ function buildCodexPowerShellCommand(command) {
   return buildPowerShellInvocation(command);
 }
 
-function buildCodeBuddyPowerShellCommand(command) {
-  return buildPowerShellInvocation(command);
+function getCodeBuddyMcpConfigPath(cwd) {
+  const root = getProjectRoot(cwd || process.cwd());
+  return path.join(root, ".mcp.json");
+}
+
+function getCodeBuddyMcpSettingsPath(cwd) {
+  const root = getProjectRoot(cwd || process.cwd());
+  return path.join(root, ".coss", "mcp", "codebuddy-settings.json");
+}
+
+function writeCodeBuddyMcpSettings(cwd, settings) {
+  const settingsPath = getCodeBuddyMcpSettingsPath(cwd);
+  writeJsonAtomic(settingsPath, settings);
+  appendLogEvent("mcp.codebuddy-settings.written", {
+    settingsPath,
+    enabledMcpjsonServers: settings.enabledMcpjsonServers || [],
+    allow: settings.permissions?.allow || []
+  });
+  return settingsPath;
+}
+
+function buildCodeBuddyArgs(options = {}) {
+  const args = [];
+  const mcpConfigPath = getCodeBuddyMcpConfigPath(options.cwd);
+  if (fs.existsSync(mcpConfigPath)) {
+    const mcpSettings = {
+      enableAllProjectMcpServers: true,
+      enabledMcpjsonServers: ["coss"],
+      permissions: {
+        allow: ["mcp__coss"]
+      }
+    };
+    const mcpSettingsPath = writeCodeBuddyMcpSettings(options.cwd, mcpSettings);
+    args.push("--mcp-config", mcpConfigPath);
+    args.push("--strict-mcp-config");
+    args.push("--settings", mcpSettingsPath);
+    args.push("--allowedTools", "mcp__coss");
+  }
+  return args;
+}
+
+function buildCodeBuddyPowerShellCommand(command, options = {}) {
+  return buildPowerShellInvocation(command, buildCodeBuddyArgs(options));
 }
 
 function buildHeldInstallPowerShellCommand(messages, invocation, doneMessage) {
@@ -1419,20 +3265,14 @@ function stripAnsi(input) {
 
 function normalizeAgentStatus(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  if (["done", "complete", "completed", "success", "succeeded"].includes(normalized)) {
+  if (normalized === "done") {
     return "done";
   }
-  if (["blocked", "block"].includes(normalized)) {
-    return "blocked";
-  }
-  if (["waiting", "wait", "approval", "needs_approval", "needs-approval", "confirm", "confirmation"].includes(normalized)) {
-    return "waiting";
-  }
-  if (["failed", "fail", "error"].includes(normalized)) {
-    return "failed";
-  }
-  if (["running", "working", "start", "started"].includes(normalized)) {
+  if (normalized === "running") {
     return "running";
+  }
+  if (normalized === "idle") {
+    return "idle";
   }
   return "";
 }
@@ -1449,7 +3289,7 @@ function detectAgentApprovalWaitEvent(text) {
   }
   return {
     type: "approval-wait",
-    status: "waiting",
+    status: "running",
     message: sanitizeLogText("Agent 正在等待人工确认。请在对应终端中批准或拒绝后继续。", 500)
   };
 }
@@ -1540,8 +3380,6 @@ function parseAgentOutputEvents(data, launch = {}) {
 
   const markerStatus = [
     [/^\s*COSS_TASK_DONE\s*$/im, "done"],
-    [/^\s*COSS_TASK_BLOCKED\s*$/im, "blocked"],
-    [/^\s*COSS_TASK_FAILED\s*$/im, "failed"],
     [/^\s*COSS_TASK_RUNNING\s*$/im, "running"]
   ].find(([pattern]) => pattern.test(text));
   if (markerStatus && !events.some((event) => event.status === markerStatus[1])) {
@@ -1622,14 +3460,26 @@ function getDefaultAgentPromptTemplate() {
     "项目：{{projectName}}",
     "工作目录：{{workspace}}",
     "Agent 后端：{{agentProvider}}",
+    "Agent 权限模式：{{agentPermissionLabel}}",
+    "{{agentPermissionInstructions}}",
     "会话 ID：{{sessionId}}",
     "当前任务：{{taskTitle}}",
     "子任务：{{subtaskTitle}}",
     "子任务说明：{{subtaskDescription}}",
     "",
     "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。",
-    "你可以和其他角色协作；完成或阻塞任务时，请在终端输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked，便于 CosS 同步任务状态。",
-    "需要把协作消息写回 CosS 时，可输出一行 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"给其他角色的协作消息\",\"toRoleIds\":[\"product-manager\"]}。"
+    "CosS v0.10 使用中央 Kernel 线性调度。你不能直接给其他 Agent 分配任务，不能发明不存在的角色，也不能绕过共享任务板。",
+    "开始工作前优先使用 coss_get_task_board、coss_pool_claim、coss_claim_step；长任务中使用 coss_heartbeat_step；完成后必须使用 coss_submit_result({ status: \"done\" }) 提交结构化结果。",
+    "如果发现需要下游角色，只能把发现写入本 Step 的结果；CosS Kernel 会在当前 Step 完成后启动预先规划好的下一个 Step。"
+    ,
+    "",
+    "CosS MCP is available for reliable automation. Prefer MCP tools over terminal paste when possible.",
+    "MCP command is stored in COSS_MCP_SERVER. Current context is stored in COSS_MCP_USER_DATA, COSS_MCP_PROJECT_ID, COSS_MCP_ROLE_ID, COSS_MCP_TASK_ID, and COSS_MCP_SESSION_ID.",
+    "CosS v0.10 uses a central linear workflow kernel. Do not directly assign work to another Agent, do not invent roles, and do not bypass the shared task board.",
+    "Use coss_get_context, coss_get_task_board, and coss_list_roles first. Then use coss_pool_read, coss_pool_claim, coss_claim_step, coss_heartbeat_step, coss_acquire_lock when needed, coss_get_kernel_events for audit, and coss_submit_result for structured results.",
+    "The Kernel starts the next preplanned step only after your step is submitted as done. Agent states are idle, running, and done only.",
+    "If the agent runtime says `mcp__coss: Still connecting`, wait a few seconds and retry tool discovery or coss tool calls. Only call a runtime-specific waiting helper if that helper is actually available.",
+    "Do not stop just because ToolSearch does not immediately show the coss tools. Wait and retry at least 3 times. Use COSS_AGENT_STATUS:running while working and COSS_AGENT_STATUS:done when finished."
   ].join("\n");
 }
 
@@ -1640,10 +3490,21 @@ function applyPromptTemplate(template, values) {
   ));
 }
 
+function formatTaskContextProjectMemory(taskContext = {}) {
+  if (taskContext.projectMemoryEnabled === false || !taskContext.projectMemorySummary) {
+    return "";
+  }
+  return [
+    "Project memory:",
+    String(taskContext.projectMemorySummary || "").trim().slice(0, 14000)
+  ].join("\n");
+}
+
 function buildRolePrompt(options) {
   const taskContext = options.taskContext || {};
   const agentSession = options.agentSession || {};
-  return applyPromptTemplate(options.rolePromptTemplate, {
+  const permissionPolicy = getAgentPermissionPolicy(options.agentPermissionMode);
+  const prompt = applyPromptTemplate(options.rolePromptTemplate, {
     roleName: options.roleName || "开发角色",
     roleId: options.roleId || "unknown",
     roleDescription: options.roleDescription || "",
@@ -1651,6 +3512,9 @@ function buildRolePrompt(options) {
     projectId: options.projectId || "",
     workspace: normalizeCwd(options.cwd),
     agentProvider: getEffectiveAgentProvider(options),
+    agentPermissionMode: permissionPolicy.id,
+    agentPermissionLabel: permissionPolicy.label,
+    agentPermissionInstructions: permissionPolicy.instruction,
     sessionId: agentSession.sessionId || "",
     sessionName: agentSession.sessionName || "",
     taskId: taskContext.taskId || agentSession.taskId || "",
@@ -1659,8 +3523,15 @@ function buildRolePrompt(options) {
     subtaskId: taskContext.subtaskId || agentSession.subtaskId || "",
     subtaskTitle: taskContext.subtaskTitle || "",
     subtaskDescription: taskContext.subtaskDescription || "",
-    subtaskStatus: taskContext.subtaskStatus || ""
+    subtaskStatus: taskContext.subtaskStatus || "",
+    projectMemorySummary: taskContext.projectMemorySummary || "",
+    projectMemoryUpdatedAt: taskContext.projectMemoryUpdatedAt || ""
   });
+  const memoryBlock = formatTaskContextProjectMemory(taskContext);
+  if (!memoryBlock || prompt.includes("Project memory:")) {
+    return prompt;
+  }
+  return `${prompt.trim()}\n\n${memoryBlock}`;
 }
 
 function normalizeTerminalMode(value) {
@@ -1669,6 +3540,54 @@ function normalizeTerminalMode(value) {
 
 function normalizeAgentProvider(value) {
   return ["claude", "codex", "codebuddy"].includes(value) ? value : "claude";
+}
+
+function normalizeAgentPermissionMode(value) {
+  return Object.prototype.hasOwnProperty.call(agentPermissionPolicies, value) ? value : "confirm";
+}
+
+function getAgentPermissionPolicy(value) {
+  return agentPermissionPolicies[normalizeAgentPermissionMode(value)] || agentPermissionPolicies.confirm;
+}
+
+function assessTerminalCommandRisk(command) {
+  const trimmed = String(command || "").trim();
+  if (!trimmed) {
+    return { requiresApproval: false, category: "empty", severity: "low", label: "空命令", ruleIds: [] };
+  }
+  const matches = terminalPermissionRiskRules.filter((rule) => rule.pattern.test(trimmed));
+  if (matches.length === 0) {
+    return { requiresApproval: false, category: "read", severity: "low", label: "普通命令", ruleIds: [] };
+  }
+  const highRisk = matches.find((rule) => rule.severity === "high");
+  const primary = highRisk || matches[0];
+  return {
+    requiresApproval: true,
+    category: primary.category,
+    severity: primary.severity,
+    label: primary.label,
+    ruleIds: matches.map((rule) => rule.id)
+  };
+}
+
+function shouldBlockTerminalCommand(permissionMode, assessment) {
+  const mode = normalizeAgentPermissionMode(permissionMode);
+  if (!assessment?.requiresApproval) {
+    return false;
+  }
+  if (mode === "readonly") {
+    return ["write", "install", "delete", "deployment", "environment", "script"].includes(assessment.category);
+  }
+  if (mode === "confirm") {
+    return true;
+  }
+  if (mode === "sessionEdit") {
+    return ["install", "delete", "deployment", "environment", "script"].includes(assessment.category);
+  }
+  if (mode === "sessionInstall") {
+    return ["delete", "deployment", "environment", "script"].includes(assessment.category);
+  }
+  return true;
 }
 
 function getAgentProviderLabel(provider) {
@@ -1699,7 +3618,14 @@ function resolveTerminalLaunch(options) {
   const rolePrompt = buildRolePrompt(options);
   const taskContext = options.taskContext || {};
   const agentSession = options.agentSession || {};
+  const permissionPolicy = getAgentPermissionPolicy(options.agentPermissionMode);
   const codeBuddyApiKey = String(options.codeBuddyApiKey || "").trim();
+  const mcpServer = getMcpServerInfo({
+    projectId: options.projectId || agentSession.projectId || "",
+    roleId: options.roleId || "",
+    taskId: taskContext.taskId || agentSession.taskId || "",
+    sessionId: agentSession.sessionId || ""
+  });
   const env = getShellEnv({
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
@@ -1708,6 +3634,9 @@ function resolveTerminalLaunch(options) {
     COSS_ROLE_PROMPT: rolePrompt,
     COSS_TERMINAL_MODE: terminalMode,
     COSS_AGENT_PROVIDER: agentProvider,
+    COSS_AGENT_PERMISSION_MODE: permissionPolicy.id,
+    COSS_AGENT_PERMISSION_LABEL: permissionPolicy.label,
+    COSS_AGENT_PERMISSION_INSTRUCTIONS: permissionPolicy.instruction,
     COSS_AGENT_SESSION_ID: agentSession.sessionId || "",
     COSS_AGENT_SESSION_NAME: agentSession.sessionName || "",
     COSS_PROJECT_ID: options.projectId || agentSession.projectId || "",
@@ -1716,6 +3645,18 @@ function resolveTerminalLaunch(options) {
     COSS_SUBTASK_ID: taskContext.subtaskId || agentSession.subtaskId || "",
     COSS_TASK_TITLE: taskContext.taskTitle || "",
     COSS_SUBTASK_TITLE: taskContext.subtaskTitle || "",
+    COSS_PROJECT_MEMORY: taskContext.projectMemorySummary || "",
+    COSS_PROJECT_MEMORY_UPDATED_AT: taskContext.projectMemoryUpdatedAt || "",
+    COSS_MCP_SERVER: `${mcpServer.command} ${mcpServer.args.map((arg) => JSON.stringify(arg)).join(" ")}`,
+    COSS_MCP_COMMAND: mcpServer.command,
+    COSS_MCP_ARGS: JSON.stringify(mcpServer.args),
+    COSS_MCP_SERVER_PATH: mcpServer.serverPath,
+    COSS_MCP_USER_DATA: mcpServer.userData,
+    COSS_MCP_PROJECT_ID: mcpServer.projectId,
+    COSS_MCP_ROLE_ID: mcpServer.roleId,
+    COSS_MCP_TASK_ID: mcpServer.taskId,
+    COSS_MCP_SESSION_ID: mcpServer.sessionId,
+    COSS_CODEBUDDY_MCP_CONFIG: getCodeBuddyMcpConfigPath(options.cwd),
     ...(agentProvider === "codebuddy" && codeBuddyApiKey ? { CODEBUDDY_API_KEY: codeBuddyApiKey } : {})
   });
 
@@ -1793,14 +3734,18 @@ function resolveTerminalLaunch(options) {
     }
 
     if (process.platform === "win32") {
+      const codexLaunch = buildCodexWindowsLaunch(codexStatus, env);
       return {
-        file: "powershell.exe",
-        args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", buildCodexPowerShellCommand(codexStatus.command)],
+        file: codexLaunch.file,
+        args: codexLaunch.args,
         env,
         label: "Codex",
         requestedMode: "agent",
         activeMode: "codex",
-        rolePrompt
+        rolePrompt,
+        launchMethod: codexLaunch.launchMethod,
+        nodeCommand: codexLaunch.nodeCommand || "",
+        scriptPath: codexLaunch.scriptPath || ""
       };
     }
 
@@ -1899,20 +3844,25 @@ function resolveTerminalLaunch(options) {
     }
 
     if (process.platform === "win32") {
+      const codeBuddyLaunch = buildCodeBuddyWindowsLaunch(codeBuddyStatus, options, env);
       return {
-        file: "powershell.exe",
-        args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", buildCodeBuddyPowerShellCommand(codeBuddyStatus.command)],
+        file: codeBuddyLaunch.file,
+        args: codeBuddyLaunch.args,
         env,
         label: "CodeBuddy Code",
         requestedMode: "agent",
         activeMode: "codebuddy",
-        rolePrompt
+        rolePrompt,
+        launchMethod: codeBuddyLaunch.launchMethod,
+        npxCommand: codeBuddyLaunch.npxCommand || "",
+        nodeCommand: codeBuddyLaunch.nodeCommand || "",
+        scriptPath: codeBuddyLaunch.scriptPath || ""
       };
     }
 
     return {
       file: codeBuddyStatus.command,
-      args: [],
+      args: buildCodeBuddyArgs({ cwd: options.cwd }),
       env,
       label: "CodeBuddy Code",
       requestedMode: "agent",
@@ -2044,6 +3994,84 @@ function sendTerminalExit(webContents, id, exitCode) {
   }
 }
 
+function getTerminalInputGuard(session) {
+  session.inputGuard ||= { buffer: "" };
+  return session.inputGuard;
+}
+
+function isBracketedPasteInput(data) {
+  return String(data || "").includes("\x1b[200~") || String(data || "").includes("\x1b[201~");
+}
+
+function shouldBypassTerminalPermissionGuard(data, options = {}) {
+  return Boolean(options?.bypassPermissionGuard) || isBracketedPasteInput(data);
+}
+
+function processTerminalPermissionGuard(webContents, id, session, data, options = {}) {
+  if (!session || typeof data !== "string") {
+    return { ok: false, reason: "invalid-input" };
+  }
+  const guard = getTerminalInputGuard(session);
+  if (shouldBypassTerminalPermissionGuard(data, options)) {
+    if (options?.clearInputGuard !== false) {
+      guard.buffer = "";
+    }
+    appendLogEvent("terminal.permission.bypassed", {
+      id,
+      reason: String(options?.reason || (isBracketedPasteInput(data) ? "bracketed-paste" : "explicit-bypass")).slice(0, 80),
+      activeMode: session.launch?.activeMode || "",
+      permissionMode: session.launch?.permissionMode || "confirm"
+    });
+    return { ok: true };
+  }
+
+  for (const char of data) {
+    if (char === "\r" || char === "\n") {
+      const command = guard.buffer.trim();
+      guard.buffer = "";
+      const assessment = assessTerminalCommandRisk(command);
+      if (command && shouldBlockTerminalCommand(session.launch?.permissionMode, assessment)) {
+        const policy = getAgentPermissionPolicy(session.launch?.permissionMode);
+        const message =
+          `\x1b[31mCosS 已按权限模式阻止命令执行。\x1b[0m\r\n` +
+          `权限模式: ${policy.label}\r\n` +
+          `风险类型: ${assessment.label}\r\n` +
+          `命令: ${command}\r\n` +
+          `如需执行，请在安全中心切换权限模式，或通过前端审批弹窗确认后再执行。\r\n`;
+        sendTerminalData(webContents, id, message);
+        appendLogEvent("terminal.permission.blocked", {
+          id,
+          command: sanitizeLogText(command, 500),
+          permissionMode: policy.id,
+          permissionLabel: policy.label,
+          activeMode: session.launch?.activeMode || "",
+          category: assessment.category,
+          severity: assessment.severity,
+          riskLabel: assessment.label,
+          ruleIds: assessment.ruleIds || []
+        }, "warn");
+        return { ok: false, reason: "permission-blocked", assessment };
+      }
+      continue;
+    }
+    if (char === "\u0003" || char === "\u0015") {
+      guard.buffer = "";
+      continue;
+    }
+    if (char === "\u007f" || char === "\b") {
+      guard.buffer = guard.buffer.slice(0, -1);
+      continue;
+    }
+    if (char >= " " || char === "\t") {
+      guard.buffer += char;
+      if (guard.buffer.length > 2000) {
+        guard.buffer = guard.buffer.slice(-2000);
+      }
+    }
+  }
+  return { ok: true };
+}
+
 function killProcessTree(pid) {
   const normalizedPid = Number(pid);
   if (!Number.isFinite(normalizedPid) || normalizedPid <= 0) {
@@ -2063,6 +4091,164 @@ function killProcessTree(pid) {
   } catch {
     // The process may already have exited.
   }
+}
+
+function sanitizeProcessEntry(entry = {}) {
+  return {
+    pid: Number(entry.ProcessId || entry.pid || 0) || 0,
+    parentPid: Number(entry.ParentProcessId || entry.parentPid || 0) || 0,
+    name: sanitizeLogText(entry.Name || entry.name || "", 120),
+    executablePath: sanitizeLogText(entry.ExecutablePath || entry.executablePath || "", 320),
+    commandLine: sanitizeLogText(entry.CommandLine || entry.commandLine || "", 700),
+    creationDate: sanitizeLogText(entry.CreationDate || entry.creationDate || "", 80),
+    depth: Number.isFinite(Number(entry.Depth ?? entry.depth)) ? Number(entry.Depth ?? entry.depth) : null,
+    root: Boolean(entry.Root ?? entry.root)
+  };
+}
+
+function readWindowsProcessTreeSnapshot(rootPid) {
+  const normalizedPid = Number(rootPid);
+  if (process.platform !== "win32" || !Number.isFinite(normalizedPid) || normalizedPid <= 0) {
+    return { ok: false, reason: "unsupported-or-invalid-pid", descendants: [], suspiciousConsoleProcesses: [] };
+  }
+
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$rootPid = [int]$env:COSS_PROCESS_TREE_ROOT_PID",
+    "$names = @('conhost.exe','OpenConsole.exe','WindowsTerminal.exe','powershell.exe','pwsh.exe','cmd.exe','node.exe','Code.exe')",
+    "$all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,CreationDate",
+    "$byParent = @{}",
+    "foreach ($p in $all) {",
+    "  $ppid = [int]$p.ParentProcessId",
+    "  if (-not $byParent.ContainsKey($ppid)) { $byParent[$ppid] = New-Object System.Collections.ArrayList }",
+    "  [void]$byParent[$ppid].Add($p)",
+    "}",
+    "$seen = @{}",
+    "$desc = New-Object System.Collections.ArrayList",
+    "function Add-Proc($p, [int]$depth, [bool]$root) {",
+    "  $seen[[string]$p.ProcessId] = $true",
+    "  [void]$desc.Add([pscustomobject]@{",
+    "    ProcessId = [int]$p.ProcessId; ParentProcessId = [int]$p.ParentProcessId; Name = [string]$p.Name;",
+    "    ExecutablePath = [string]$p.ExecutablePath; CommandLine = [string]$p.CommandLine;",
+    "    CreationDate = if ($p.CreationDate) { $p.CreationDate.ToString('o') } else { '' };",
+    "    Depth = $depth; Root = $root",
+    "  })",
+    "}",
+    "function Walk([int]$currentPid, [int]$depth) {",
+    "  if ($depth -gt 8 -or -not $byParent.ContainsKey($currentPid)) { return }",
+    "  foreach ($child in @($byParent[$currentPid])) {",
+    "    $key = [string]$child.ProcessId",
+    "    if ($seen.ContainsKey($key)) { continue }",
+    "    Add-Proc $child $depth $false",
+    "    Walk ([int]$child.ProcessId) ($depth + 1)",
+    "  }",
+    "}",
+    "$root = $all | Where-Object { [int]$_.ProcessId -eq $rootPid } | Select-Object -First 1",
+    "if ($root) { Add-Proc $root -1 $true; Walk $rootPid 0 }",
+    "$suspect = New-Object System.Collections.ArrayList",
+    "foreach ($p in $all) {",
+    "  if ($suspect.Count -ge 120) { break }",
+    "  if ($names -contains [string]$p.Name) {",
+    "    [void]$suspect.Add([pscustomobject]@{",
+    "      ProcessId = [int]$p.ProcessId; ParentProcessId = [int]$p.ParentProcessId; Name = [string]$p.Name;",
+    "      ExecutablePath = [string]$p.ExecutablePath; CommandLine = [string]$p.CommandLine;",
+    "      CreationDate = if ($p.CreationDate) { $p.CreationDate.ToString('o') } else { '' };",
+    "      Depth = $null; Root = $false",
+    "    })",
+    "  }",
+    "}",
+    "[pscustomobject]@{ RootPid = $rootPid; RootFound = [bool]$root; Descendants = $desc; SuspiciousConsoleProcesses = $suspect } | ConvertTo-Json -Compress -Depth 5"
+  ].join("\n");
+
+  const result = childProcess.spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    env: { ...process.env, COSS_PROCESS_TREE_ROOT_PID: String(normalizedPid) },
+    windowsHide: true,
+    timeout: 6000,
+    maxBuffer: 1024 * 1024 * 4
+  });
+
+  if (result.error) {
+    return { ok: false, reason: "query-error", error: serializeError(result.error), descendants: [], suspiciousConsoleProcesses: [] };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      reason: "query-exit",
+      status: result.status,
+      stderr: sanitizeLogText(result.stderr, 700),
+      stdout: sanitizeLogText(result.stdout, 700),
+      descendants: [],
+      suspiciousConsoleProcesses: []
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(String(result.stdout || "{}"));
+    const descendants = (Array.isArray(parsed.Descendants) ? parsed.Descendants : parsed.Descendants ? [parsed.Descendants] : [])
+      .map(sanitizeProcessEntry)
+      .filter((entry) => entry.pid > 0);
+    const descendantPids = new Set(descendants.map((entry) => entry.pid));
+    const suspiciousConsoleProcesses = (Array.isArray(parsed.SuspiciousConsoleProcesses) ? parsed.SuspiciousConsoleProcesses : parsed.SuspiciousConsoleProcesses ? [parsed.SuspiciousConsoleProcesses] : [])
+      .map(sanitizeProcessEntry)
+      .filter((entry) => entry.pid > 0)
+      .filter((entry) => !descendantPids.has(entry.pid))
+      .slice(0, 80);
+    return {
+      ok: true,
+      rootPid: Number(parsed.RootPid || normalizedPid),
+      rootFound: Boolean(parsed.RootFound),
+      descendantCount: descendants.length,
+      suspiciousCount: suspiciousConsoleProcesses.length,
+      descendants,
+      suspiciousConsoleProcesses
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "parse-error",
+      error: serializeError(error),
+      stdout: sanitizeLogText(result.stdout, 1000),
+      descendants: [],
+      suspiciousConsoleProcesses: []
+    };
+  }
+}
+
+function scheduleTerminalProcessTreeSnapshots(id, session, roleName = "") {
+  const rootPid = Number(session?.pid || 0);
+  if (
+    process.env.COSS_ENABLE_TERMINAL_PROCESS_SNAPSHOTS !== "1" ||
+    process.platform !== "win32" ||
+    !Number.isFinite(rootPid) ||
+    rootPid <= 0
+  ) {
+    return;
+  }
+
+  terminalProcessTreeSnapshotDelaysMs.forEach((delayMs) => {
+    const timer = setTimeout(() => {
+      const currentSession = terminalSessions.get(id);
+      const snapshot = readWindowsProcessTreeSnapshot(rootPid);
+      appendLogEvent(snapshot.ok ? "terminal.process-tree.snapshot" : "terminal.process-tree.snapshot.failed", {
+        id,
+        roleName,
+        rootPid,
+        delayMs,
+        sessionStillRegistered: currentSession === session,
+        mode: session.mode,
+        activeMode: session.launch?.activeMode || "",
+        requestedMode: session.launch?.requestedMode || "",
+        launchMethod: session.launch?.launchMethod || "",
+        file: session.launch?.file || "",
+        scriptPath: session.launch?.scriptPath || "",
+        ...snapshot
+      }, snapshot.ok ? "info" : "warn");
+    }, delayMs);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+  });
 }
 
 function createPipeTerminal(webContents, id, options, launch = resolveTerminalLaunch(options)) {
@@ -2135,6 +4321,7 @@ function createPtyTerminal(webContents, id, options, launch = resolveTerminalLau
   const rows = normalizeTerminalSize(options.rows, 24, 6, 80);
 
   let ptyProcess;
+  let exited = false;
   try {
     ptyProcess = nodePty.spawn(launch.file, launch.args, {
       name: "xterm-256color",
@@ -2160,6 +4347,7 @@ function createPtyTerminal(webContents, id, options, launch = resolveTerminalLau
     sendTerminalData(webContents, id, data);
   });
   ptyProcess.onExit(({ exitCode }) => {
+    exited = true;
     appendLogEvent("terminal.exited", {
       id,
       mode: "pty",
@@ -2171,13 +4359,62 @@ function createPtyTerminal(webContents, id, options, launch = resolveTerminalLau
   });
 
   return {
-    write: (data) => ptyProcess.write(data),
+    write: (data) => {
+      if (exited) {
+        return false;
+      }
+      try {
+        ptyProcess.write(data);
+        return true;
+      } catch (error) {
+        appendLogEvent("terminal.write.failed", {
+          id,
+          mode: "pty",
+          activeMode: launch.activeMode,
+          error: serializeError(error)
+        }, "warn");
+        return false;
+      }
+    },
     resize: (nextCols, nextRows) => {
+      if (exited || !terminalSessions.has(id)) {
+        return false;
+      }
       const safeCols = normalizeTerminalSize(nextCols, cols, 20, 240);
       const safeRows = normalizeTerminalSize(nextRows, rows, 6, 80);
-      ptyProcess.resize(safeCols, safeRows);
+      try {
+        ptyProcess.resize(safeCols, safeRows);
+        return true;
+      } catch (error) {
+        appendLogEvent(isExitedPtyResizeError(error) ? "terminal.resize.ignored-after-exit" : "terminal.resize.failed", {
+          id,
+          mode: "pty",
+          activeMode: launch.activeMode,
+          cols: safeCols,
+          rows: safeRows,
+          error: serializeError(error)
+        }, isExitedPtyResizeError(error) ? "warn" : "error");
+        return false;
+      }
     },
-    kill: () => ptyProcess.kill(),
+    kill: () => {
+      if (exited) {
+        return false;
+      }
+      try {
+        ptyProcess.kill();
+        return true;
+      } catch (error) {
+        appendLogEvent("terminal.kill.failed", {
+          id,
+          mode: "pty",
+          activeMode: launch.activeMode,
+          error: serializeError(error)
+        }, "warn");
+        return false;
+      }
+    },
+    isAlive: () => !exited,
     mode: "pty",
     pid: ptyProcess.pid,
     launch
@@ -2212,6 +4449,7 @@ function createTerminalSession(event, options = {}) {
   const cwd = normalizeCwd(options.cwd);
   const terminalMode = normalizeTerminalMode(options.terminalMode);
   const agentProvider = getEffectiveAgentProvider(options);
+  const permissionPolicy = getAgentPermissionPolicy(options.agentPermissionMode);
   const requestedMode = {
     agent: `Agent(${getAgentProviderLabel(agentProvider)})`,
     shell: "PowerShell"
@@ -2222,6 +4460,8 @@ function createTerminalSession(event, options = {}) {
     cwd,
     terminalMode,
     agentProvider,
+    permissionMode: permissionPolicy.id,
+    permissionLabel: permissionPolicy.label,
     requestedMode,
     sessionId: options.agentSession?.sessionId || "",
     taskId: options.taskContext?.taskId || options.agentSession?.taskId || ""
@@ -2233,9 +4473,22 @@ function createTerminalSession(event, options = {}) {
     `\x1b[32mCosS ${roleName} terminal\x1b[0m\r\n` +
       `工作目录: ${cwd}\r\n` +
       `请求模式: ${requestedMode}\r\n` +
+      `权限模式: ${permissionPolicy.label}\r\n` +
       `会话 ID: ${options.agentSession?.sessionId || "shell"}\r\n` +
       "角色提示词、会话信息和任务上下文已写入 COSS_* 环境变量。\r\n\r\n"
   );
+
+  if (terminalMode === "agent" && options.agentMcpAutoConfigEnabled === true) {
+    const mcpConfigResult = writeProjectMcpConfig(null, {
+      projectPath: cwd,
+      projectId: options.projectId || options.agentSession?.projectId || ""
+    });
+    if (mcpConfigResult.ok) {
+      sendTerminalData(webContents, id, `\x1b[32m已生成项目 MCP 配置: ${mcpConfigResult.rootConfigPath}\x1b[0m\r\n`);
+    } else {
+      sendTerminalData(webContents, id, `\x1b[33m项目 MCP 配置生成失败: ${mcpConfigResult.error}\x1b[0m\r\n`);
+    }
+  }
 
   if (process.env.COSS_DISABLE_TERMINAL_BACKEND === "1") {
     const mockSession = {
@@ -2245,7 +4498,9 @@ function createTerminalSession(event, options = {}) {
       mode: "mock",
       launch: {
         requestedMode: terminalMode,
-        activeMode: "mock"
+        activeMode: "mock",
+        permissionMode: permissionPolicy.id,
+        permissionLabel: permissionPolicy.label
       }
     };
     terminalSessions.set(id, mockSession);
@@ -2265,6 +4520,8 @@ function createTerminalSession(event, options = {}) {
   }
 
   const launch = resolveTerminalLaunch({ ...options, cwd });
+  launch.permissionMode = permissionPolicy.id;
+  launch.permissionLabel = permissionPolicy.label;
   launch.roleId = options.roleId || "";
   launch.roleName = options.roleName || "";
   launch.projectId = options.projectId || options.agentSession?.projectId || "";
@@ -2346,9 +4603,13 @@ function createTerminalSession(event, options = {}) {
     requestedMode: session.launch?.requestedMode || "shell",
     activeMode: session.launch?.activeMode || "shell",
     file: session.launch?.file || "",
+    launchMethod: session.launch?.launchMethod || "",
+    scriptPath: session.launch?.scriptPath || "",
+    pid: session.pid || null,
     sessionId: session.launch?.agentSession?.sessionId || "",
     taskId: session.launch?.taskContext?.taskId || session.launch?.agentSession?.taskId || ""
   });
+  scheduleTerminalProcessTreeSnapshots(id, session, roleName);
 
   if (session.launch?.installCommand) {
     try {
@@ -2830,6 +5091,18 @@ function attachEmbeddedBrowserPopupPolicy(contents) {
     return;
   }
 
+  const redirectToHostBrowser = (url) => {
+    const hostContents = contents.hostWebContents;
+    if (hostContents && !hostContents.isDestroyed?.()) {
+      hostContents.send("browser:open-url", { url, source: "webview-popup" });
+      return;
+    }
+
+    contents.loadURL(url).catch((error) => {
+      appendLogEvent("browser.webview.window-open.redirect.failed", { url, error: serializeError(error) }, "error");
+    });
+  };
+
   contents.setWindowOpenHandler(({ url }) => {
     if (!isAllowedEmbeddedBrowserUrl(url)) {
       appendLogEvent("browser.webview.window-open.blocked", { url, reason: "protocol" }, "warn");
@@ -2837,9 +5110,7 @@ function attachEmbeddedBrowserPopupPolicy(contents) {
     }
 
     appendLogEvent("browser.webview.window-open.redirected", { url });
-    contents.loadURL(url).catch((error) => {
-      appendLogEvent("browser.webview.window-open.redirect.failed", { url, error: serializeError(error) }, "error");
-    });
+    redirectToHostBrowser(url);
     return { action: "deny" };
   });
 
@@ -2847,9 +5118,7 @@ function attachEmbeddedBrowserPopupPolicy(contents) {
     const url = details.url || "";
     appendLogEvent("browser.webview.created-window.closed", { url });
     if (isAllowedEmbeddedBrowserUrl(url)) {
-      contents.loadURL(url).catch((error) => {
-        appendLogEvent("browser.webview.created-window.redirect.failed", { url, error: serializeError(error) }, "error");
-      });
+      redirectToHostBrowser(url);
     }
     if (childWindow && !childWindow.isDestroyed()) {
       childWindow.destroy();
@@ -2963,10 +5232,15 @@ app.whenReady().then(() => {
   createAppMenu();
   appendLogEvent("app.ready", { userData: app.getPath("userData"), logDirectory: getLogDirectory() });
   ipcMain.handle("state:load", () => readState());
-  ipcMain.handle("state:save", (_event, state) => {
+  ipcMain.handle("state:save", async (_event, state) => {
     try {
-      const result = writeState(state);
-      appendLogEvent("state.saved", { projects: Array.isArray(state?.projects) ? state.projects.length : 0 });
+      const durableState = await readState();
+      const mergedState = mergeStateForRendererSave(state, durableState);
+      const result = await writeState(mergedState);
+      appendLogEvent("state.saved", {
+        projects: Array.isArray(mergedState?.projects) ? mergedState.projects.length : 0,
+        mergedDurableState: Boolean(durableState?.projects?.length)
+      });
       return result;
     } catch (error) {
       appendLogEvent("state.save.failed", {
@@ -2978,9 +5252,25 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("llm:plan-task", handlePlanTask);
   ipcMain.handle("llm:test-model", handleTestModelConnectivity);
-  ipcMain.handle("app:info", () => ({ version: appVersion, logDirectory: getLogDirectory(), userData: app.getPath("userData") }));
+  ipcMain.handle("app:info", () => ({
+    version: appVersion,
+    logDirectory: getLogDirectory(),
+    userData: app.getPath("userData"),
+    mcp: getMcpServerInfo()
+  }));
   ipcMain.handle("app:log-event", (_event, eventName, payload = {}, level = "info") => appendLogEvent(eventName, payload, level));
   ipcMain.handle("logs:open-directory", () => openLogDirectory());
+  ipcMain.handle("state:meta", () => getStateMeta());
+  ipcMain.handle("mcp:info", (_event, context = {}) => getMcpServerInfo(context));
+  ipcMain.handle("mcp:check-project-config", checkProjectMcpConfig);
+  ipcMain.handle("mcp:write-project-config", writeProjectMcpConfig);
+  ipcMain.handle("mcp:audit-events", readMcpAuditEvents);
+  ipcMain.handle("storage:info", () => getStorageInfo());
+  ipcMain.handle("storage:backup", () => createManualStateBackup());
+  ipcMain.handle("storage:export", exportStorageState);
+  ipcMain.handle("storage:import", importStorageState);
+  ipcMain.handle("storage:diagnostics", exportDiagnosticsPackage);
+  ipcMain.handle("storage:open-directory", () => openStorageDirectory());
   ipcMain.handle("dialog:select-project-directory", selectProjectDirectory);
   ipcMain.handle("dialog:select-project-file", selectProjectFile);
   ipcMain.handle("files:list", listProjectFiles);
@@ -3045,10 +5335,14 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("agent:login-test", testAgentRemoteLogin);
   ipcMain.handle("terminal:create", createTerminalSession);
-  ipcMain.handle("terminal:input", (_event, id, data) => {
+  ipcMain.handle("terminal:input", (event, id, data, options = {}) => {
     const session = terminalSessions.get(id);
     if (session && typeof data === "string") {
       try {
+        const guardResult = processTerminalPermissionGuard(event.sender, id, session, data, options);
+        if (!guardResult.ok) {
+          return false;
+        }
         session.write(data);
         return true;
       } catch (error) {
@@ -3062,8 +5356,8 @@ app.whenReady().then(() => {
     const session = terminalSessions.get(id);
     if (session) {
       try {
-        session.resize(cols, rows);
-        return true;
+        const resized = session.resize(cols, rows);
+        return resized !== false;
       } catch (error) {
         console.warn(`Failed to resize terminal session ${id}`, error);
         appendLogEvent("terminal.resize.failed", { id, cols, rows, error: serializeError(error) }, "error");

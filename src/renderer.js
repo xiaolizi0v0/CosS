@@ -4,8 +4,8 @@ const ROLE_TEMPLATES = [
     name: "产品经理",
     category: "规划",
     description: "把用户需求转化为可开发、可验收的任务。",
-    programs: ["task", "file", "browser"],
-    claude: false,
+    programs: ["terminal", "task", "file", "browser"],
+    claude: true,
     collaborators: ["tech-lead", "frontend-engineer", "backend-engineer", "qa-engineer"]
   },
   {
@@ -67,8 +67,8 @@ const ROLE_TEMPLATES = [
     name: "技术文档工程师",
     category: "文档",
     description: "负责开发文档、API 文档和技术说明。",
-    programs: ["file", "browser", "task"],
-    claude: false,
+    programs: ["terminal", "file", "browser", "task"],
+    claude: true,
     collaborators: ["product-manager", "tech-lead", "backend-engineer"]
   },
   {
@@ -82,6 +82,42 @@ const ROLE_TEMPLATES = [
   }
 ];
 
+const SYSTEM_ROLE = {
+  id: "system",
+  name: "系统",
+  category: "Kernel",
+  description: "CosS Kernel 系统调度器。",
+  programs: [],
+  claude: false,
+  collaborators: []
+};
+const ORCHESTRATOR_PROTOCOL_VERSION = "0.10.0";
+const ORCHESTRATOR_TRANSPORT_SENDER_ID = SYSTEM_ROLE.id;
+const ROLE_CAPABILITY_PROFILES = {
+  "product-manager": ["requirements.define", "acceptance.define", "workflow.propose", "artifact.write_docs"],
+  "tech-lead": ["architecture.design", "workflow.propose", "code.review", "risk.assess", "artifact.write_docs"],
+  "frontend-engineer": ["code.frontend", "ui.implement", "browser.inspect", "artifact.write_code"],
+  "backend-engineer": ["code.backend", "api.implement", "data.model", "artifact.write_code"],
+  "qa-engineer": ["test.plan", "test.execute", "browser.inspect", "artifact.write_report"],
+  "ai-agent-engineer": ["agent.design", "mcp.integrate", "workflow.propose", "artifact.write_code"],
+  "devops-engineer": ["build.configure", "deploy.prepare", "ci.configure", "artifact.write_code"],
+  "technical-writer": ["docs.write", "artifact.write_docs", "requirements.summarize"],
+  "security-engineer": ["security.review", "risk.assess", "policy.check", "artifact.write_report"]
+};
+const GLOBAL_ORCHESTRATOR_POLICY = {
+  directAgentMessaging: false,
+  capabilitySandbox: true,
+  sharedTaskBoard: true,
+  resourceLocks: true,
+  structuredResultsOnly: true,
+  durableWorkflow: true,
+  eventSourcing: true,
+  stepLeases: true,
+  dryRunBeforeHighRisk: true,
+  userConfirmationForHighRisk: true,
+  centralArbitration: true
+};
+
 const PROGRAMS = {
   terminal: { label: "终端", icon: ">" },
   browser: { label: "浏览器", icon: "◎" },
@@ -91,6 +127,27 @@ const PROGRAMS = {
 };
 
 const DEFAULT_TASK_ROLE_IDS = ["product-manager", "frontend-engineer", "backend-engineer", "qa-engineer", "tech-lead"];
+const PROJECT_MEMORY_VERSION = "0.10.0";
+const PROJECT_MEMORY_TASK_LIMIT = 8;
+const PROJECT_MEMORY_ITEM_LIMIT = 20;
+const MCP_TOOL_NAMES = [
+  "coss_get_context",
+  "coss_list_roles",
+  "coss_get_task_board",
+  "coss_pool_read",
+  "coss_pool_claim",
+  "coss_list_tasks",
+  "coss_claim_task",
+  "coss_claim_step",
+  "coss_heartbeat_step",
+  "coss_release_step",
+  "coss_get_kernel_events",
+  "coss_report_status",
+  "coss_submit_result",
+  "coss_acquire_lock",
+  "coss_release_lock",
+  "coss_request_approval"
+];
 
 const MODEL_PROVIDER_PRESETS = {
   system: {
@@ -136,6 +193,33 @@ const MODEL_PROVIDER_PRESETS = {
   }
 };
 
+const AGENT_PERMISSION_POLICIES = {
+  readonly: {
+    id: "readonly",
+    label: "只读模式",
+    description: "Agent 只能阅读、分析和给出建议，不应改文件、安装依赖或执行破坏性命令。",
+    instruction: "当前 CosS Agent 权限模式：只读模式。只能阅读和分析项目内容，不能创建、修改、删除文件，不能安装依赖，不能运行部署、格式化磁盘或其他写入/破坏性命令。如确需修改，请先说明原因并等待用户调整权限。"
+  },
+  confirm: {
+    id: "confirm",
+    label: "每次编辑确认",
+    description: "任何文件写入、依赖安装、删除、部署等操作都需要先说明风险并等待确认。",
+    instruction: "当前 CosS Agent 权限模式：每次编辑确认。执行任何文件写入、依赖安装、删除、部署、网络发布或高风险命令前，必须先说明计划、影响范围和风险，并等待用户确认。"
+  },
+  sessionEdit: {
+    id: "sessionEdit",
+    label: "本会话允许编辑",
+    description: "Agent 可在当前项目内创建和修改文件；安装依赖、删除、部署仍需确认。",
+    instruction: "当前 CosS Agent 权限模式：本会话允许编辑。可以在当前项目目录内创建和修改文件；安装依赖、删除文件、部署、格式化磁盘、访问敏感信息或其他高风险操作仍必须先等待用户确认。"
+  },
+  sessionInstall: {
+    id: "sessionInstall",
+    label: "本会话允许编辑与安装依赖",
+    description: "Agent 可在当前项目内编辑文件并安装依赖；删除、部署和破坏性命令仍需确认。",
+    instruction: "当前 CosS Agent 权限模式：本会话允许编辑与安装依赖。可以在当前项目目录内创建/修改文件并安装必要依赖；删除文件、部署、格式化磁盘、清理大范围目录、访问敏感信息或其他破坏性操作仍必须先等待用户确认。"
+  }
+};
+
 const SETTINGS_SECTIONS = [
   { id: "account", label: "账户管理", icon: "user" },
   { id: "system", label: "系统设置", icon: "gear" },
@@ -152,9 +236,14 @@ const SETTINGS_SECTIONS = [
 const defaultState = {
   activeProjectId: null,
   projects: [],
+  deletedProjectIds: [],
   settings: {
     agentProvider: "claude",
     agentFallbackToShell: true,
+    agentPermissionMode: "confirm",
+    agentAutoWorkflowEnabled: true,
+    agentAutoWorkflowPaused: false,
+    agentMcpAutoConfigEnabled: false,
     codeBuddyApiKey: "",
     agentPromptTemplate:
       "你是 CosS 类桌面工作区中的{{roleName}}。\n" +
@@ -162,23 +251,31 @@ const defaultState = {
       "角色职责：{{roleDescription}}\n" +
       "项目：{{projectName}}\n" +
       "工作目录：{{workspace}}\n" +
+      "Agent 权限模式：{{agentPermissionLabel}}\n" +
+      "{{agentPermissionInstructions}}\n" +
       "当前任务：{{taskTitle}}\n" +
       "子任务：{{subtaskTitle}}\n" +
       "子任务说明：{{subtaskDescription}}\n\n" +
       "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。\n" +
-      "你可以和其他角色协作；完成或阻塞任务时，请在终端输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。\n" +
-      "需要把协作消息写回 CosS 时，可输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"给其他角色的协作消息\",\"toRoleIds\":[\"product-manager\"]}。",
+      "CosS v0.10 使用中央 Kernel 线性调度。你不能直接给其他 Agent 分配任务，不能发明不存在的角色，也不能绕过共享任务板。\n" +
+      "开始工作前优先使用 coss_get_task_board、coss_pool_claim、coss_claim_step；长任务中使用 coss_heartbeat_step；完成后必须使用 coss_submit_result({ status: \"done\" }) 提交结构化结果。\n" +
+      "只完成当前 Step。Kernel 会在当前 Step 完成后启动预先规划好的下一个 Agent。",
     modelProvider: "system",
     modelConfigs: createDefaultModelConfigs()
   }
 };
 
-const APP_VERSION = "v0.5.7";
+const APP_VERSION = "v0.10.0";
+const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 let state = structuredClone(defaultState);
 let saveStateInFlight = false;
 let saveStateDirty = false;
 let saveStatePromise = Promise.resolve();
+let stateStorageStamp = "";
+let externalStateRefreshTimer = null;
+let pendingExternalStateRefreshReason = "";
+let pendingKernelAutoWorkflowTimer = null;
 let bootingProjectId = null;
 let contextMenu = null;
 let roleMenu = null;
@@ -194,12 +291,21 @@ const DEFAULT_DESKTOP_ID = "desktop-main";
 const MAXIMIZED_WINDOW_STYLE = "left:16px; top:66px; width:calc(100% - 32px); height:calc(100% - 150px);";
 const terminalViews = new Map();
 const terminalBackendIds = new Set();
+const terminalBackendReadyIds = new Set();
+const terminalBackendActiveModes = new Map();
+const terminalBackendReadyAt = new Map();
+const terminalRecentOutput = new Map();
 const deliveryStuckTimers = new Map();
+const agentDeliveryDrainTimers = new Map();
 const hydratedBrowserViews = new Set();
 let pendingCommandApproval = null;
 let latestClaudeStatus = null;
 let latestCodexStatus = null;
 let latestCodeBuddyStatus = null;
+let latestStorageInfo = null;
+let mcpConfigStatus = null;
+let mcpAuditFilters = { roleId: "", taskId: "", tool: "", query: "" };
+let storageOperationStatus = null;
 let modelEditorProvider = "system";
 let activeSettingsSection = "system";
 const modelConnectivityStatuses = {};
@@ -209,6 +315,7 @@ let isWindowMaximized = false;
 let pendingTaskPlanDraft = null;
 let messageComposerDefaults = {};
 let messageTimelineFilters = { taskId: "", query: "" };
+let messageFlowSelection = { roleId: "", edgeKey: "" };
 let selectedTimelineItemId = "";
 let messageTimelineScrollLeft = 0;
 let taskViewOpen = false;
@@ -216,14 +323,33 @@ let pendingFileOperation = null;
 let taskRoleFilter = "";
 let taskListFilters = { query: "", roleId: "", status: "", model: "", includeArchived: false };
 let selectedTaskListTaskId = "";
+let taskListScrollState = { windowContent: 0, items: 0, detail: 0 };
+
+const AGENT_POOL_CLEANUP_POLICY = {
+  maxFilesPerRole: 160,
+  maxAgeDays: 21,
+  batchSize: 40
+};
 
 const SUBTASK_STATUS_DEFS = {
-  pending: { label: "待执行", windowStatus: "waiting" },
+  idle: { label: "空闲", windowStatus: "idle" },
   running: { label: "执行中", windowStatus: "working" },
-  waiting: { label: "待人工确认", windowStatus: "waiting" },
-  done: { label: "已完成", windowStatus: "done" },
-  blocked: { label: "已阻塞", windowStatus: "blocked" }
+  done: { label: "完成", windowStatus: "done" }
 };
+
+const AGENT_RELAY_STAGES = {
+  idle: { label: "空闲", symbol: "闲", className: "idle" },
+  running: { label: "执行中", symbol: "行", className: "executing" },
+  done: { label: "完成", symbol: "完", className: "completed" }
+};
+
+const KERNEL_PHASE_DEFS = {
+  idle: { label: "空闲", status: "idle", relayStage: "idle" },
+  running: { label: "执行中", status: "running", relayStage: "running" },
+  done: { label: "完成", status: "done", relayStage: "done" }
+};
+
+const agentPoolCleanupTimers = new Map();
 
 const COMMAND_RISK_RULES = [
   {
@@ -265,12 +391,29 @@ const COMMAND_RISK_RULES = [
 
 const appRoot = document.getElementById("app");
 
-function nowTimeLabel() {
+function isSameLocalDate(a, b) {
+  return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+}
+
+function formatProjectCreatedTime(project) {
+  const value = project?.createdAt || project?.lastOpenedAt || "";
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return "";
+  }
+  if (isSameLocalDate(date, new Date())) {
+    return new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).format(date);
+  }
   return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(new Date());
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
 }
 
 function uid(prefix) {
@@ -369,6 +512,9 @@ function renderMaskedSecret(value) {
 }
 
 function getRole(roleId) {
+  if (roleId === SYSTEM_ROLE.id) {
+    return SYSTEM_ROLE;
+  }
   return ROLE_TEMPLATES.find((role) => role.id === roleId) || ROLE_TEMPLATES[0];
 }
 
@@ -386,17 +532,7 @@ const TASK_LAYOUT_PRESETS = [
 ];
 
 function normalizeLayoutPreset(value) {
-  const legacyMap = {
-    wide: "split-two",
-    single: "split-two",
-    left: "three-columns",
-    right: "split-two",
-    "left-wide": "main-stack",
-    "right-stack": "main-stack",
-    "focus-side": "center-focus"
-  };
-  const normalized = legacyMap[value] || value;
-  return TASK_LAYOUT_PRESETS.some((preset) => preset.id === normalized) ? normalized : "split-two";
+  return TASK_LAYOUT_PRESETS.some((preset) => preset.id === value) ? value : "split-two";
 }
 
 function createDesktopState(name = "主对话", options = {}) {
@@ -483,15 +619,15 @@ function getTaskSubtaskPairs(task) {
 }
 
 function getTaskDoneCount(task) {
-  return (task?.subtasks || []).filter((subtask) => normalizeSubtaskStatus(subtask.status) === "done").length;
+  return getTaskKernelProjection(task).doneCount;
 }
 
 function getTaskRoleIds(task) {
-  return uniqueRoleIds((task?.subtasks || []).map((subtask) => subtask.roleId));
+  return getTaskKernelProjection(task).roleIds;
 }
 
 function getTaskStatusValue(task) {
-  return normalizeSubtaskStatus(task?.status || deriveTaskStatus(task?.subtasks || []));
+  return getTaskKernelProjection(task).status;
 }
 
 function getTaskModelName(task) {
@@ -576,7 +712,7 @@ function getVisibleWindows(project = getProject()) {
 }
 
 function normalizeSubtaskStatus(value) {
-  return SUBTASK_STATUS_DEFS[value] ? value : "pending";
+  return SUBTASK_STATUS_DEFS[value] ? value : "idle";
 }
 
 function deriveTaskStatus(subtasks = []) {
@@ -586,16 +722,390 @@ function deriveTaskStatus(subtasks = []) {
   if (subtasks.every((subtask) => normalizeSubtaskStatus(subtask.status) === "done")) {
     return "done";
   }
-  if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "blocked")) {
-    return "blocked";
-  }
-  if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "waiting")) {
-    return "running";
-  }
   if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "running")) {
     return "running";
   }
   return "planned";
+}
+
+function normalizeKernelPhase(value, fallbackStatus = "idle") {
+  const phase = String(value || "").trim();
+  if (KERNEL_PHASE_DEFS[phase]) {
+    return phase;
+  }
+  const status = normalizeSubtaskStatus(fallbackStatus);
+  if (status === "done") {
+    return "done";
+  }
+  if (status === "running") {
+    return "running";
+  }
+  return "idle";
+}
+
+function kernelPhaseToStatus(phase) {
+  return KERNEL_PHASE_DEFS[normalizeKernelPhase(phase)]?.status || "idle";
+}
+
+function isLeaseExpired(lease) {
+  const expiresAt = new Date(lease?.expiresAt || 0).getTime();
+  return Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt < Date.now();
+}
+
+function stableKernelIdPart(value, fallback = "item") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function getSubtaskFallbackKey(subtask, index) {
+  return [
+    index,
+    stableKernelIdPart(subtask?.roleId, "role"),
+    stableKernelIdPart(subtask?.title, "title"),
+    stableKernelIdPart(subtask?.description, "desc")
+  ].join(":");
+}
+
+function getStepFallbackKey(step, index) {
+  return [
+    index,
+    stableKernelIdPart(step?.roleId, "role"),
+    stableKernelIdPart(step?.title, "title"),
+    stableKernelIdPart(step?.description, "desc")
+  ].join(":");
+}
+
+function getStableSubtaskId(task, subtask, index, current = {}) {
+  const existingId = String(subtask?.id || current.subtaskId || "").trim();
+  if (existingId) {
+    return existingId;
+  }
+  const taskPart = stableKernelIdPart(task?.id || task?.title, "task");
+  const rolePart = stableKernelIdPart(subtask?.roleId || current.roleId, "role");
+  const titlePart = stableKernelIdPart(subtask?.title || current.title, "step");
+  return `subtask-${taskPart}-${String(index + 1).padStart(2, "0")}-${rolePart}-${titlePart}`;
+}
+
+function getTaskKernelSteps(task) {
+  const subtasks = Array.isArray(task?.subtasks) ? task.subtasks : [];
+  subtasks.forEach((subtask, index) => {
+    subtask.id = getStableSubtaskId(task, subtask, index);
+  });
+  const subtaskById = new Map(subtasks.map((subtask) => [subtask.id, subtask]));
+  const rawSteps = Array.isArray(task?.orchestrator?.steps) && task.orchestrator.steps.length > 0
+    ? task.orchestrator.steps
+    : subtasks.map((subtask, index) => ({
+      id: `step-${subtask.id}`,
+      subtaskId: subtask.id,
+      roleId: subtask.roleId,
+      title: subtask.title,
+      description: subtask.description,
+      status: subtask.status,
+      phase: normalizeKernelPhase("", subtask.status),
+      isEntryStep: Boolean(subtask.isEntryStep) || index === 0,
+      updatedAt: subtask.updatedAt,
+      createdAt: subtask.createdAt
+    }));
+
+  return rawSteps.map((step, index) => {
+    const subtask = subtaskById.get(step.subtaskId) || subtasks[index] || {};
+    const status = normalizeSubtaskStatus(step.status || subtask.status);
+    const phase = normalizeKernelPhase(step.phase, status);
+    const expiredLease = isLeaseExpired(step.lease);
+    return {
+      ...step,
+      subtask,
+      roleId: getRole(step.roleId || subtask.roleId).id,
+      title: step.title || subtask.title || `Step ${index + 1}`,
+      description: step.description || subtask.description || "",
+      phase: expiredLease && phase === "running" ? "idle" : phase,
+      status: expiredLease ? "idle" : kernelPhaseToStatus(phase),
+      leaseExpired: expiredLease
+    };
+  });
+}
+
+function getTaskKernelProjection(task) {
+  const steps = getTaskKernelSteps(task);
+  const counts = Object.fromEntries(Object.keys(KERNEL_PHASE_DEFS).map((phase) => [phase, 0]));
+  steps.forEach((step) => {
+    counts[step.phase] = (counts[step.phase] || 0) + 1;
+  });
+  const total = steps.length;
+  const activeCount = counts.running || 0;
+  const activeLocks = (task?.orchestrator?.locks || []).filter((lock) => lock.status === "locked");
+  const pendingApprovals = (task?.orchestrator?.approvals || []).filter((approval) => approval.status === "pending");
+  const events = Array.isArray(task?.orchestrator?.events) ? task.orchestrator.events : [];
+  const status = total === 0
+    ? "planned"
+    : counts.done === total
+        ? "done"
+        : activeCount > 0
+          ? "running"
+          : "planned";
+  return {
+    version: task?.orchestrator?.version || ORCHESTRATOR_PROTOCOL_VERSION,
+    architecture: task?.orchestrator?.kernel?.architecture || "durable-workflow-kernel",
+    status,
+    total,
+    doneCount: counts.done,
+    activeCount,
+    counts,
+    steps,
+    roleIds: uniqueRoleIds(steps.map((step) => step.roleId)),
+    activeLocks,
+    pendingApprovals,
+    events,
+    staleLeases: steps.filter((step) => step.leaseExpired)
+  };
+}
+
+function getSubtaskKernelProjection(task, subtask) {
+  const projection = getTaskKernelProjection(task);
+  const step = projection.steps.find((item) => item.subtaskId === subtask?.id)
+    || projection.steps.find((item) => item.roleId === subtask?.roleId)
+    || null;
+  return {
+    step,
+    phase: step?.phase || normalizeKernelPhase("", subtask?.status),
+    status: step?.status || normalizeSubtaskStatus(subtask?.status),
+    leaseExpired: Boolean(step?.leaseExpired)
+  };
+}
+
+function getCurrentKernelStep(task) {
+  const orchestrator = ensureTaskOrchestrator(task);
+  const steps = orchestrator?.steps || [];
+  if (steps.length === 0) {
+    return null;
+  }
+
+  const currentStepId = orchestrator.sharedState?.currentStep || "";
+  const currentStep = steps.find((step) => step.id === currentStepId || step.subtaskId === currentStepId) || null;
+  if (currentStep && normalizeKernelPhase(currentStep.phase, currentStep.status) !== "done") {
+    return currentStep;
+  }
+
+  const doneStepIds = new Set(steps
+    .filter((step) => normalizeKernelPhase(step.phase, step.status) === "done")
+    .flatMap((step) => [step.id, step.subtaskId])
+    .filter(Boolean));
+  const readyStep = steps.find((step) => (
+    normalizeKernelPhase(step.phase, step.status) !== "done"
+    && uniqueStrings(step.dependsOn || []).every((dependencyId) => doneStepIds.has(dependencyId))
+  ));
+  return readyStep || steps.find((step) => normalizeKernelPhase(step.phase, step.status) !== "done") || currentStep || steps[0];
+}
+
+function canManuallyExecuteKernelSubtask(task, subtask) {
+  const step = getSubtaskKernelProjection(task, subtask).step;
+  const currentStep = getCurrentKernelStep(task);
+  if (!step || !currentStep) {
+    return false;
+  }
+  return step.id === currentStep.id || step.subtaskId === currentStep.subtaskId;
+}
+
+function kernelPhaseToRelayStage(phase) {
+  return KERNEL_PHASE_DEFS[normalizeKernelPhase(phase)]?.relayStage || "idle";
+}
+
+function subtaskStatusToKernelPhase(status) {
+  return {
+    idle: "idle",
+    running: "running",
+    done: "done"
+  }[normalizeSubtaskStatus(status)] || "idle";
+}
+
+function appendRendererKernelEvent(project, task, event = {}) {
+  const now = event.createdAt || new Date().toISOString();
+  const record = {
+    id: event.id || uid("kernel-event"),
+    protocolVersion: ORCHESTRATOR_PROTOCOL_VERSION,
+    type: String(event.type || "renderer.kernel.event"),
+    projectId: project?.id || event.projectId || "",
+    taskId: task?.id || event.taskId || "",
+    roleId: event.roleId || "",
+    stepId: event.stepId || "",
+    subtaskId: event.subtaskId || "",
+    payload: event.payload && typeof event.payload === "object" ? event.payload : {},
+    createdAt: now
+  };
+
+  if (task) {
+    const orchestrator = ensureTaskOrchestrator(task);
+    orchestrator.events.push(record);
+    orchestrator.events = orchestrator.events.slice(-240);
+  }
+
+  if (project) {
+    project.kernelEvents ||= [];
+    project.kernelEvents.push(record);
+    project.kernelEvents = project.kernelEvents.slice(-1000);
+  }
+
+  return record;
+}
+
+function findKernelStepForSubtask(task, subtask) {
+  const orchestrator = ensureTaskOrchestrator(task);
+  return orchestrator?.steps.find((step) => step.subtaskId === subtask?.id)
+    || orchestrator?.steps.find((step) => step.roleId === subtask?.roleId)
+    || null;
+}
+
+function setTaskStatusFromKernelProjection(task) {
+  task.status = getTaskKernelProjection(task).status || deriveTaskStatus(task.subtasks);
+  return task.status;
+}
+
+function applyKernelStepStatusAction(project, task, subtask, nextStatus, options = {}) {
+  if (!project || !task || !subtask) {
+    return null;
+  }
+
+  const now = options.at || new Date().toISOString();
+  const status = normalizeSubtaskStatus(nextStatus);
+  const previousStatus = normalizeSubtaskStatus(subtask.status);
+  const phase = normalizeKernelPhase(options.phase || subtaskStatusToKernelPhase(status), status);
+  const previousPhase = getSubtaskKernelProjection(task, subtask).phase;
+  const step = findKernelStepForSubtask(task, subtask);
+
+  if (step) {
+    step.status = status;
+    step.phase = phase;
+    step.updatedAt = now;
+    if (options.renewLease || phase === "running") {
+      const leaseMs = Number(task.orchestrator?.kernel?.leaseMs) || 300000;
+      const nowMs = new Date(now).getTime();
+      const leaseBaseMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+      step.lease = {
+        ownerRoleId: step.claimedBy || step.roleId,
+        acquiredAt: step.lease?.acquiredAt || now,
+        heartbeatAt: now,
+        expiresAt: new Date(leaseBaseMs + leaseMs).toISOString()
+      };
+    }
+    if (["idle", "done"].includes(phase) && step.lease) {
+      step.lease = null;
+    }
+    task.orchestrator.sharedState.currentStep = step.id;
+  }
+
+  subtask.status = status;
+  subtask.updatedAt = now;
+  subtask.lastStatusChangedAt = now;
+  task.updatedAt = now;
+  setTaskStatusFromKernelProjection(task);
+
+  return appendRendererKernelEvent(project, task, {
+    type: options.type || "renderer.step.status.changed",
+    roleId: subtask.roleId,
+    stepId: step?.id || "",
+    subtaskId: subtask.id,
+    createdAt: now,
+    payload: {
+      previousStatus,
+      status,
+      previousPhase,
+      phase,
+      source: options.source || "renderer",
+      eventId: options.eventId || ""
+    }
+  });
+}
+
+function getRoleCapabilities(roleId) {
+  return [...(ROLE_CAPABILITY_PROFILES[getRole(roleId).id] || [])];
+}
+
+function normalizeRiskLevel(value) {
+  return ["low", "medium", "high"].includes(value) ? value : "low";
+}
+
+function getOrchestratorSenderRoleId(targetRoleId) {
+  getRole(targetRoleId);
+  return ORCHESTRATOR_TRANSPORT_SENDER_ID;
+}
+
+function ensureTaskOrchestrator(task) {
+  if (!task) {
+    return null;
+  }
+  const now = task.updatedAt || task.createdAt || new Date().toISOString();
+  const existing = task.orchestrator && typeof task.orchestrator === "object" ? task.orchestrator : {};
+  const existingSteps = Array.isArray(existing.steps) ? existing.steps : [];
+  const stepsBySubtaskId = new Map(existingSteps
+    .filter((step) => step?.subtaskId)
+    .map((step) => [step.subtaskId, step]));
+  const stepsByFallbackKey = new Map(existingSteps.map((step, index) => [getStepFallbackKey(step, index), step]));
+  const steps = (task.subtasks || []).map((subtask, index) => {
+    const current = stepsBySubtaskId.get(subtask.id) || stepsByFallbackKey.get(getSubtaskFallbackKey(subtask, index)) || {};
+    subtask.id = getStableSubtaskId(task, subtask, index, current);
+    const roleId = getRole(subtask.roleId).id;
+    return {
+      id: current.id || `step-${subtask.id}`,
+      subtaskId: subtask.id,
+      roleId,
+      title: subtask.title || current.title || `步骤 ${index + 1}`,
+      description: subtask.description || current.description || "",
+      status: normalizeSubtaskStatus(current.status || subtask.status),
+      phase: normalizeKernelPhase(current.phase || normalizeSubtaskStatus(subtask.status), subtask.status),
+      dependsOn: uniqueStrings(current.dependsOn || subtask.dependsOn || []),
+      isEntryStep: Boolean(current.isEntryStep || subtask.isEntryStep) || index === 0,
+      assignedMessageId: current.assignedMessageId || subtask.assignedMessageId || "",
+      claimedBy: current.claimedBy || "",
+      lease: current.lease && typeof current.lease === "object" ? current.lease : null,
+      riskLevel: normalizeRiskLevel(current.riskLevel || subtask.riskLevel),
+      allowedCapabilities: getRoleCapabilities(roleId),
+      source: current.source || subtask.source || "orchestrator",
+      createdAt: current.createdAt || subtask.createdAt || now,
+      updatedAt: current.updatedAt || subtask.updatedAt || now
+    };
+  });
+  task.orchestrator = {
+    version: ORCHESTRATOR_PROTOCOL_VERSION,
+    mode: "central-orchestrator",
+    owner: "CosS Kernel",
+    kernel: {
+      version: ORCHESTRATOR_PROTOCOL_VERSION,
+      architecture: "durable-workflow-kernel",
+      eventStore: "sqlite-event-sourcing",
+      executionModel: "central-orchestrator",
+      leaseMs: Number(existing.kernel?.leaseMs) || 300000,
+      projections: ["task-board", "agent-status", "timeline", "role-flow"]
+    },
+    policy: {
+      ...GLOBAL_ORCHESTRATOR_POLICY,
+      ...(existing.policy || {})
+    },
+    capabilities: ROLE_TEMPLATES.reduce((acc, role) => {
+      acc[role.id] = getRoleCapabilities(role.id);
+      return acc;
+    }, {}),
+    sharedState: {
+      currentStep: existing.sharedState?.currentStep || "",
+      artifacts: Array.isArray(existing.sharedState?.artifacts) ? existing.sharedState.artifacts : [],
+      constraints: uniqueStrings([
+        "不允许 Agent 直接给其他 Agent 分配任务",
+        "所有结果必须写回共享任务板",
+        "中高风险动作必须等待用户或调度器确认",
+        ...(existing.sharedState?.constraints || [])
+      ]),
+      decisions: Array.isArray(existing.sharedState?.decisions) ? existing.sharedState.decisions : []
+    },
+    locks: Array.isArray(existing.locks) ? existing.locks : [],
+    approvals: Array.isArray(existing.approvals) ? existing.approvals : [],
+    events: Array.isArray(existing.events) ? existing.events.slice(-120) : [],
+    steps
+  };
+  return task.orchestrator;
 }
 
 function ensureTaskShape(task) {
@@ -604,14 +1114,222 @@ function ensureTaskShape(task) {
   task.archived = Boolean(task.archived);
   task.archivedAt ||= "";
   task.subtasks ||= [];
-  task.subtasks.forEach((subtask) => {
+  task.subtasks.forEach((subtask, index) => {
+    subtask.id = getStableSubtaskId(task, subtask, index);
     subtask.status = normalizeSubtaskStatus(subtask.status);
     subtask.createdAt ||= task.createdAt || new Date().toISOString();
     subtask.updatedAt ||= subtask.createdAt;
     subtask.lastStatusChangedAt ||= subtask.updatedAt;
   });
-  task.status = deriveTaskStatus(task.subtasks);
+  ensureTaskOrchestrator(task);
+  setTaskStatusFromKernelProjection(task);
   return task;
+}
+
+function createEmptyProjectMemory(enabled = true) {
+  return {
+    version: PROJECT_MEMORY_VERSION,
+    enabled,
+    manualNotes: "",
+    summary: "",
+    taskHistory: [],
+    decisions: [],
+    artifacts: [],
+    updatedAt: "",
+    lastSource: ""
+  };
+}
+
+function ensureProjectMemoryShape(project) {
+  if (!project) {
+    return createEmptyProjectMemory();
+  }
+  const existing = project.memory && typeof project.memory === "object" ? project.memory : {};
+  project.memory = {
+    ...createEmptyProjectMemory(existing.enabled !== false),
+    ...existing,
+    enabled: existing.enabled !== false,
+    manualNotes: String(existing.manualNotes || "").slice(0, 6000),
+    summary: String(existing.summary || "").slice(0, 12000),
+    taskHistory: Array.isArray(existing.taskHistory) ? existing.taskHistory.slice(-PROJECT_MEMORY_ITEM_LIMIT) : [],
+    decisions: Array.isArray(existing.decisions) ? existing.decisions.slice(-PROJECT_MEMORY_ITEM_LIMIT) : [],
+    artifacts: Array.isArray(existing.artifacts) ? existing.artifacts.slice(-PROJECT_MEMORY_ITEM_LIMIT) : [],
+    updatedAt: existing.updatedAt || "",
+    lastSource: existing.lastSource || ""
+  };
+  return project.memory;
+}
+
+function compactMemoryText(value, limit = 220) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function summarizeProjectTaskForMemory(task) {
+  ensureTaskShape(task);
+  const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+  const doneCount = subtasks.filter((subtask) => normalizeSubtaskStatus(subtask.status) === "done").length;
+  const roleIds = uniqueRoleIds([
+    ...(task.planner?.neededAgentRoleIds || []),
+    ...subtasks.map((subtask) => subtask.roleId)
+  ]);
+  return {
+    id: task.id || "",
+    title: compactMemoryText(task.title || task.goal, 80),
+    goal: compactMemoryText(task.goal || task.title, 240),
+    status: task.status || deriveTaskStatus(subtasks),
+    createdAt: task.createdAt || "",
+    updatedAt: task.updatedAt || task.createdAt || "",
+    modelName: task.model?.modelName || task.model?.provider || "",
+    summary: compactMemoryText(task.planner?.summary || "", 240),
+    doneCount,
+    totalCount: subtasks.length,
+    roles: roleIds.map((roleId) => ({
+      id: roleId,
+      name: getRole(roleId).name
+    })),
+    subtasks: subtasks.slice(0, 12).map((subtask) => ({
+      id: subtask.id || "",
+      roleId: subtask.roleId || "",
+      roleName: getRole(subtask.roleId).name,
+      title: compactMemoryText(subtask.title, 100),
+      description: compactMemoryText(subtask.description, 260),
+      status: normalizeSubtaskStatus(subtask.status)
+    }))
+  };
+}
+
+function collectProjectMemoryArtifacts(project) {
+  return (project.tasks || [])
+    .flatMap((task) => {
+      const artifacts = task.orchestrator?.sharedState?.artifacts || [];
+      return artifacts.map((artifact) => ({
+        taskId: task.id || "",
+        taskTitle: compactMemoryText(task.title || task.goal, 80),
+        roleId: artifact.roleId || "",
+        roleName: artifact.roleId ? getRole(artifact.roleId).name : "",
+        stepId: artifact.stepId || "",
+        path: compactMemoryText(artifact.path || artifact.url, 260),
+        type: compactMemoryText(artifact.type || "file", 40),
+        description: compactMemoryText(artifact.description || artifact.summary, 220),
+        createdAt: artifact.createdAt || task.updatedAt || task.createdAt || ""
+      }));
+    })
+    .filter((artifact) => artifact.path)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, PROJECT_MEMORY_ITEM_LIMIT);
+}
+
+function collectProjectMemoryDecisions(project) {
+  return (project.tasks || [])
+    .flatMap((task) => {
+      const decisions = task.orchestrator?.sharedState?.decisions || [];
+      return decisions.map((decision) => ({
+        id: decision.id || "",
+        taskId: task.id || "",
+        taskTitle: compactMemoryText(task.title || task.goal, 80),
+        roleId: decision.roleId || "",
+        roleName: decision.roleId ? getRole(decision.roleId).name : "",
+        stepId: decision.stepId || "",
+        summary: compactMemoryText(decision.summary || decision.message, 500),
+        createdAt: decision.createdAt || task.updatedAt || task.createdAt || ""
+      }));
+    })
+    .filter((decision) => decision.summary)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, PROJECT_MEMORY_ITEM_LIMIT);
+}
+
+function buildProjectMemorySummary(project, taskHistory, decisions, artifacts) {
+  const lines = [
+    `Project: ${project?.name || "Untitled project"}`,
+    `Path: ${project?.path || ""}`
+  ];
+  if (taskHistory.length > 0) {
+    lines.push("Recent tasks:");
+    taskHistory.forEach((task, index) => {
+      lines.push(`${index + 1}. [${task.status}] ${task.title || task.goal} (${task.doneCount}/${task.totalCount} done)`);
+      if (task.summary) {
+        lines.push(`   Summary: ${task.summary}`);
+      }
+      const doneSubtasks = task.subtasks
+        .filter((subtask) => subtask.status === "done")
+        .slice(0, 4)
+        .map((subtask) => `${subtask.roleName}: ${subtask.title}`)
+        .join("; ");
+      if (doneSubtasks) {
+        lines.push(`   Done: ${doneSubtasks}`);
+      }
+    });
+  }
+  if (artifacts.length > 0) {
+    lines.push("Known artifacts:");
+    artifacts.slice(0, 8).forEach((artifact) => {
+      lines.push(`- ${artifact.path}${artifact.description ? `: ${artifact.description}` : ""}`);
+    });
+  }
+  if (decisions.length > 0) {
+    lines.push("Recent decisions:");
+    decisions.slice(0, 8).forEach((decision) => {
+      lines.push(`- ${decision.roleName || decision.roleId}: ${decision.summary}`);
+    });
+  }
+  return lines.join("\n").slice(0, 12000);
+}
+
+function rebuildProjectMemory(project, source = "auto") {
+  const memory = ensureProjectMemoryShape(project);
+  const taskHistory = (project.tasks || [])
+    .slice(0, PROJECT_MEMORY_TASK_LIMIT)
+    .map(summarizeProjectTaskForMemory);
+  const decisions = collectProjectMemoryDecisions(project);
+  const artifacts = collectProjectMemoryArtifacts(project);
+  memory.version = PROJECT_MEMORY_VERSION;
+  memory.taskHistory = taskHistory;
+  memory.decisions = decisions;
+  memory.artifacts = artifacts;
+  memory.summary = buildProjectMemorySummary(project, taskHistory, decisions, artifacts);
+  memory.updatedAt = new Date().toISOString();
+  memory.lastSource = source;
+  return memory;
+}
+
+function buildProjectMemoryForPlanner(project) {
+  const memory = rebuildProjectMemory(project, "planner-context");
+  if (memory.enabled === false) {
+    return { enabled: false };
+  }
+  return {
+    enabled: true,
+    version: memory.version,
+    manualNotes: memory.manualNotes,
+    summary: memory.summary,
+    taskHistory: memory.taskHistory.slice(0, PROJECT_MEMORY_TASK_LIMIT),
+    decisions: memory.decisions.slice(0, 10),
+    artifacts: memory.artifacts.slice(0, 10),
+    updatedAt: memory.updatedAt
+  };
+}
+
+function formatProjectMemoryForPrompt(projectMemory = {}) {
+  if (!projectMemory || projectMemory.enabled === false) {
+    return "";
+  }
+  const lines = [];
+  if (projectMemory.manualNotes) {
+    lines.push("Manual project notes:", projectMemory.manualNotes);
+  }
+  if (projectMemory.summary) {
+    lines.push("Auto project memory:", projectMemory.summary);
+  }
+  return lines.join("\n").trim().slice(0, 14000);
+}
+
+function formatProjectMemoryForDisplay(memory = {}) {
+  const body = formatProjectMemoryForPrompt(memory);
+  return body || "暂无项目记忆。点击“刷新记忆”会根据当前项目任务、产物和决策生成摘要。";
 }
 
 function uniqueRoleIds(roleIds = []) {
@@ -646,15 +1364,351 @@ function ensureMessageShape(message) {
     channelId: message.channelId || getMessageChannelId(fromRoleId, normalizedToRoleIds, taskId),
     fromRoleId,
     toRoleIds: normalizedToRoleIds,
-    content: String(message.content || "").trim().slice(0, 500),
+    content: String(message.content || "").trim().slice(0, 4000),
     taskId,
     source: message.source || (taskId ? "task-plan" : "manual"),
     status: message.status || "sent",
     readBy: uniqueRoleIds(message.readBy || [fromRoleId]),
     injectedWindowIds: uniqueStrings(message.injectedWindowIds || []),
     injectedAt: message.injectedAt || "",
+    autoWorkflow: Boolean(message.autoWorkflow),
+    autoWorkflowStatus: String(message.autoWorkflowStatus || "").slice(0, 80),
+    autoWorkflowDispatchedAt: message.autoWorkflowDispatchedAt || "",
+    autoWorkflowStoppedAt: message.autoWorkflowStoppedAt || "",
+    agentPoolPaths: message.agentPoolPaths && typeof message.agentPoolPaths === "object" ? { ...message.agentPoolPaths } : {},
+    agentPoolStatus: String(message.agentPoolStatus || "idle").slice(0, 40),
+    subtaskRefs: message.subtaskRefs && typeof message.subtaskRefs === "object" ? { ...message.subtaskRefs } : {},
     createdAt: message.createdAt || new Date().toISOString()
   };
+}
+
+function getRoleNameSafe(roleId) {
+  return getRole(roleId).name || roleId;
+}
+
+function firstMeaningfulLine(value, fallback = "") {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || fallback;
+}
+
+function createDownstreamSubtasksFromMessage(project, message, options = {}) {
+  recordAppLog("orchestrator.direct_subtask_creation.skipped", {
+    projectId: project?.id || "",
+    taskId: message?.taskId || "",
+    messageId: message?.id || "",
+    source: message?.source || "",
+    reason: "v0.10 Kernel owns downstream task creation"
+  }, "warn");
+  return [];
+}
+function sanitizeAgentPoolFileName(value) {
+  return String(value || uid("msg"))
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96) || uid("msg");
+}
+
+function getAgentPoolMessagePath(roleId, messageId) {
+  return `.coss/agent-pools/${getRole(roleId).id}/inbox/${sanitizeAgentPoolFileName(messageId)}.json`;
+}
+
+function buildAgentPoolEnvelope(project, message, roleId) {
+  return {
+    schemaVersion: 1,
+    id: message.id,
+    projectId: project.id,
+    roleId: getRole(roleId).id,
+    fromRoleId: message.fromRoleId,
+    toRoleIds: message.toRoleIds || [],
+    taskId: message.taskId || "",
+    channelType: message.channelType || (message.taskId ? "task" : "direct"),
+    channelId: message.channelId || getMessageChannelId(message.fromRoleId, message.toRoleIds || [], message.taskId || ""),
+    source: message.source || "manual",
+    status: message.agentPoolStatus || "idle",
+    content: message.content || "",
+    createdAt: message.createdAt || new Date().toISOString(),
+    startedAt: "",
+    runningBy: "",
+    messageRef: {
+      projectMessageId: message.id
+    }
+  };
+}
+
+async function persistAgentPoolMessages(project, messages = [], reason = "message-created") {
+  if (!project?.path || !window.cossAPI?.writeProjectFile) {
+    return { ok: false, reason: "project-file-api-unavailable", count: 0 };
+  }
+  const list = (Array.isArray(messages) ? messages : [messages]).filter(Boolean);
+  let count = 0;
+  const errors = [];
+  for (const message of list) {
+    const shapedMessage = ensureMessageShape(message);
+    message.agentPoolPaths ||= shapedMessage.agentPoolPaths || {};
+    message.agentPoolStatus ||= shapedMessage.agentPoolStatus || "idle";
+    for (const roleId of uniqueRoleIds(message.toRoleIds || [])) {
+      const filePath = getAgentPoolMessagePath(roleId, message.id);
+      const envelope = buildAgentPoolEnvelope(project, message, roleId);
+      try {
+        const result = await window.cossAPI.writeProjectFile({
+          projectPath: project.path,
+          filePath,
+          content: `${JSON.stringify(envelope, null, 2)}\n`
+        });
+        if (result?.ok) {
+          message.agentPoolPaths[roleId] = filePath;
+          count += 1;
+        } else {
+          errors.push({ roleId, messageId: message.id, error: result?.error || "write-failed" });
+        }
+      } catch (error) {
+        errors.push({ roleId, messageId: message.id, error: error.message });
+      }
+    }
+  }
+  recordAppLog(errors.length ? "agent.pool.persist.partial" : "agent.pool.persisted", {
+    projectId: project.id,
+    reason,
+    messageIds: list.map((message) => message.id),
+    count,
+    errors
+  }, errors.length ? "warn" : "info");
+  scheduleAgentPoolCleanup(project.id);
+  return { ok: errors.length === 0, count, errors };
+}
+
+function isMessagePoolActive(project, message, roleId) {
+  if (!message) {
+    return false;
+  }
+  if (isKernelDispatchMessageForCompletedWork(project, message)) {
+    return false;
+  }
+  const activeStatuses = new Set(["preparing", "queued", "terminal-ready-queued", "external-queued", "submitted"]);
+  if (message.toRoleIds?.includes(roleId) && !(message.readBy || []).includes(roleId)) {
+    return true;
+  }
+  if (message.autoWorkflow && activeStatuses.has(message.autoWorkflowStatus || "")) {
+    return true;
+  }
+  return (project.agentDeliveries || []).some((delivery) => (
+    delivery.messageId === message.id
+    && delivery.roleId === roleId
+    && ["pending", "sent", "submitted", "responded", "waiting"].includes(delivery.status)
+  ));
+}
+
+function getKernelDispatchMessageTask(project, message) {
+  if (!project || !message?.taskId) {
+    return null;
+  }
+  return (project.tasks || []).find((task) => task.id === message.taskId) || null;
+}
+
+function getKernelDispatchMessageLinkedSubtaskIds(project, message, task = getKernelDispatchMessageTask(project, message)) {
+  const explicitIds = uniqueStrings([
+    ...Object.values(message?.subtaskRefs || {}),
+    ...(project?.agentDeliveries || [])
+      .filter((delivery) => delivery.messageId === message?.id)
+      .map((delivery) => delivery.subtaskId)
+  ]);
+  if (explicitIds.length > 0) {
+    return explicitIds;
+  }
+
+  const orchestrator = task ? ensureTaskOrchestrator(task) : null;
+  const byAssignedMessage = (orchestrator?.steps || [])
+    .filter((step) => step.assignedMessageId === message?.id)
+    .map((step) => step.subtaskId || step.id);
+  if (byAssignedMessage.length > 0) {
+    return uniqueStrings(byAssignedMessage);
+  }
+
+  return [];
+}
+
+function getKernelDispatchMessageLinkedWork(project, message) {
+  const task = getKernelDispatchMessageTask(project, message);
+  const orchestrator = task ? ensureTaskOrchestrator(task) : null;
+  const subtaskIds = getKernelDispatchMessageLinkedSubtaskIds(project, message, task);
+  const subtasks = subtaskIds
+    .map((subtaskId) => (task?.subtasks || []).find((subtask) => subtask.id === subtaskId))
+    .filter(Boolean);
+  const steps = (orchestrator?.steps || []).filter((step) => (
+    subtaskIds.includes(step.subtaskId)
+    || subtaskIds.includes(step.id)
+    || step.assignedMessageId === message?.id
+  ));
+  return { task, subtasks, steps };
+}
+
+function isKernelDispatchMessageForCompletedWork(project, message) {
+  if (!project || !message || (message.source || "") !== "orchestrator-dispatch") {
+    return false;
+  }
+
+  const { task, subtasks, steps } = getKernelDispatchMessageLinkedWork(project, message);
+  if (!task) {
+    return false;
+  }
+
+  const taskProjection = getTaskKernelProjection(task);
+  if (taskProjection.status === "done" || task.status === "done") {
+    return true;
+  }
+
+  if (subtasks.length > 0 && subtasks.every((subtask) => normalizeSubtaskStatus(subtask.status) === "done")) {
+    return true;
+  }
+
+  if (steps.length > 0 && steps.every((step) => normalizeKernelPhase(step.phase, step.status) === "done")) {
+    return true;
+  }
+
+  return false;
+}
+
+function markKernelDispatchMessageCompleted(project, message, reason = "completed-work") {
+  if (!isKernelDispatchMessageForCompletedWork(project, message)) {
+    return false;
+  }
+
+  const now = new Date().toISOString();
+  let changed = false;
+  if (message.autoWorkflowStatus !== "completed") {
+    message.autoWorkflowStatus = "completed";
+    message.autoWorkflowStoppedAt ||= now;
+    message.agentPoolStatus = "done";
+    changed = true;
+  }
+
+  (project.agentDeliveries || [])
+    .filter((delivery) => (
+      delivery.messageId === message.id
+      && ["pending", "sent", "submitted", "responded", "waiting"].includes(delivery.status)
+    ))
+    .forEach((delivery) => {
+      delivery.status = "completed";
+      delivery.completionStatus ||= "done";
+      delivery.completedAt ||= now;
+      delivery.updatedAt = now;
+      changed = true;
+    });
+
+  if (changed) {
+    recordAppLog("agent.workflow.completed-message-finalized", {
+      projectId: project.id,
+      messageId: message.id,
+      taskId: message.taskId || "",
+      reason
+    });
+  }
+
+  return changed;
+}
+
+function finalizeCompletedKernelDispatchMessages(project, reason = "completed-work-scan") {
+  if (!project) {
+    return 0;
+  }
+  return (project.messages || []).reduce((count, message) => (
+    markKernelDispatchMessageCompleted(project, message, reason) ? count + 1 : count
+  ), 0);
+}
+
+function scheduleAgentPoolCleanup(projectId, delayMs = 1500) {
+  if (!projectId || !window.cossAPI?.deleteProjectFile) {
+    return;
+  }
+  if (agentPoolCleanupTimers.has(projectId)) {
+    clearTimeout(agentPoolCleanupTimers.get(projectId));
+  }
+  const timer = setTimeout(() => {
+    agentPoolCleanupTimers.delete(projectId);
+    cleanupAgentPoolFiles(projectId).catch((error) => {
+      recordAppLog("agent.pool.cleanup.error", { projectId, error: error.message }, "error");
+    });
+  }, delayMs);
+  agentPoolCleanupTimers.set(projectId, timer);
+}
+
+async function cleanupAgentPoolFiles(projectIdOrProject = state.activeProjectId, options = {}) {
+  const project = typeof projectIdOrProject === "object"
+    ? projectIdOrProject
+    : state.projects.find((item) => item.id === projectIdOrProject);
+  if (!project?.path || !window.cossAPI?.deleteProjectFile) {
+    return { ok: false, reason: "file-delete-api-unavailable", deletedCount: 0 };
+  }
+
+  const policy = { ...AGENT_POOL_CLEANUP_POLICY, ...(options.policy || {}) };
+  const cutoffMs = Date.now() - policy.maxAgeDays * 24 * 60 * 60 * 1000;
+  const byRole = new Map();
+  (project.messages || []).forEach((message) => {
+    Object.entries(message.agentPoolPaths || {}).forEach(([roleId, filePath]) => {
+      if (!filePath) {
+        return;
+      }
+      const list = byRole.get(roleId) || [];
+      list.push({
+        roleId,
+        filePath,
+        message,
+        time: new Date(message.createdAt || 0).getTime() || 0,
+        active: isMessagePoolActive(project, message, roleId)
+      });
+      byRole.set(roleId, list);
+    });
+  });
+
+  const candidates = [];
+  byRole.forEach((items) => {
+    const inactive = items
+      .filter((item) => !item.active)
+      .sort((a, b) => b.time - a.time);
+    inactive.forEach((item, index) => {
+      const tooOld = item.time > 0 && item.time < cutoffMs;
+      const overLimit = index >= policy.maxFilesPerRole;
+      if (options.force || tooOld || overLimit) {
+        candidates.push(item);
+      }
+    });
+  });
+
+  const deleted = [];
+  const errors = [];
+  for (const item of candidates.slice(0, policy.batchSize)) {
+    try {
+      const result = await window.cossAPI.deleteProjectFile({
+        projectPath: project.path,
+        filePath: item.filePath
+      });
+      if (result?.ok) {
+        deleted.push(item.filePath);
+        delete item.message.agentPoolPaths[item.roleId];
+        if (Object.keys(item.message.agentPoolPaths || {}).length === 0) {
+          item.message.agentPoolStatus = "cleaned";
+        }
+      } else {
+        errors.push({ path: item.filePath, error: result?.error || "delete-failed" });
+      }
+    } catch (error) {
+      errors.push({ path: item.filePath, error: error.message });
+    }
+  }
+
+  if (deleted.length > 0) {
+    await saveState();
+  }
+  recordAppLog("agent.pool.cleanup.completed", {
+    projectId: project.id,
+    deletedCount: deleted.length,
+    skippedActiveCount: Array.from(byRole.values()).flat().filter((item) => item.active).length,
+    remainingCandidates: Math.max(0, candidates.length - deleted.length),
+    errors
+  }, errors.length ? "warn" : "info");
+  return { ok: errors.length === 0, deletedCount: deleted.length, deleted, errors };
 }
 
 function ensureAgentEventShape(event) {
@@ -673,13 +1727,14 @@ function ensureAgentEventShape(event) {
     taskId: event.taskId || "",
     subtaskId: event.subtaskId || "",
     status: normalizeAgentEventStatus(event.status) || String(event.status || "").trim(),
+    toolName: String(event.toolName || "").trim().slice(0, 80),
     message: String(event.message || "").trim().slice(0, 500),
     receivedAt: event.receivedAt || new Date().toISOString()
   };
 }
 
 function normalizeDeliveryStatus(value) {
-  return ["pending", "sent", "submitted", "responded", "waiting", "failed", "canceled"].includes(value) ? value : "pending";
+  return ["pending", "sent", "submitted", "responded", "waiting", "completed", "failed", "canceled"].includes(value) ? value : "pending";
 }
 
 function ensureAgentDeliveryShape(delivery) {
@@ -689,6 +1744,7 @@ function ensureAgentDeliveryShape(delivery) {
     windowId: delivery.windowId || "",
     roleId: getRole(delivery.roleId).id,
     taskId: delivery.taskId || "",
+    subtaskId: delivery.subtaskId || "",
     status: normalizeDeliveryStatus(delivery.status),
     attempts: Number.isFinite(Number(delivery.attempts)) ? Number(delivery.attempts) : 0,
     createdAt: delivery.createdAt || new Date().toISOString(),
@@ -696,16 +1752,22 @@ function ensureAgentDeliveryShape(delivery) {
     sentAt: delivery.sentAt || "",
     submittedAt: delivery.submittedAt || delivery.sentAt || "",
     respondedAt: delivery.respondedAt || "",
+    completedAt: delivery.completedAt || "",
+    completionStatus: String(delivery.completionStatus || "").slice(0, 40),
     waitingAt: delivery.waitingAt || "",
     canceledAt: delivery.canceledAt || "",
     submissionProvider: delivery.submissionProvider ? normalizeAgentProvider(delivery.submissionProvider) : "",
     submissionMethod: String(delivery.submissionMethod || "").slice(0, 80),
     submissionDetail: String(delivery.submissionDetail || "").slice(0, 240),
+    permissionMode: normalizeAgentPermissionMode(delivery.permissionMode || state.settings?.agentPermissionMode),
+    permissionLabel: String(delivery.permissionLabel || getAgentPermissionPolicy(delivery.permissionMode || state.settings?.agentPermissionMode).label).slice(0, 80),
     responseWatchStartedAt: delivery.responseWatchStartedAt || "",
     stuckCheckAt: delivery.stuckCheckAt || "",
     stuckDetectedAt: delivery.stuckDetectedAt || "",
     lastFeedback: String(delivery.lastFeedback || "").slice(0, 160),
     lastError: String(delivery.lastError || "").slice(0, 300),
+    autoWorkflow: Boolean(delivery.autoWorkflow),
+    autoWorkflowSourceEventId: String(delivery.autoWorkflowSourceEventId || ""),
     deliveryFilePath: String(delivery.deliveryFilePath || ""),
     deliveryFileAbsolutePath: String(delivery.deliveryFileAbsolutePath || "")
   };
@@ -725,21 +1787,38 @@ function ensureTerminalOutputRefShape(ref) {
   };
 }
 
+function ensureCommandApprovalGrantShape(grant) {
+  const ruleIds = uniqueStrings(grant.ruleIds || []).sort();
+  return {
+    id: grant.id || uid("cmdgrant"),
+    scope: grant.scope || "app-session",
+    appSessionId: grant.appSessionId || appSessionId,
+    roleId: getRole(grant.roleId).id,
+    ruleIds,
+    riskLabel: String(grant.riskLabel || "").slice(0, 80),
+    severity: grant.severity || "medium",
+    sampleCommand: String(grant.sampleCommand || "").slice(0, 500),
+    useCount: Number.isFinite(Number(grant.useCount)) ? Number(grant.useCount) : 0,
+    createdAt: grant.createdAt || new Date().toISOString(),
+    lastUsedAt: grant.lastUsedAt || grant.createdAt || new Date().toISOString()
+  };
+}
+
 function ensureBrowserWindowShape(win) {
-  const legacyUrl = normalizeBrowserUrl(win.browserUrl || DEFAULT_BROWSER_URL);
   if (!Array.isArray(win.browserTabs) || win.browserTabs.length === 0) {
     win.browserTabs = [{
       id: uid("tab"),
-      url: legacyUrl,
-      title: win.browserTitle || legacyUrl,
-      status: win.browserStatus || "ready",
+      url: DEFAULT_BROWSER_URL,
+      title: DEFAULT_BROWSER_URL,
+      status: "ready",
       createdAt: new Date().toISOString()
     }];
   }
   win.browserTabs = win.browserTabs.map((tab, index) => ({
     id: tab.id || uid("tab"),
-    url: normalizeBrowserUrl(tab.url || (index === 0 ? legacyUrl : DEFAULT_BROWSER_URL)),
+    url: normalizeBrowserUrl(tab.url || DEFAULT_BROWSER_URL),
     title: tab.title || "",
+    favicon: tab.favicon || getBrowserFaviconUrl(tab.url || DEFAULT_BROWSER_URL),
     status: tab.status || "ready",
     createdAt: tab.createdAt || new Date().toISOString()
   })).slice(0, 8);
@@ -747,7 +1826,7 @@ function ensureBrowserWindowShape(win) {
     win.activeBrowserTabId = win.browserTabs[0].id;
   }
   const activeTab = getActiveBrowserTab(win);
-  win.browserUrl = activeTab?.url || legacyUrl;
+  win.browserUrl = activeTab?.url || DEFAULT_BROWSER_URL;
   win.browserStatus ||= activeTab?.status || "ready";
   win.browserTitle ||= activeTab?.title || "";
   win.browserBookmarks = uniqueStrings(win.browserBookmarks || []).slice(-40);
@@ -767,10 +1846,12 @@ function ensureProjectShape(project) {
   project.tasks ||= [];
   project.messages ||= [];
   project.commandLogs ||= [];
+  project.commandApprovalGrants ||= [];
   project.agentEvents ||= [];
   project.agentDeliveries ||= [];
   project.terminalOutputRefs ||= [];
   project.tasks.forEach(ensureTaskShape);
+  ensureProjectMemoryShape(project);
   ensureProjectDesktops(project);
   syncConversationTaskIds(project);
   project.messages = project.messages
@@ -789,6 +1870,10 @@ function ensureProjectShape(project) {
     .map(ensureTerminalOutputRefShape)
     .filter((ref) => messageIds.has(ref.messageId))
     .slice(-300);
+  project.commandApprovalGrants = project.commandApprovalGrants
+    .map(ensureCommandApprovalGrantShape)
+    .filter((grant) => grant.scope === "app-session" && grant.appSessionId === appSessionId && grant.ruleIds.length > 0)
+    .slice(-80);
   project.windows.forEach((win) => {
     win.desktopId ||= getActiveDesktopId(project);
     win.minimized = Boolean(win.minimized);
@@ -828,11 +1913,21 @@ function ensureProjectShape(project) {
 }
 
 function ensureStateShape(nextState) {
+  nextState.deletedProjectIds = uniqueStrings(nextState.deletedProjectIds || []);
   nextState.settings ||= {};
   nextState.settings.agentProvider = normalizeAgentProvider(nextState.settings.agentProvider);
   nextState.settings.agentFallbackToShell = nextState.settings.agentFallbackToShell !== false;
+  nextState.settings.agentPermissionMode = normalizeAgentPermissionMode(nextState.settings.agentPermissionMode);
+  nextState.settings.agentAutoWorkflowEnabled = true;
+  nextState.settings.agentAutoWorkflowPaused = nextState.settings.agentAutoWorkflowPaused === true;
+  nextState.settings.agentMcpAutoConfigEnabled = nextState.settings.agentMcpAutoConfigEnabled === true;
+  if (!nextState.settings.agentAutoWorkflowEnabled) {
+    nextState.settings.agentAutoWorkflowPaused = false;
+  }
   nextState.settings.codeBuddyApiKey ||= "";
-  nextState.settings.agentPromptTemplate ||= defaultState.settings.agentPromptTemplate;
+  nextState.settings.agentPromptTemplate = ensureAgentPromptMcpInstructions(
+    ensureAgentPromptPermissionPlaceholders(nextState.settings.agentPromptTemplate || defaultState.settings.agentPromptTemplate)
+  );
   ensureModelSettings(nextState.settings);
   (nextState.projects || []).forEach(ensureProjectShape);
   return nextState;
@@ -844,6 +1939,14 @@ function getProjectCommandLogs(project = getProject()) {
   }
 
   return ensureProjectShape(project).commandLogs;
+}
+
+function getProjectCommandApprovalGrants(project = getProject()) {
+  if (!project) {
+    return [];
+  }
+
+  return ensureProjectShape(project).commandApprovalGrants;
 }
 
 function formatDateTime(value) {
@@ -878,7 +1981,7 @@ function assessCommandRisk(command) {
       requiresApproval: false,
       severity: "low",
       label: "普通命令",
-      description: "未命中 v0.2 高风险规则。"
+      description: "未命中当前高风险规则。"
     };
   }
 
@@ -894,7 +1997,7 @@ function assessCommandRisk(command) {
   };
 }
 
-function createCommandLog(win, command, assessment, status) {
+function createCommandLog(win, command, assessment, status, extra = {}) {
   const project = getProject();
   if (!project) {
     return null;
@@ -912,6 +2015,8 @@ function createCommandLog(win, command, assessment, status) {
     riskLabel: assessment.label,
     riskDescription: assessment.description,
     status,
+    grantId: extra.grantId || "",
+    grantScope: extra.grantScope || "",
     createdAt: new Date().toISOString()
   };
   const logs = getProjectCommandLogs(project);
@@ -928,6 +2033,8 @@ function createCommandLog(win, command, assessment, status) {
     severity: assessment.severity,
     riskLabel: assessment.label,
     status,
+    grantId: log.grantId,
+    grantScope: log.grantScope,
     requiresApproval: Boolean(assessment.requiresApproval),
     ruleIds: assessment.ruleIds || []
   }, assessment.requiresApproval ? "warn" : "info");
@@ -935,7 +2042,7 @@ function createCommandLog(win, command, assessment, status) {
   return log;
 }
 
-function updateCommandLog(logId, status) {
+function updateCommandLog(logId, status, patch = {}) {
   const project = getProject();
   const log = project?.commandLogs?.find((item) => item.id === logId);
   if (!log) {
@@ -943,14 +2050,89 @@ function updateCommandLog(logId, status) {
   }
 
   log.status = status;
+  Object.assign(log, patch);
   log.resolvedAt = new Date().toISOString();
   recordAppLog("command.status.changed", {
     projectId: project.id,
     logId,
     windowId: log.windowId,
     roleId: log.roleId,
-    status
+    status,
+    grantId: log.grantId || "",
+    grantScope: log.grantScope || ""
   });
+  saveState();
+}
+
+function getCommandGrantKey(roleId, assessment) {
+  return `${getRole(roleId).id}:${uniqueStrings(assessment.ruleIds || []).sort().join("+")}`;
+}
+
+function findCommandApprovalGrant(win, assessment) {
+  const grants = getProjectCommandApprovalGrants();
+  const key = getCommandGrantKey(win.roleId, assessment);
+  return grants.find((grant) => `${grant.roleId}:${grant.ruleIds.join("+")}` === key) || null;
+}
+
+function createCommandApprovalGrant(win, assessment, command) {
+  const project = getProject();
+  if (!project) {
+    return null;
+  }
+
+  const grants = getProjectCommandApprovalGrants(project);
+  const role = getRole(win.roleId);
+  const key = getCommandGrantKey(role.id, assessment);
+  const existing = grants.find((grant) => `${grant.roleId}:${grant.ruleIds.join("+")}` === key);
+  if (existing) {
+    existing.lastUsedAt = new Date().toISOString();
+    existing.useCount += 1;
+    return existing;
+  }
+
+  const grant = ensureCommandApprovalGrantShape({
+    id: uid("cmdgrant"),
+    roleId: role.id,
+    ruleIds: assessment.ruleIds || [],
+    riskLabel: assessment.label,
+    severity: assessment.severity,
+    sampleCommand: command,
+    useCount: 1,
+    createdAt: new Date().toISOString(),
+    lastUsedAt: new Date().toISOString()
+  });
+  grants.unshift(grant);
+  if (grants.length > 80) {
+    grants.length = 80;
+  }
+  recordAppLog("command.approval-grant.created", {
+    projectId: project.id,
+    windowId: win.id,
+    roleId: role.id,
+    grantId: grant.id,
+    ruleIds: grant.ruleIds,
+    riskLabel: grant.riskLabel,
+    scope: grant.scope
+  }, "warn");
+  saveState();
+  return grant;
+}
+
+function markCommandApprovalGrantUsed(grant, win, assessment, command) {
+  if (!grant) {
+    return;
+  }
+
+  grant.lastUsedAt = new Date().toISOString();
+  grant.useCount = Number(grant.useCount || 0) + 1;
+  recordAppLog("command.approval-grant.used", {
+    projectId: state.activeProjectId,
+    windowId: win.id,
+    roleId: getRole(win.roleId).id,
+    grantId: grant.id,
+    command,
+    ruleIds: assessment.ruleIds || []
+  }, "warn");
   saveState();
 }
 
@@ -994,6 +2176,144 @@ function normalizeStoredWindowStacks(nextState) {
   zSeed = Math.max(WINDOW_Z_BASE, ...allZ);
 }
 
+function reconcileAgentWorkflowAfterStateRefresh(previousState, nextState, reason = "external") {
+  if (nextState?.settings?.agentAutoWorkflowEnabled !== true || nextState.settings.agentAutoWorkflowPaused === true) {
+    return;
+  }
+
+  const previousProjects = new Map((previousState?.projects || []).map((project) => [project.id, project]));
+  let releasedCount = 0;
+  let scheduledCount = 0;
+
+  (nextState.projects || []).forEach((project) => {
+    const previousProject = previousProjects.get(project.id);
+    const previousMessageIds = new Set((previousProject?.messages || []).map((message) => message.id));
+    const previousEventIds = new Set((previousProject?.agentEvents || []).map((event) => event.id));
+
+    (project.agentEvents || []).forEach((event) => {
+      if (previousEventIds.has(event.id)) {
+        return;
+      }
+      const status = normalizeAgentEventStatus(event.status);
+      if (status !== "done") {
+        return;
+      }
+      const roleId = getRole(event.roleId || event.fromRoleId).id;
+      const windows = (project.windows || []).filter((win) => (
+        win.type === "terminal"
+        && normalizeTerminalMode(win.terminalMode) === "agent"
+        && win.roleId === roleId
+        && (!event.taskId || win.agentSession?.taskId === event.taskId || getTaskContextForWindow(win, project).taskId === event.taskId)
+      ));
+      windows.forEach((win) => {
+        const activeDelivery = getActiveAgentDeliveryForWindow(project, win.id);
+        if (!activeDelivery || (event.taskId && activeDelivery.taskId && activeDelivery.taskId !== event.taskId)) {
+          return;
+        }
+        activeDelivery.status = "completed";
+        activeDelivery.completedAt = event.receivedAt || new Date().toISOString();
+        activeDelivery.completionStatus = status;
+        activeDelivery.respondedAt ||= activeDelivery.completedAt;
+        activeDelivery.stuckDetectedAt = "";
+        activeDelivery.lastFeedback = `Completed from external ${event.type || "agent"} event.`;
+        if (win.lastAgentDeliveryId === activeDelivery.id) {
+          win.lastAgentDeliveryId = "";
+          win.lastInjectedMessageId = "";
+        }
+        releasedCount += 1;
+        scheduleAgentDeliveryQueueDrain(win.id, 350);
+      });
+    });
+
+    (project.messages || []).forEach((message) => {
+      if (previousMessageIds.has(message.id)) {
+        return;
+      }
+      if (!["orchestrator-dispatch"].includes(message.source || "")) {
+        return;
+      }
+      if (!message.toRoleIds?.length || message.autoWorkflowStatus) {
+        return;
+      }
+      message.autoWorkflow = true;
+      message.autoWorkflowStatus = "external-queued";
+      scheduledCount += 1;
+      setTimeout(() => scheduleAgentAutoWorkflow(message.id, `external:${reason}`), 0);
+    });
+  });
+
+  if (releasedCount > 0 || scheduledCount > 0) {
+    recordAppLog("agent.workflow.external-reconciled", {
+      reason,
+      releasedCount,
+      scheduledCount
+    });
+    saveState();
+  }
+}
+
+async function refreshStateStorageStamp() {
+  if (!window.cossAPI?.getStateMeta) {
+    return "";
+  }
+  try {
+    const meta = await window.cossAPI.getStateMeta();
+    stateStorageStamp = meta?.stamp || "";
+    return stateStorageStamp;
+  } catch {
+    return stateStorageStamp;
+  }
+}
+
+async function refreshStateFromExternalStorage(reason = "external") {
+  if (!window.cossAPI?.loadState || saveStateInFlight || saveStateDirty) {
+    return false;
+  }
+  const previousState = state;
+  const loaded = await window.cossAPI.loadState();
+  if (!loaded?.projects?.length) {
+    return false;
+  }
+  normalizeStoredWindowStacks(loaded);
+  state = loaded;
+  await refreshStateStorageStamp();
+  reconcileAgentWorkflowAfterStateRefresh(previousState, state, reason);
+  await repairAllReadyKernelDispatches(`external:${reason}`);
+  recordAppLog("state.external-refreshed", {
+    reason,
+    projects: Array.isArray(state.projects) ? state.projects.length : 0
+  });
+  render();
+  setTimeout(() => resumePendingKernelAutoWorkflowMessages(`external:${reason}`), 350);
+  return true;
+}
+
+function startExternalStateRefresh() {
+  if (externalStateRefreshTimer || !window.cossAPI?.getStateMeta || !window.cossAPI?.loadState) {
+    return;
+  }
+  externalStateRefreshTimer = setInterval(async () => {
+    try {
+      const meta = await window.cossAPI.getStateMeta();
+      const nextStamp = meta?.stamp || "";
+      if (nextStamp && stateStorageStamp && nextStamp !== stateStorageStamp) {
+        if (saveStateInFlight || saveStateDirty) {
+          pendingExternalStateRefreshReason ||= "storage-stamp-changed-during-save";
+          return;
+        }
+        await refreshStateFromExternalStorage("storage-stamp-changed");
+      } else if (nextStamp && !stateStorageStamp) {
+        stateStorageStamp = nextStamp;
+        if (!saveStateInFlight && !saveStateDirty) {
+          await refreshStateFromExternalStorage("storage-stamp-initialized");
+        }
+      }
+    } catch {
+      // External refresh is best-effort. Normal UI interaction should continue.
+    }
+  }, 1500);
+}
+
 async function saveState() {
   saveStateDirty = true;
   if (saveStateInFlight) {
@@ -1007,6 +2327,7 @@ async function saveState() {
       const snapshot = structuredClone(state);
       if (window.cossAPI?.saveState) {
         await window.cossAPI.saveState(snapshot);
+        await refreshStateStorageStamp();
       } else {
         localStorage.setItem("coss-state", JSON.stringify(snapshot));
       }
@@ -1019,6 +2340,17 @@ async function saveState() {
       saveStateInFlight = false;
       if (saveStateDirty) {
         saveState();
+      } else if (pendingExternalStateRefreshReason) {
+        const reason = pendingExternalStateRefreshReason;
+        pendingExternalStateRefreshReason = "";
+        setTimeout(() => {
+          refreshStateFromExternalStorage(reason).catch((error) => {
+            recordAppLog("state.external-refresh-after-save.error", {
+              reason,
+              error: error.message
+            }, "error");
+          });
+        }, 0);
       }
     });
 
@@ -1037,6 +2369,8 @@ async function loadState() {
   if (stored?.projects?.length) {
     normalizeStoredWindowStacks(stored);
     state = stored;
+    await refreshStateStorageStamp();
+    await repairAllReadyKernelDispatches("state-load");
     return;
   }
 
@@ -1051,9 +2385,11 @@ async function loadState() {
   state = {
     activeProjectId: demo.id,
     projects: [demo],
+    deletedProjectIds: [],
     settings: { ...defaultState.settings }
   };
   await saveState();
+  await refreshStateStorageStamp();
 }
 
 function createProjectState(name, projectPath) {
@@ -1076,9 +2412,11 @@ function createProjectState(name, projectPath) {
     tasks: [],
     messages: [],
     commandLogs: [],
+    commandApprovalGrants: [],
     agentEvents: [],
     agentDeliveries: [],
-    terminalOutputRefs: []
+    terminalOutputRefs: [],
+    memory: createEmptyProjectMemory(true)
   };
 }
 
@@ -1128,6 +2466,7 @@ function createWindowState(type, roleId, x = 260, y = 108, options = {}) {
       id: uid("tab"),
       url: normalizeBrowserUrl(win.browserUrl),
       title: "",
+      favicon: getBrowserFaviconUrl(win.browserUrl),
       status: "ready",
       createdAt: new Date().toISOString()
     }];
@@ -1159,6 +2498,42 @@ function normalizeAgentProvider(value) {
   return ["claude", "codex", "codebuddy"].includes(value) ? value : "claude";
 }
 
+function normalizeAgentPermissionMode(value) {
+  return Object.prototype.hasOwnProperty.call(AGENT_PERMISSION_POLICIES, value) ? value : "confirm";
+}
+
+function getAgentPermissionPolicy(value = state.settings.agentPermissionMode) {
+  return AGENT_PERMISSION_POLICIES[normalizeAgentPermissionMode(value)] || AGENT_PERMISSION_POLICIES.confirm;
+}
+
+function ensureAgentPromptPermissionPlaceholders(template) {
+  const source = String(template || defaultState.settings.agentPromptTemplate);
+  if (source.includes("{{agentPermissionInstructions}}")) {
+    return source;
+  }
+  return `${source.trim()}\n\nAgent 权限模式：{{agentPermissionLabel}}\n{{agentPermissionInstructions}}`;
+}
+
+function ensureAgentPromptMcpInstructions(template) {
+  const source = String(template || defaultState.settings.agentPromptTemplate)
+    .replace(/\n*当系统提示 `mcp__coss: Still connecting; call WaitForMcpServers to wait for it` 时，必须先调用 WaitForMcpServers 等待 mcp__coss 连接完成。/g, "")
+    .replace(/\n*If the agent runtime says `mcp__coss: Still connecting; call WaitForMcpServers to wait for it`, call WaitForMcpServers first and wait for mcp__coss to become ready\./g, "")
+    .trim();
+  const waitInstructions =
+    "\n\n当系统提示 `mcp__coss: Still connecting` 时，请等待几秒后重新搜索或直接重试 coss 工具；只有当前 Agent 后端明确提供等待工具时才调用该工具。" +
+    "\n不要因为 ToolSearch 暂时找不到 coss_get_context、coss_list_roles 或 coss_pool_read 就停止工作；至少等待并重试 3 次。无法继续时输出 COSS_AGENT_STATUS:running 并说明原因，完成时输出 COSS_AGENT_STATUS:done。";
+  if (source.includes("mcp__coss: Still connecting") && source.includes("至少等待并重试 3 次")) {
+    return source;
+  }
+  if (source.includes("COSS_MCP_SERVER")) {
+    return `${source}${waitInstructions}`;
+  }
+  return `${source}\n\nCosS MCP is available for reliable automation. Prefer MCP tools over terminal paste when possible.\n` +
+    "MCP command is stored in COSS_MCP_SERVER. Current context is stored in COSS_MCP_USER_DATA, COSS_MCP_PROJECT_ID, COSS_MCP_ROLE_ID, COSS_MCP_TASK_ID, and COSS_MCP_SESSION_ID.\n" +
+    "CosS v0.10 uses a central linear workflow Kernel. Use coss_get_context, coss_get_task_board, coss_list_roles, coss_pool_read, coss_pool_claim, coss_claim_step, coss_heartbeat_step, coss_get_kernel_events, and coss_submit_result. Do not directly dispatch other Agents. Complete only your assigned step; the Kernel will start the next preplanned step after your result is done. Agent states are idle, running, and done only." +
+    waitInstructions;
+}
+
 function getAgentProviderLabel(provider) {
   return {
     claude: "Claude Code",
@@ -1178,6 +2553,8 @@ function findSubtaskForRole(task, roleId) {
 function getTaskContextForWindow(win, project = getProject()) {
   const task = findTaskForDesktop(project, win.desktopId);
   const subtask = findSubtaskForRole(task, win.roleId);
+  const projectMemory = ensureProjectMemoryShape(project);
+  const memoryText = projectMemory.enabled === false ? "" : formatProjectMemoryForPrompt(projectMemory);
   return {
     taskId: task?.id || "",
     taskTitle: task?.title || "",
@@ -1185,7 +2562,10 @@ function getTaskContextForWindow(win, project = getProject()) {
     subtaskId: subtask?.id || "",
     subtaskTitle: subtask?.title || "",
     subtaskDescription: subtask?.description || "",
-    subtaskStatus: subtask?.status || ""
+    subtaskStatus: subtask?.status || "",
+    projectMemoryEnabled: projectMemory.enabled !== false,
+    projectMemorySummary: memoryText,
+    projectMemoryUpdatedAt: projectMemory.updatedAt || ""
   };
 }
 
@@ -1205,7 +2585,7 @@ function ensureAgentSessionShape(win, project = getProject()) {
     taskId: taskContext.taskId,
     subtaskId: taskContext.subtaskId,
     sessionName: win.agentSession?.sessionName || `CosS-${project?.name || "Project"}-${role.name}-${provider}`,
-    promptTemplateVersion: "v0.5",
+    promptTemplateVersion: "v0.10.0",
     createdAt,
     lastStartedAt: win.agentSession?.lastStartedAt || "",
     resumeCount: Number.isFinite(Number(win.agentSession?.resumeCount)) ? Number(win.agentSession.resumeCount) : 0,
@@ -1228,6 +2608,18 @@ function normalizeBrowserUrl(value) {
   return `https://${raw}`;
 }
 
+function getBrowserFaviconUrl(value) {
+  try {
+    const url = new URL(normalizeBrowserUrl(value));
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return `${url.origin}/favicon.ico`;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 function getActiveBrowserTab(win) {
   return win?.browserTabs?.find((tab) => tab.id === win.activeBrowserTabId) || win?.browserTabs?.[0] || null;
 }
@@ -1238,6 +2630,9 @@ function setActiveBrowserTabState(win, patch) {
     return null;
   }
   Object.assign(tab, patch);
+  if (patch.url && !patch.favicon) {
+    tab.favicon = getBrowserFaviconUrl(patch.url);
+  }
   win.browserUrl = tab.url;
   win.browserTitle = tab.title || win.browserTitle || "";
   win.browserStatus = tab.status || win.browserStatus || "ready";
@@ -1281,8 +2676,214 @@ function createMessage(fromRoleId, toRoleIds, content, taskId = null, options = 
     source: options.source,
     status: options.status,
     readBy: options.readBy,
+    subtaskRefs: options.subtaskRefs,
     createdAt: options.createdAt || new Date().toISOString()
   });
+}
+
+function buildOrchestratorDispatchContent(task, step) {
+  const role = getRole(step.roleId);
+  const memoryText = formatProjectMemoryForPrompt(task.projectMemorySnapshot || {});
+  const memoryLines = memoryText
+    ? ["", "Project memory for this task:", memoryText]
+    : [];
+  const lines = [
+    `CosS Kernel 调度任务板：${task.title || task.goal}`,
+    `任务ID：${task.id}`,
+    `步骤ID：${step.id}`,
+    `目标角色：${role.name} (${role.id})`,
+    `步骤标题：${step.title}`,
+    `步骤说明：${step.description}`,
+    "",
+    "中央线性调度规则：",
+    "1. 不要直接把任务分配给其他 Agent，不要自行创建不存在的角色。",
+    "2. 只能使用 coss_get_task_board、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval 等 CosS MCP 工具回写结果。",
+    "3. 只处理当前 Step；完成后调用 coss_submit_result({ status: \"done\" })，Kernel 会自动启动预先规划好的下一步。",
+    "4. 高风险动作、发出邮件、删除文件、支付、系统设置修改等必须走 coss_request_approval 或等待用户确认。",
+    "5. 输出必须结构化；不要只在终端自然语言回复。",
+    "",
+    `允许能力：${step.allowedCapabilities.join(", ") || "none"}`
+  ];
+  return lines.concat(memoryLines).join("\n");
+}
+
+function createOrchestratorDispatchMessage(task, step) {
+  const orchestrator = task?.orchestrator || ensureTaskOrchestrator(task);
+  const message = createMessage(
+    getOrchestratorSenderRoleId(step.roleId),
+    [step.roleId],
+    buildOrchestratorDispatchContent(task, step),
+    task.id,
+    {
+      source: "orchestrator-dispatch",
+      channelType: "task",
+      subtaskRefs: { [step.roleId]: step.subtaskId }
+    }
+  );
+  step.assignedMessageId = message.id;
+  step.status = "idle";
+  step.phase = "idle";
+  step.lease = null;
+  step.updatedAt = message.createdAt;
+  if (orchestrator?.sharedState) {
+    orchestrator.sharedState.currentStep = step.id;
+  }
+  const subtask = task?.subtasks?.find((item) => item.id === step.subtaskId);
+  if (subtask) {
+    subtask.assignedMessageId = message.id;
+    subtask.updatedAt = message.createdAt;
+  }
+  return message;
+}
+
+function isKernelStepReadyForRendererDispatch(task, step) {
+  if (!task || !step || getTaskKernelProjection(task).status === "done" || step.assignedMessageId || normalizeKernelPhase(step.phase, step.status) !== "idle") {
+    return false;
+  }
+  const subtask = (task.subtasks || []).find((item) => item.id === step.subtaskId);
+  if (subtask && normalizeSubtaskStatus(subtask.status) === "done") {
+    return false;
+  }
+  const orchestrator = ensureTaskOrchestrator(task);
+  return uniqueStrings(step.dependsOn || []).every((dependencyId) => {
+    const dependency = (orchestrator.steps || []).find((item) => item.id === dependencyId || item.subtaskId === dependencyId);
+    return dependency && normalizeKernelPhase(dependency.phase, dependency.status) === "done";
+  });
+}
+
+async function repairReadyKernelDispatches(project, reason = "kernel-dispatch-repair") {
+  if (!project) {
+    return [];
+  }
+
+  const createdMessages = [];
+  (project.tasks || []).forEach((task) => {
+    const orchestrator = ensureTaskOrchestrator(task);
+    const taskCreatedCount = createdMessages.length;
+    (orchestrator.steps || [])
+      .filter((step) => isKernelStepReadyForRendererDispatch(task, step))
+      .slice(0, 1)
+      .forEach((step) => {
+        const message = createOrchestratorDispatchMessage(task, step);
+        project.messages ||= [];
+        project.messages.push(message);
+        createdMessages.push(message);
+        appendRendererKernelEvent(project, task, {
+          type: "step.dispatched",
+          roleId: step.roleId,
+          stepId: step.id,
+          subtaskId: step.subtaskId,
+          payload: {
+            messageId: message.id,
+            source: "renderer-ready-step-repair",
+            reason
+          }
+        });
+      });
+    if (createdMessages.length > taskCreatedCount) {
+      setTaskStatusFromKernelProjection(task);
+    }
+  });
+
+  if (createdMessages.length === 0) {
+    return [];
+  }
+
+  await persistAgentPoolMessages(project, createdMessages, reason);
+  recordAppLog("kernel.dispatch.repaired", {
+    projectId: project.id,
+    reason,
+    messageIds: createdMessages.map((message) => message.id),
+    count: createdMessages.length
+  }, "warn");
+  saveState();
+  scheduleAgentAutoWorkflowForMessages(createdMessages, reason);
+  return createdMessages;
+}
+
+async function repairAllReadyKernelDispatches(reason = "kernel-dispatch-repair") {
+  const projects = Array.isArray(state.projects) ? state.projects : [];
+  const repaired = [];
+  for (const project of projects) {
+    const messages = await repairReadyKernelDispatches(project, reason);
+    repaired.push(...messages);
+  }
+  if (repaired.length > 0) {
+    render();
+  }
+  return repaired;
+}
+
+function getInitialCoordinatorRoleId(taskPlan, task) {
+  const modelRoleId = uniqueRoleIds(taskPlan?.firstRoundRoleIds || [])[0];
+  if (modelRoleId) {
+    return modelRoleId;
+  }
+
+  const availableRoleIds = new Set(ROLE_TEMPLATES.map((role) => role.id));
+  if (availableRoleIds.has("product-manager")) {
+    return "product-manager";
+  }
+
+  const plannedRoleIds = uniqueRoleIds([
+    ...(taskPlan?.subtasks || []).map((subtask) => subtask.roleId),
+    ...(task?.subtasks || []).map((subtask) => subtask.roleId)
+  ]);
+  const planningRole = plannedRoleIds.find((roleId) => ["规划", "文档"].includes(getRole(roleId).category));
+  return planningRole || plannedRoleIds[0] || ROLE_TEMPLATES[0]?.id || "product-manager";
+}
+
+function getInitialCoordinatorRoleIds(taskPlan, task) {
+  const modelRoleIds = uniqueRoleIds(taskPlan?.firstRoundRoleIds || [])
+    .filter((roleId) => task.subtasks.some((subtask) => subtask.roleId === roleId) || ROLE_TEMPLATES.some((role) => role.id === roleId));
+  if (modelRoleIds.length > 0) {
+    return modelRoleIds.slice(0, 3);
+  }
+  return [getInitialCoordinatorRoleId(taskPlan, task)];
+}
+
+function getKickoffSenderRoleId(targetRoleId, taskPlan) {
+  const candidateRoleIds = uniqueRoleIds([
+    "tech-lead",
+    ...(taskPlan?.messages || []).map((message) => message.fromRoleId),
+    ...(taskPlan?.subtasks || []).map((subtask) => subtask.roleId),
+    "product-manager"
+  ]).filter((roleId) => roleId !== targetRoleId);
+  return candidateRoleIds[0] || ROLE_TEMPLATES.find((role) => role.id !== targetRoleId)?.id || targetRoleId;
+}
+
+function buildInitialCoordinatorContent(task, roleId, subtask = null) {
+  const role = getRole(roleId);
+  const downstreamRoleNames = uniqueRoleIds([...(task.planner?.neededAgentRoleIds || []), ...task.subtasks.map((item) => item.roleId)])
+    .filter((item) => item !== roleId)
+    .map((item) => getRole(item).name)
+    .join("、") || "下游角色";
+  return [
+    `任务ID：${task.id}`,
+    `任务目标：${task.goal || task.title}`,
+    `${role.name} Kernel Step：${subtask?.title || "请先梳理需求、验收标准和协作边界。"}`,
+    `执行说明：${subtask?.description || "请先输出 PRD、字段约束、验收标准、角色分工和需要下游角色确认的问题。"}`,
+    `后续预规划角色：${downstreamRoleNames}`,
+    "",
+    `请先作为 ${role.name} Agent 开始工作，不要直接跳过到下游实现角色。`,
+    "请优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。",
+    "CosS v0.10 使用中央 Kernel 线性调度，Agent 不能直接给其他 Agent 分配任务。",
+    "必须优先尝试工具：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result。",
+    "开始工作前，请通过 MCP 读取共享任务板和自己的角色消息池，开始自己的 Kernel Step；处理过程中通过 MCP 提交结构化结果。",
+    "如果看到系统提示 `mcp__coss: Still connecting`，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试，或直接重试 mcp__coss__coss_get_context。",
+    "不要因为 ToolSearch 暂时找不到 coss_get_context、coss_list_roles、coss_pool_read 等工具就停止；至少等待并重试 3 次。",
+    "推荐顺序：coss_get_context -> coss_get_task_board -> coss_pool_read -> coss_pool_claim -> coss_claim_step -> coss_heartbeat_step -> coss_submit_result。",
+    `完成 ${role.name} 阶段后，请写清楚结构化结果、产物、风险和交付说明；是否启动 ${downstreamRoleNames} 由 CosS Kernel 根据预规划步骤决定。`
+  ].join("\n");
+}
+
+function createInitialTaskKickoffMessages(task, taskPlan) {
+  const orchestrator = ensureTaskOrchestrator(task);
+  return (orchestrator?.steps || [])
+    .filter((step) => !step.assignedMessageId)
+    .filter((step) => uniqueStrings(step.dependsOn || []).length === 0)
+    .slice(0, 1)
+    .map((step) => createOrchestratorDispatchMessage(task, step));
 }
 
 function appendProjectMessage(project, message) {
@@ -1388,6 +2989,71 @@ function createProjectFromModal() {
   saveState();
   recordAppLog("project.created", { projectId: project.id, name: project.name, path: project.path });
   render();
+}
+
+function showDeleteProjectModal(projectId) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) {
+    return;
+  }
+
+  renderModal(`
+    <div class="modal">
+      <h2>删除项目</h2>
+      <p>这会从 CosS 项目列表中移除「${escapeHtml(project.name)}」，并关闭该项目的所有程序窗口。项目文件夹不会被删除。</p>
+      <div class="message-empty">
+        <strong>${escapeHtml(project.name)}</strong>
+        <p>${escapeHtml(project.path || "")}</p>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="secondary-button danger" data-action="confirm-delete-project" data-project-id="${escapeHtml(project.id)}">删除项目</button>
+      </div>
+    </div>
+  `);
+}
+
+function cleanupProjectRuntime(project) {
+  (project?.windows || []).forEach((win) => {
+    if (win.type === "terminal") {
+      cleanupTerminalView(win.id, true);
+    }
+    if (win.type === "browser") {
+      for (const key of Array.from(hydratedBrowserViews)) {
+        if (key.startsWith(`${win.id}:`)) {
+          hydratedBrowserViews.delete(key);
+        }
+      }
+    }
+  });
+}
+
+async function deleteProject(projectId) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) {
+    closeModal();
+    return false;
+  }
+
+  cleanupProjectRuntime(project);
+  state.deletedProjectIds = uniqueStrings([...(state.deletedProjectIds || []), projectId]);
+  state.projects = state.projects.filter((item) => item.id !== projectId);
+  if (state.activeProjectId === projectId) {
+    state.activeProjectId = state.projects[0]?.id || "";
+    focusedWindowId = null;
+    taskViewOpen = false;
+    bootingProjectId = null;
+  }
+  closeModal();
+  recordAppLog("project.deleted", {
+    projectId,
+    name: project.name,
+    path: project.path,
+    deletedFiles: false
+  });
+  await saveState();
+  render();
+  return true;
 }
 
 function createProgram(type, roleId, options = {}) {
@@ -1682,64 +3348,35 @@ function createFallbackTaskPlan(activeModel, error = "") {
   return {
     ok: false,
     source: "local-fallback",
-    summary: "使用本地规则生成任务拆解。",
+    summary: "使用本地规则生成 Kernel Step 图。",
     error,
+    neededAgentRoleIds: ["product-manager", "tech-lead"],
+    firstRoundRoleIds: ["product-manager"],
     subtasks: [
       {
-        id: uid("subtask"),
+        id: "step-1",
         roleId: "product-manager",
         title: "确认需求和验收标准",
-        description: "把用户目标整理成可执行的验收清单。"
+        description: "先把用户目标整理成可执行的需求、验收标准、协作边界和需要交接给下游 Agent 的问题。",
+        dependsOn: [],
+        status: "idle",
+        riskLevel: "low",
+        order: 1,
+        isEntryStep: true
       },
       {
-        id: uid("subtask"),
-        roleId: "backend-engineer",
-        title: "确认接口和数据边界",
-        description: "检查或实现任务所需的后端能力。"
-      },
-      {
-        id: uid("subtask"),
-        roleId: "frontend-engineer",
-        title: "实现用户界面和交互",
-        description: "完成页面、状态和接口联调。"
-      },
-      {
-        id: uid("subtask"),
-        roleId: "qa-engineer",
-        title: "验证核心流程",
-        description: "覆盖成功、失败、空状态和异常流程。"
-      },
-      {
-        id: uid("subtask"),
+        id: "step-2",
         roleId: "tech-lead",
-        title: "审查实现和风险",
-        description: "检查代码质量、权限边界和测试缺口。"
+        title: "制定技术方案和执行边界",
+        description: "基于需求文档制定架构、接口、依赖、资源锁和下游执行顺序。",
+        dependsOn: ["step-1"],
+        status: "idle",
+        riskLevel: "low",
+        order: 2,
+        isEntryStep: false
       }
     ],
-    messages: [
-      {
-        fromRoleId: "product-manager",
-        toRoleIds: ["frontend-engineer", "backend-engineer", "qa-engineer"],
-        content: error
-          ? `模型规划失败，已使用本地规则拆解。失败原因：${error}`
-          : `任务已拆解，当前规划模型：${activeModel.label} / ${activeModel.modelName}。`
-      },
-      {
-        fromRoleId: "frontend-engineer",
-        toRoleIds: ["backend-engineer"],
-        content: "需要接口字段、错误码和登录态约定。"
-      },
-      {
-        fromRoleId: "qa-engineer",
-        toRoleIds: ["frontend-engineer", "backend-engineer"],
-        content: "测试会覆盖成功、失败、空表单和网络异常。"
-      },
-      {
-        fromRoleId: "tech-lead",
-        toRoleIds: DEFAULT_TASK_ROLE_IDS.filter((roleId) => roleId !== "tech-lead"),
-        content: "实现完成后进入技术审查。"
-      }
-    ]
+    messages: []
   };
 }
 
@@ -1747,29 +3384,61 @@ function normalizeTaskPlanResult(plan, fallbackPlan) {
   const allowedRoles = new Set(ROLE_TEMPLATES.map((role) => role.id));
   const placeholderTexts = new Set(["一句话总结", "子任务标题", "子任务描述", "角色ID", "协作消息"]);
   const isPlaceholder = (value) => placeholderTexts.has(String(value || "").trim());
-  const subtasks = (Array.isArray(plan?.subtasks) ? plan.subtasks : [])
-    .map((item) => ({
-      id: item.id || uid("subtask"),
-      roleId: allowedRoles.has(item.roleId) ? item.roleId : "product-manager",
-      title: String(item.title || "").trim().slice(0, 80),
-      description: String(item.description || "").trim().slice(0, 260),
-      status: normalizeSubtaskStatus(item.status)
-    }))
+  const readRoleList = (...keys) => {
+    for (const key of keys) {
+      if (Array.isArray(plan?.[key])) {
+        const values = uniqueRoleIds(plan[key]).filter((roleId) => allowedRoles.has(roleId));
+        if (values.length > 0) {
+          return values;
+        }
+      }
+    }
+    return [];
+  };
+  const rawSubtasks = (Array.isArray(plan?.subtasks) ? plan.subtasks : [])
+    .map((item, index) => {
+      const id = String(item.id || item.stepId || `step-${index + 1}`)
+        .trim()
+        .replace(/[^\w.-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "") || `step-${index + 1}`;
+      return {
+        id,
+        roleId: allowedRoles.has(item.roleId) ? item.roleId : "product-manager",
+        title: String(item.title || "").trim().slice(0, 80),
+        description: String(item.description || "").trim().slice(0, 500),
+        dependsOn: Array.isArray(item.dependsOn)
+          ? item.dependsOn.map((value) => String(value || "").trim()).filter(Boolean)
+          : Array.isArray(item.dependencies)
+            ? item.dependencies.map((value) => String(value || "").trim()).filter(Boolean)
+            : [],
+        riskLevel: normalizeRiskLevel(item.riskLevel),
+        status: normalizeSubtaskStatus(item.status),
+        order: Number(item.order) || index + 1,
+        isEntryStep: Boolean(item.isEntryStep)
+      };
+    })
     .filter((item) => item.title && item.description && !isPlaceholder(item.title) && !isPlaceholder(item.description));
 
-  if (subtasks.length < 3) {
+  const subtasks = rawSubtasks.map((item, index) => {
+    return {
+      ...item,
+      id: `step-${index + 1}`,
+      dependsOn: index === 0 ? [] : [`step-${index}`],
+      isEntryStep: index === 0,
+      status: "idle",
+      order: index + 1
+    };
+  });
+  const effectiveFirstRoundRoleIds = subtasks[0]?.roleId ? [subtasks[0].roleId] : [];
+  if (effectiveFirstRoundRoleIds.length < 1 || subtasks.length < 1) {
     return fallbackPlan;
   }
 
-  const messages = (Array.isArray(plan?.messages) ? plan.messages : [])
-    .map((item) => ({
-      fromRoleId: allowedRoles.has(item.fromRoleId) ? item.fromRoleId : "product-manager",
-      toRoleIds: Array.isArray(item.toRoleIds)
-        ? item.toRoleIds.filter((roleId) => allowedRoles.has(roleId)).slice(0, 6)
-        : [],
-      content: String(item.content || "").trim().slice(0, 260)
-    }))
-    .filter((item) => item.content && item.toRoleIds.length > 0);
+  const neededAgentRoleIds = uniqueRoleIds([
+    ...readRoleList("neededAgentRoleIds", "agentRoleIds", "terminalRoleIds", "involvedRoleIds"),
+    ...subtasks.map((item) => item.roleId)
+  ]).filter((roleId) => allowedRoles.has(roleId));
 
   return {
     ok: Boolean(plan?.ok),
@@ -1777,30 +3446,23 @@ function normalizeTaskPlanResult(plan, fallbackPlan) {
     summary: isPlaceholder(plan?.summary) ? "" : String(plan?.summary || "").trim(),
     plannedAt: plan?.plannedAt,
     usage: plan?.usage || null,
+    neededAgentRoleIds,
+    firstRoundRoleIds: effectiveFirstRoundRoleIds,
     subtasks,
-    messages: messages.length > 0
-      ? messages
-      : [{
-          fromRoleId: "product-manager",
-          toRoleIds: subtasks.map((item) => item.roleId).filter((roleId, index, list) => roleId !== "product-manager" && list.indexOf(roleId) === index),
-          content: plan?.summary || "模型已生成任务拆解，请各角色确认执行范围。"
-        }]
+    messages: []
   };
 }
 
 function getRoleIdsFromTaskPlan(plan) {
-  const ids = new Set(DEFAULT_TASK_ROLE_IDS);
+  const ids = new Set(uniqueRoleIds(plan.neededAgentRoleIds || []));
+  (plan.firstRoundRoleIds || []).forEach((roleId) => ids.add(roleId));
   plan.subtasks.forEach((subtask) => ids.add(subtask.roleId));
-  plan.messages.forEach((message) => {
-    ids.add(message.fromRoleId);
-    message.toRoleIds.forEach((roleId) => ids.add(roleId));
-  });
-  return Array.from(ids);
+  return uniqueRoleIds(Array.from(ids));
 }
 
-async function requestTaskPlan(goal, project, activeModel) {
+async function requestTaskPlan(goal, project, activeModel, projectMemory = null) {
   if (!window.cossAPI?.planTask) {
-    return { ok: false, error: "当前运行环境未暴露 LLM Gateway。" };
+    return { ok: false, error: "当前运行环境未暴露 Kernel Planner。" };
   }
 
   return window.cossAPI.planTask({
@@ -1812,6 +3474,7 @@ async function requestTaskPlan(goal, project, activeModel) {
       modelName: activeModel.modelName,
       apiKey: activeModel.apiKey
     },
+    projectMemory,
     roles: ROLE_TEMPLATES.map((role) => ({
       id: role.id,
       name: role.name,
@@ -1835,9 +3498,10 @@ async function createTaskFromModal() {
   }
 
   const activeModel = getActiveModelConfig();
+  const projectMemory = buildProjectMemoryForPlanner(project);
   let llmResult;
   try {
-    llmResult = await requestTaskPlan(goal, project, activeModel);
+    llmResult = await requestTaskPlan(goal, project, activeModel, projectMemory);
   } catch (error) {
     llmResult = { ok: false, error: error.message };
   }
@@ -1849,6 +3513,7 @@ async function createTaskFromModal() {
     conversationId: getActiveDesktopId(project),
     goal,
     activeModel,
+    projectMemory,
     llmResult,
     taskPlan,
     createdAt: new Date().toISOString()
@@ -1876,14 +3541,18 @@ async function createTaskFromModal() {
 
 function buildTaskFromDraft(draft) {
   const taskId = uid("task");
-  const { goal, activeModel, llmResult, taskPlan } = draft;
+  const { goal, activeModel, projectMemory, llmResult, taskPlan } = draft;
   const createdAt = new Date().toISOString();
   const subtasks = taskPlan.subtasks.map((subtask, index) => ({
     ...subtask,
     roleId: getRole(subtask.roleId).id,
     title: String(subtask.title || `子任务 ${index + 1}`).trim() || `子任务 ${index + 1}`,
     description: String(subtask.description || "请根据任务目标补充执行步骤。").trim() || "请根据任务目标补充执行步骤。",
-    status: "pending",
+    dependsOn: uniqueStrings(subtask.dependsOn || []),
+    riskLevel: normalizeRiskLevel(subtask.riskLevel),
+    order: Number(subtask.order) || index + 1,
+    isEntryStep: Boolean(subtask.isEntryStep),
+    status: "idle",
     createdAt,
     updatedAt: createdAt
   }));
@@ -1894,6 +3563,7 @@ function buildTaskFromDraft(draft) {
     status: "planned",
     createdAt,
     confirmedAt: createdAt,
+    projectMemorySnapshot: projectMemory || null,
     model: {
       provider: activeModel.id,
       label: activeModel.label,
@@ -1909,13 +3579,15 @@ function buildTaskFromDraft(draft) {
       error: llmResult?.ok ? "" : (llmResult?.error || "模型规划失败。"),
       plannedAt: llmResult?.plannedAt || draft.createdAt || createdAt,
       confirmedAt: createdAt,
-      usage: taskPlan.usage || null
+      usage: taskPlan.usage || null,
+      neededAgentRoleIds: uniqueRoleIds(taskPlan.neededAgentRoleIds || []),
+      firstRoundRoleIds: uniqueRoleIds(taskPlan.firstRoundRoleIds || [])
     },
     subtasks
   });
 }
 
-function confirmTaskPlan() {
+async function confirmTaskPlan() {
   const project = getProject();
   const draft = pendingTaskPlanDraft;
   if (!project || !draft || draft.projectId !== project.id) {
@@ -1933,17 +3605,23 @@ function confirmTaskPlan() {
   task.desktopId = taskDesktop.id;
 
   project.tasks.unshift(task);
+  rebuildProjectMemory(project, "task-created");
   getProjectDesktops(project);
   project.desktops.push(taskDesktop);
   project.activeDesktopId = taskDesktop.id;
-  project.messages.push(...taskPlan.messages.map((message) => (
+  const taskPlanMessages = taskPlan.messages.map((message) => (
     createMessage(message.fromRoleId, message.toRoleIds, message.content, task.id, {
       source: "task-plan",
       channelType: "task"
     })
-  )));
+  ));
+  const kickoffMessages = createInitialTaskKickoffMessages(task, taskPlan);
+  const createdMessages = [...kickoffMessages, ...taskPlanMessages];
+  project.messages.push(...createdMessages);
 
   ensureRoleWindowsForTask(project, selectedRoles, taskDesktop.id);
+  await persistAgentPoolMessages(project, createdMessages, "task-plan-confirm");
+  ensureAgentAutoWorkflowRunning("task-plan-confirm");
   closeModal();
   pendingTaskPlanDraft = null;
   saveState();
@@ -1966,12 +3644,19 @@ function confirmTaskPlan() {
     projectId: project.id,
     taskId: task.id,
     source: "task-plan",
-    count: taskPlan.messages.length
+    count: createdMessages.length,
+    kickoffCount: kickoffMessages.length,
+    planMessageCount: taskPlanMessages.length,
+    firstRoundRoleIds: kickoffMessages.flatMap((message) => message.toRoleIds)
   });
   render();
+  scheduleAgentAutoWorkflowForMessages(kickoffMessages, "task-kickoff");
+  setTimeout(() => {
+    ensureProjectMcpConfigAfterTaskCreated(task);
+  }, 150);
 }
 
-function confirmTaskPlanInConversation() {
+async function confirmTaskPlanInConversation() {
   const project = getProject();
   const draft = pendingTaskPlanDraft;
   if (!project || !draft || draft.projectId !== project.id) {
@@ -1989,20 +3674,26 @@ function confirmTaskPlanInConversation() {
   setTaskConversation(task, conversationId);
 
   project.tasks.unshift(task);
+  rebuildProjectMemory(project, "conversation-task-created");
   if (conversation) {
     conversation.taskIds = uniqueStrings([task.id, ...(conversation.taskIds || [])]);
     conversation.taskId = conversation.taskId || task.id;
     conversation.lastTaskId = task.id;
   }
   project.activeDesktopId = conversationId;
-  project.messages.push(...taskPlan.messages.map((message) => (
+  const taskPlanMessages = taskPlan.messages.map((message) => (
     createMessage(message.fromRoleId, message.toRoleIds, message.content, task.id, {
       source: "task-plan",
       channelType: "task"
     })
-  )));
+  ));
+  const kickoffMessages = createInitialTaskKickoffMessages(task, taskPlan);
+  const createdMessages = [...kickoffMessages, ...taskPlanMessages];
+  project.messages.push(...createdMessages);
 
   ensureRoleWindowsForTask(project, selectedRoles, conversationId);
+  await persistAgentPoolMessages(project, createdMessages, "conversation-task-confirm");
+  ensureAgentAutoWorkflowRunning("conversation-task-confirm");
   closeModal();
   pendingTaskPlanDraft = null;
   saveState();
@@ -2027,9 +3718,118 @@ function confirmTaskPlanInConversation() {
     projectId: project.id,
     taskId: task.id,
     source: "task-plan",
-    count: taskPlan.messages.length
+    count: createdMessages.length,
+    kickoffCount: kickoffMessages.length,
+    planMessageCount: taskPlanMessages.length,
+    firstRoundRoleIds: kickoffMessages.flatMap((message) => message.toRoleIds)
   });
   render();
+  scheduleAgentAutoWorkflowForMessages(kickoffMessages, "task-kickoff");
+  setTimeout(() => {
+    ensureProjectMcpConfigAfterTaskCreated(task);
+  }, 150);
+}
+
+async function executeKernelSubtask(taskId, subtaskId) {
+  const project = getProject();
+  const task = project?.tasks.find((item) => item.id === taskId);
+  const subtask = task?.subtasks.find((item) => item.id === subtaskId);
+  if (!project || !task || !subtask) {
+    return { ok: false, reason: "subtask-not-found" };
+  }
+  if (!canManuallyExecuteKernelSubtask(task, subtask)) {
+    recordAppLog("kernel.step.manual-execute.rejected", {
+      projectId: project.id,
+      taskId,
+      subtaskId,
+      reason: "step-not-dispatched"
+    }, "warn");
+    return { ok: false, reason: "step-not-dispatched" };
+  }
+
+  const orchestrator = ensureTaskOrchestrator(task);
+  const step = findKernelStepForSubtask(task, subtask);
+  if (!orchestrator || !step) {
+    return { ok: false, reason: "kernel-step-not-found" };
+  }
+
+  const roleId = getRole(step.roleId || subtask.roleId).id;
+  const desktopId = getTaskConversationId(task) || getActiveDesktopId(project);
+  const previousMessageId = step.assignedMessageId || subtask.assignedMessageId || "";
+  const now = new Date().toISOString();
+  let releasedCount = 0;
+  let canceledCount = 0;
+
+  project.agentDeliveries ||= [];
+  project.agentDeliveries.forEach((delivery) => {
+    const sameStep = delivery.taskId === task.id
+      && (delivery.subtaskId === subtask.id || (previousMessageId && delivery.messageId === previousMessageId));
+    if (!sameStep) {
+      return;
+    }
+    const status = normalizeDeliveryStatus(delivery.status);
+    if (status === "pending") {
+      delivery.status = "canceled";
+      delivery.canceledAt = now;
+      delivery.updatedAt = now;
+      delivery.lastFeedback = "Canceled by manual Kernel subtask execution.";
+      canceledCount += 1;
+      return;
+    }
+    if (isAgentDeliveryInProgress(delivery)) {
+      const win = project.windows.find((item) => item.id === delivery.windowId);
+      if (win && releaseActiveAgentDelivery(project, win, delivery, "manual-subtask-execute")) {
+        releasedCount += 1;
+      }
+    }
+  });
+
+  step.assignedMessageId = "";
+  step.claimedBy = "";
+  step.lease = null;
+  step.status = "idle";
+  step.phase = "idle";
+  step.updatedAt = now;
+  subtask.assignedMessageId = "";
+  subtask.status = "idle";
+  subtask.updatedAt = now;
+  task.updatedAt = now;
+  setTaskStatusFromKernelProjection(task);
+
+  ensureRoleWindowsForTask(project, [roleId], desktopId);
+  const message = createOrchestratorDispatchMessage(task, step);
+  project.messages ||= [];
+  project.messages.push(message);
+  appendRendererKernelEvent(project, task, {
+    type: "renderer.step.manual-dispatch",
+    roleId,
+    stepId: step.id,
+    subtaskId: subtask.id,
+    payload: {
+      messageId: message.id,
+      previousMessageId,
+      releasedCount,
+      canceledCount,
+      source: "manual-execute-button"
+    }
+  });
+  await persistAgentPoolMessages(project, [message], "manual-subtask-execute");
+  ensureAgentAutoWorkflowRunning("manual-subtask-execute");
+  recordAppLog("kernel.step.manual-execute", {
+    projectId: project.id,
+    taskId: task.id,
+    subtaskId: subtask.id,
+    stepId: step.id,
+    roleId,
+    messageId: message.id,
+    previousMessageId,
+    releasedCount,
+    canceledCount
+  });
+  saveState();
+  render();
+  scheduleAgentAutoWorkflowForMessages([message], "manual-subtask-execute");
+  return { ok: true, messageId: message.id };
 }
 
 function updateSubtaskStatus(taskId, subtaskId, nextStatus) {
@@ -2041,19 +3841,6 @@ function updateSubtaskStatus(taskId, subtaskId, nextStatus) {
     return;
   }
   const previousStatus = normalizeSubtaskStatus(subtask.status);
-  const nowDate = new Date();
-  const lastChangedAt = Date.parse(subtask.lastStatusChangedAt || subtask.updatedAt || "");
-  if (status === "blocked" && previousStatus === "running" && Number.isFinite(lastChangedAt) && nowDate.getTime() - lastChangedAt < 900) {
-    recordAppLog("subtask.status.guard_ignored", {
-      projectId: project.id,
-      taskId,
-      subtaskId,
-      previousStatus,
-      requestedStatus: status,
-      reason: "recent-running-transition"
-    }, "warn");
-    return;
-  }
   if (status === previousStatus) {
     recordAppLog("subtask.status.unchanged", {
       projectId: project.id,
@@ -2064,11 +3851,11 @@ function updateSubtaskStatus(taskId, subtaskId, nextStatus) {
     return;
   }
 
-  subtask.status = status;
-  subtask.updatedAt = nowDate.toISOString();
-  subtask.lastStatusChangedAt = subtask.updatedAt;
-  task.status = deriveTaskStatus(task.subtasks);
-  task.updatedAt = subtask.updatedAt;
+  applyKernelStepStatusAction(project, task, subtask, status, {
+    type: "renderer.step.status.changed",
+    source: "manual-task-action",
+    renewLease: status === "running"
+  });
 
   const windowStatus = SUBTASK_STATUS_DEFS[status].windowStatus;
   project.windows
@@ -2163,18 +3950,208 @@ function getWindowStatus(win) {
   return win.status || "idle";
 }
 
-function normalizeAgentEventStatus(status) {
+function getRelayStageDef(stage) {
+  return AGENT_RELAY_STAGES[stage] || AGENT_RELAY_STAGES.idle;
+}
+
+function getRelayStageLabel(stage) {
+  return getRelayStageDef(stage).label;
+}
+
+function getRelayStageSymbol(stage) {
+  return getRelayStageDef(stage).symbol;
+}
+
+function getRelayStageClass(stage) {
+  return getRelayStageDef(stage).className;
+}
+
+function getMessageRelayStageForRole(project, message, roleId) {
+  const normalizedRoleId = getRole(roleId).id;
+  const deliveries = (project?.agentDeliveries || []).filter((delivery) => (
+    delivery.messageId === message.id && delivery.roleId === normalizedRoleId
+  ));
+  if (deliveries.some((delivery) => ["completed"].includes(delivery.status))) {
+    return "done";
+  }
+  if (deliveries.some((delivery) => ["submitted", "responded", "waiting", "sent"].includes(delivery.status))) {
+    return "running";
+  }
+  if ((message.readBy || []).includes(normalizedRoleId) || message.agentPoolStatus === "running") {
+    return "running";
+  }
+  if (message.agentPoolPaths?.[normalizedRoleId]) {
+    return "idle";
+  }
+  return "idle";
+}
+
+function getAgentRelayStageForWindow(win) {
+  const project = getProject();
+  if (!project || normalizeTerminalMode(win.terminalMode) !== "agent") {
+    const fallbackStatus = getWindowStatus(win);
+    const fallbackStage = fallbackStatus === "done" ? "done" : "idle";
+    return {
+      stage: fallbackStage,
+      label: getRelayStageLabel(fallbackStage),
+      className: getRelayStageClass(fallbackStage),
+      symbol: getRelayStageSymbol(fallbackStage)
+    };
+  }
+
+  const taskContext = getTaskContextForWindow(win, project);
+  const roleId = win.roleId;
+  const candidates = [];
+  const addCandidate = (stage, time, source = "") => {
+    const ms = new Date(time || 0).getTime();
+    candidates.push({
+      stage,
+      time: Number.isFinite(ms) ? ms : 0,
+      source
+    });
+  };
+
+  const kernelTasks = taskContext.taskId
+    ? (project.tasks || []).filter((task) => task.id === taskContext.taskId)
+    : getConversationTasks(project, win.desktopId);
+  kernelTasks.forEach((task) => {
+    getTaskKernelProjection(task).steps
+      .filter((step) => step.roleId === roleId)
+      .forEach((step) => {
+        addCandidate(
+          kernelPhaseToRelayStage(step.phase),
+          step.lease?.heartbeatAt || step.updatedAt || task.updatedAt || task.createdAt,
+          `kernel-step:${step.id}`
+        );
+      });
+  });
+
+  (project.messages || []).forEach((message) => {
+    if (taskContext.taskId && message.taskId && message.taskId !== taskContext.taskId) {
+      return;
+    }
+    if (message.toRoleIds?.includes(roleId)) {
+      addCandidate(getMessageRelayStageForRole(project, message, roleId), message.injectedAt || message.createdAt, `message:${message.id}`);
+    }
+    if (message.fromRoleId === roleId && (message.toRoleIds || []).length > 0) {
+      addCandidate("running", message.createdAt, `outgoing:${message.id}`);
+    }
+  });
+
+  (project.agentDeliveries || [])
+    .filter((delivery) => delivery.windowId === win.id || delivery.roleId === roleId)
+    .filter((delivery) => !taskContext.taskId || !delivery.taskId || delivery.taskId === taskContext.taskId)
+    .forEach((delivery) => {
+      if (["pending"].includes(delivery.status)) {
+        addCandidate("idle", delivery.updatedAt || delivery.createdAt, `delivery:${delivery.id}`);
+      } else if (["submitted", "sent", "responded", "waiting"].includes(delivery.status)) {
+        addCandidate("running", delivery.updatedAt || delivery.submittedAt || delivery.createdAt, `delivery:${delivery.id}`);
+      } else if (delivery.status === "completed") {
+        addCandidate("done", delivery.completedAt || delivery.updatedAt || delivery.createdAt, `delivery:${delivery.id}`);
+      } else if (delivery.status === "failed") {
+        addCandidate("running", delivery.updatedAt || delivery.createdAt, `delivery:${delivery.id}`);
+      }
+    });
+
+  (project.agentEvents || [])
+    .filter((event) => event.roleId === roleId || event.fromRoleId === roleId)
+    .filter((event) => !taskContext.taskId || !event.taskId || event.taskId === taskContext.taskId)
+    .forEach((event) => {
+      const status = normalizeAgentEventStatus(event.status);
+      if (status === "running") {
+        addCandidate("running", event.receivedAt, `event:${event.id}`);
+      } else if (status === "done") {
+        addCandidate("done", event.receivedAt, `event:${event.id}`);
+      }
+    });
+
+  const activeDelivery = getActiveAgentDeliveryForWindow(project, win.id);
+  if (activeDelivery) {
+    addCandidate("running", new Date().toISOString(), `active:${activeDelivery.id}`);
+  }
+
+  const selected = candidates
+    .filter((item) => item.stage && item.stage !== "idle")
+    .sort((a, b) => b.time - a.time)[0] || { stage: "idle", time: 0, source: "" };
   return {
-    running: "running",
-    waiting: "waiting",
-    wait: "waiting",
-    approval: "waiting",
-    "needs-approval": "waiting",
-    needs_approval: "waiting",
-    done: "done",
-    blocked: "blocked",
-    failed: "blocked"
-  }[status] || "";
+    ...selected,
+    label: getRelayStageLabel(selected.stage),
+    className: getRelayStageClass(selected.stage),
+    symbol: getRelayStageSymbol(selected.stage)
+  };
+}
+
+function renderRelayStageChips(project, message) {
+  const targetChips = uniqueRoleIds(message.toRoleIds || []).map((roleId) => {
+    const stage = getMessageRelayStageForRole(project, message, roleId);
+    return `<span class="relay-stage-chip ${escapeHtml(getRelayStageClass(stage))}">${escapeHtml(getRole(roleId).name)} · ${escapeHtml(getRelayStageLabel(stage))}</span>`;
+  });
+  const sourceChip = message.fromRoleId && message.toRoleIds?.length
+    ? `<span class="relay-stage-chip delegated">${escapeHtml(getRole(message.fromRoleId).name)} · ${escapeHtml(getRelayStageLabel("delegated"))}</span>`
+    : "";
+  return `<div class="relay-stage-list">${sourceChip}${targetChips.join("")}</div>`;
+}
+
+function getFlowRoleLabel(roleId) {
+  return roleId === "human" ? "人工" : getRole(roleId).name;
+}
+
+function getFlowMessageFromId(message) {
+  return message.source === "manual" ? "human" : message.fromRoleId;
+}
+
+function getFlowEdgeKey(fromId, toId) {
+  return `${fromId || "human"}->${toId || ""}`;
+}
+
+function parseFlowEdgeKey(edgeKey = "") {
+  const [fromId = "", toId = ""] = String(edgeKey).split("->");
+  return { fromId, toId };
+}
+
+function messageMatchesFlowEdge(message, edgeKey) {
+  if (!edgeKey) {
+    return true;
+  }
+  const fromId = getFlowMessageFromId(message);
+  return uniqueRoleIds(message.toRoleIds || []).some((toRoleId) => (
+    getFlowEdgeKey(fromId, toRoleId) === edgeKey
+  ));
+}
+
+function messageMatchesFlowRole(message, roleId) {
+  if (!roleId) {
+    return true;
+  }
+  return getFlowMessageFromId(message) === roleId || uniqueRoleIds(message.toRoleIds || []).includes(roleId);
+}
+
+function itemMatchesMessageFlowSelection(item, selection = messageFlowSelection) {
+  const roleId = selection.roleId || "";
+  const edgeKey = selection.edgeKey || "";
+  if (!roleId && !edgeKey) {
+    return true;
+  }
+
+  if (item.kind === "message") {
+    return edgeKey
+      ? messageMatchesFlowEdge(item.message, edgeKey)
+      : messageMatchesFlowRole(item.message, roleId);
+  }
+
+  const event = item.event;
+  if (edgeKey) {
+    const { fromId, toId } = parseFlowEdgeKey(edgeKey);
+    return (event.fromRoleId || event.roleId) === fromId && uniqueRoleIds(event.toRoleIds || []).includes(toId);
+  }
+
+  return event.roleId === roleId
+    || event.fromRoleId === roleId
+    || uniqueRoleIds(event.toRoleIds || []).includes(roleId);
+}
+
+function normalizeAgentEventStatus(status) {
+  return ["idle", "running", "done"].includes(status) ? status : "";
 }
 
 function applyAgentEventToState(event) {
@@ -2208,31 +4185,60 @@ function applyAgentEventToState(event) {
 
   let createdMessage = null;
   if (storedEvent.structured && storedEvent.type !== "structured-parse-error" && storedEvent.message) {
-    let toRoleIds = uniqueRoleIds(storedEvent.toRoleIds).filter((roleId) => roleId !== fromRoleId);
-    if (toRoleIds.length === 0) {
-      toRoleIds = uniqueRoleIds(["product-manager", "tech-lead"]).filter((roleId) => roleId !== fromRoleId);
+    const rawTargets = Array.isArray(storedEvent.toRoleIds) ? storedEvent.toRoleIds : [];
+    const invalidTargets = rawTargets
+      .map((roleId) => String(roleId || "").trim())
+      .filter((roleId) => roleId && !ROLE_TEMPLATES.some((role) => role.id === roleId));
+    let toRoleIds = uniqueRoleIds(rawTargets).filter((roleId) => roleId !== fromRoleId);
+    if (invalidTargets.length > 0) {
+      recordAppLog("agent.event.invalid_target_roles", {
+        projectId: project.id,
+        windowId: win.id,
+        fromRoleId,
+        invalidTargets: Array.from(new Set(invalidTargets)),
+        allowedRoleIds: ROLE_TEMPLATES.map((role) => role.id),
+        taskId: storedEvent.taskId || ""
+      }, "warn");
     }
     if (toRoleIds.length > 0) {
-      createdMessage = appendProjectMessage(
-        project,
-        createMessage(fromRoleId, toRoleIds, storedEvent.message, storedEvent.taskId || null, {
-          source: "agent-event",
-          channelType: storedEvent.taskId ? "task" : "direct",
-          createdAt: storedEvent.receivedAt,
-          readBy: [fromRoleId]
-        })
-      );
+      const eventTask = project.tasks.find((item) => item.id === (storedEvent.taskId || win.agentSession?.taskId || ""));
+      const orchestrator = ensureTaskOrchestrator(eventTask);
+      orchestrator?.events.push({
+        id: uid("orch-event"),
+        type: "agent-suggested-downstream",
+        roleId: fromRoleId,
+        suggestedRoleIds: toRoleIds,
+        message: storedEvent.message,
+        createdAt: storedEvent.receivedAt
+      });
+      if (orchestrator?.events.length > 120) {
+        orchestrator.events = orchestrator.events.slice(-120);
+      }
+    recordAppLog("orchestrator.direct_agent_message.ignored", {
+        projectId: project.id,
+        taskId: storedEvent.taskId || "",
+        fromRoleId,
+        suggestedRoleIds: toRoleIds,
+        reason: "Agents may suggest downstream roles, but CosS Kernel must schedule them."
+      }, "warn");
     }
   }
 
-  const task = project.tasks.find((item) => item.id === storedEvent.taskId) || findTaskForDesktop(project, win.desktopId);
+  const activeDeliveryForSubtask = project.agentDeliveries?.find((delivery) => delivery.id === win.lastAgentDeliveryId);
+  const activeMessageForSubtask = project.messages?.find((message) => message.id === activeDeliveryForSubtask?.messageId);
+  const task = project.tasks.find((item) => item.id === storedEvent.taskId)
+    || project.tasks.find((item) => item.id === activeDeliveryForSubtask?.taskId)
+    || findTaskForDesktop(project, win.desktopId);
   const subtask = task?.subtasks.find((item) => item.id === storedEvent.subtaskId)
+    || task?.subtasks.find((item) => item.id === activeDeliveryForSubtask?.subtaskId)
+    || task?.subtasks.find((item) => activeMessageForSubtask?.id && item.sourceMessageId === activeMessageForSubtask.id && item.roleId === win.roleId)
+    || task?.subtasks.find((item) => activeMessageForSubtask?.subtaskRefs?.[win.roleId] && item.id === activeMessageForSubtask.subtaskRefs[win.roleId])
     || task?.subtasks.find((item) => item.roleId === win.roleId && normalizeSubtaskStatus(item.status) !== "done")
     || task?.subtasks.find((item) => item.roleId === win.roleId);
-  const ignoresWaitingResume = Boolean(task && subtask && status === "running" && normalizeSubtaskStatus(subtask.status) === "waiting");
+  const ignoresWaitingResume = false;
 
   if (status && !ignoresWaitingResume) {
-    win.status = SUBTASK_STATUS_DEFS[status]?.windowStatus || (status === "failed" ? "blocked" : "working");
+    win.status = SUBTASK_STATUS_DEFS[status]?.windowStatus || "working";
     if (win.agentSession) {
       win.agentSession.lastEventAt = storedEvent.receivedAt;
     }
@@ -2248,21 +4254,41 @@ function applyAgentEventToState(event) {
   }
 
   if (task && subtask && status && !ignoresWaitingResume) {
-    subtask.status = status;
-    subtask.updatedAt = storedEvent.receivedAt;
-    subtask.lastStatusChangedAt = storedEvent.receivedAt;
-    task.status = deriveTaskStatus(task.subtasks);
-    task.updatedAt = storedEvent.receivedAt;
+    applyKernelStepStatusAction(project, task, subtask, status, {
+      at: storedEvent.receivedAt,
+      type: "renderer.agent-event.status",
+      source: "agent-event",
+      renewLease: status === "running",
+      eventId: storedEvent.id
+    });
   }
 
-  const activeDelivery = project.agentDeliveries?.find((delivery) => delivery.id === win.lastAgentDeliveryId);
+  const activeDelivery = activeDeliveryForSubtask || project.agentDeliveries?.find((delivery) => delivery.id === win.lastAgentDeliveryId);
+  if (activeDelivery && subtask) {
+    activeDelivery.subtaskId ||= subtask.id;
+  }
   if (activeDelivery && ["sent", "submitted", "responded", "waiting"].includes(activeDelivery.status) && !ignoresWaitingResume) {
     const previousDeliveryStatus = activeDelivery.status;
     if (status === "waiting") {
       activeDelivery.status = "waiting";
       activeDelivery.waitingAt = storedEvent.receivedAt;
       activeDelivery.lastFeedback = "Agent 正在等待人工确认。";
-    } else if (["running", "done", "blocked"].includes(status) && activeDelivery.status !== "responded") {
+    } else if (status === "done") {
+      activeDelivery.status = "completed";
+      activeDelivery.completedAt = storedEvent.receivedAt;
+      activeDelivery.completionStatus = status;
+      activeDelivery.respondedAt ||= storedEvent.receivedAt;
+      activeDelivery.stuckDetectedAt = "";
+      activeDelivery.lastFeedback = "Agent completed this delivery.";
+      if (deliveryStuckTimers.has(activeDelivery.id)) {
+        clearTimeout(deliveryStuckTimers.get(activeDelivery.id));
+        deliveryStuckTimers.delete(activeDelivery.id);
+      }
+      if (win.lastAgentDeliveryId === activeDelivery.id) {
+        win.lastAgentDeliveryId = "";
+        win.lastInjectedMessageId = "";
+      }
+    } else if (["running"].includes(status) && activeDelivery.status !== "responded") {
       activeDelivery.status = "responded";
       activeDelivery.respondedAt = storedEvent.receivedAt;
       activeDelivery.lastFeedback = "Agent 已产生结构化事件。";
@@ -2303,9 +4329,22 @@ function applyAgentEventToState(event) {
       toRoleIds: createdMessage.toRoleIds,
       source: createdMessage.source
     });
+    persistAgentPoolMessages(project, [createdMessage], "agent-event")
+      .then(() => saveState())
+      .catch((error) => {
+        recordAppLog("agent.pool.persist.error", {
+          projectId: project.id,
+          messageId: createdMessage.id,
+          error: error.message
+        }, "error");
+      });
+    scheduleAgentAutoWorkflow(createdMessage.id, storedEvent.id);
   }
   saveState();
   render();
+  if (status === "done" && !ignoresWaitingResume) {
+    scheduleAgentDeliveryQueueDrain(win.id, 350);
+  }
   return true;
 }
 
@@ -2415,14 +4454,20 @@ function showCreateTaskModal() {
 
 function renderTaskPlanPreviewModal(draft) {
   const plan = draft.taskPlan;
-  const sourceLabel = draft.llmResult?.ok ? "LLM Gateway" : "本地降级";
+  const sourceLabel = draft.llmResult?.ok ? "Kernel Planner" : "本地降级";
+  const neededAgentRoleIds = uniqueRoleIds(plan.neededAgentRoleIds || []);
+  const firstRoundRoleIds = getInitialCoordinatorRoleIds(plan, { subtasks: plan.subtasks || [] });
+  const neededAgentLabel = neededAgentRoleIds.map((roleId) => getRole(roleId).name).join("、");
+  const firstRoundLabel = firstRoundRoleIds.map((roleId) => getRole(roleId).name).join("、");
   renderModal(`
     <div class="modal task-plan-modal">
-      <h2>确认任务计划</h2>
-      <p>请先检查模型拆解结果。确认后，CosS 才会创建任务、分派角色并打开对应程序。</p>
+      <h2>确认 Kernel 线性工作流</h2>
+      <p>Kernel Planner 会在创建任务时生成完整线性 Step；CosS 每次只投递一个 Step，当前 Agent 完成后再启动下一步。</p>
       <div class="task-plan-summary">
         <strong>${escapeHtml(sourceLabel)} · ${escapeHtml(draft.activeModel.label)} / ${escapeHtml(draft.activeModel.modelName)}</strong>
         <span>${escapeHtml(plan.summary || "模型已生成任务计划。")}</span>
+        <span>需要 Agent：${escapeHtml(neededAgentLabel || "系统自动选择")}</span>
+        <span>入口 Agent：${escapeHtml(firstRoundLabel || "系统自动选择")}</span>
         ${draft.llmResult?.ok ? "" : `<em>${escapeHtml(draft.llmResult?.error || "模型规划失败，已使用本地规则。")}</em>`}
       </div>
       <div class="task-plan-list">
@@ -2446,6 +4491,9 @@ function renderTaskPlanPreviewModal(draft) {
                 <span>子任务描述</span>
                 <textarea data-plan-field="description" data-plan-index="${index}">${escapeHtml(subtask.description)}</textarea>
               </label>
+              <div class="task-plan-dependency">
+                依赖：${subtask.dependsOn?.length ? escapeHtml(subtask.dependsOn.join("、")) : "入口 Step"}
+              </div>
               <div class="task-plan-item-actions">
                 <button class="secondary-button compact" data-action="delete-task-plan-subtask" data-plan-index="${index}" ${plan.subtasks.length <= 1 ? "disabled" : ""}>删除子任务</button>
               </div>
@@ -2515,8 +4563,7 @@ function deletePendingTaskPlanSubtask(index) {
 }
 
 function getMessageTaskLabel(taskId) {
-  const task = getProject()?.tasks.find((item) => item.id === taskId);
-  return task ? `任务：${task.title}` : "私聊";
+  return taskId ? `任务ID：${taskId}` : "私聊";
 }
 
 function getCurrentTaskFilterId(project = getProject()) {
@@ -2556,15 +4603,14 @@ function getDefaultMessageRoles(defaults = {}) {
   return { fromRoleId, toRoleId };
 }
 
-function getRunningAgentWindowsForRole(project, roleId, taskId = "") {
+function getAgentWindowsForRole(project, roleId, taskId = "", options = {}) {
   const task = taskId ? project?.tasks?.find((item) => item.id === taskId) : null;
   const conversationId = getTaskConversationId(task);
-  return (project?.windows || [])
+  const windows = (project?.windows || [])
     .filter((win) => win.type === "terminal")
     .filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
     .filter((win) => win.roleId === roleId)
     .filter((win) => !conversationId || win.desktopId === conversationId || win.agentSession?.taskId === taskId)
-    .filter((win) => terminalBackendIds.has(win.id))
     .sort((a, b) => {
       const aMatchesTask = taskId && (a.agentSession?.taskId === taskId || getTaskContextForWindow(a, project).taskId === taskId);
       const bMatchesTask = taskId && (b.agentSession?.taskId === taskId || getTaskContextForWindow(b, project).taskId === taskId);
@@ -2578,11 +4624,735 @@ function getRunningAgentWindowsForRole(project, roleId, taskId = "") {
       }
       return normalizeZIndex(b.z) - normalizeZIndex(a.z);
     });
+  return options.requireInjectable
+    ? windows.filter((win) => isAgentTerminalInjectable(win))
+    : windows;
+}
+
+function getRunningAgentWindowsForRole(project, roleId, taskId = "") {
+  return getAgentWindowsForRole(project, roleId, taskId, { requireInjectable: true });
+}
+
+function isAgentDeliveryInProgress(delivery) {
+  return ["sent", "submitted", "responded", "waiting"].includes(normalizeDeliveryStatus(delivery?.status));
+}
+
+function getDeliveryTimeMs(delivery) {
+  const value = delivery?.updatedAt || delivery?.submittedAt || delivery?.sentAt || delivery?.createdAt || "";
+  const time = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function getTaskForDelivery(project, delivery) {
+  if (!project || !delivery?.taskId) {
+    return null;
+  }
+  return (project.tasks || []).find((task) => task.id === delivery.taskId) || null;
+}
+
+function shouldAutoReleaseActiveDelivery(project, win, delivery, options = {}) {
+  if (!project || !win || !delivery || !isAgentDeliveryInProgress(delivery)) {
+    return false;
+  }
+  const status = normalizeDeliveryStatus(delivery.status);
+  if (status === "waiting") {
+    return false;
+  }
+  if (options.force === true) {
+    return true;
+  }
+  if (delivery.stuckDetectedAt) {
+    return true;
+  }
+  const task = getTaskForDelivery(project, delivery);
+  if (task && normalizeSubtaskStatus(task.status) === "done") {
+    return true;
+  }
+  if (["idle", "done"].includes(win.status || "")) {
+    return true;
+  }
+  const ageMs = Date.now() - getDeliveryTimeMs(delivery);
+  if (status === "responded" && ageMs > 15000) {
+    return true;
+  }
+  if (status === "submitted" && ageMs > 60000 && isCodeBuddyTerminalPromptReady(win)) {
+    return true;
+  }
+  return false;
+}
+
+function releaseActiveAgentDelivery(project, win, delivery, reason = "auto-release") {
+  if (!project || !win || !delivery) {
+    return false;
+  }
+  const now = new Date().toISOString();
+  const previousStatus = delivery.status;
+  delivery.status = reason === "task-ended" || previousStatus === "responded" ? "completed" : "failed";
+  delivery.completedAt ||= now;
+  delivery.completionStatus ||= reason;
+  delivery.updatedAt = now;
+  delivery.stuckDetectedAt = "";
+  delivery.lastFeedback = `Released stale active delivery before continuing queue: ${reason}.`;
+  if (delivery.status === "failed") {
+    delivery.lastError = `Released before next Agent delivery: ${reason}.`;
+  }
+  if (win.lastAgentDeliveryId === delivery.id) {
+    win.lastAgentDeliveryId = "";
+    win.lastInjectedMessageId = "";
+  }
+  if (deliveryStuckTimers.has(delivery.id)) {
+    clearTimeout(deliveryStuckTimers.get(delivery.id));
+    deliveryStuckTimers.delete(delivery.id);
+  }
+  recordAppLog("agent.delivery.active-released", {
+    projectId: project.id,
+    windowId: win.id,
+    roleId: win.roleId,
+    deliveryId: delivery.id,
+    messageId: delivery.messageId,
+    previousStatus,
+    status: delivery.status,
+    reason
+  }, "warn");
+  return true;
+}
+
+function getActiveAgentDeliveryForWindow(project, windowId, excludeDeliveryId = "") {
+  return (project?.agentDeliveries || []).find((delivery) => (
+    delivery.windowId === windowId
+    && delivery.id !== excludeDeliveryId
+    && isAgentDeliveryInProgress(delivery)
+  )) || null;
+}
+
+function getPendingAutoWorkflowDeliveriesForWindow(project, windowId) {
+  return (project?.agentDeliveries || [])
+    .filter((delivery) => (
+      delivery.windowId === windowId
+      && delivery.autoWorkflow
+      && normalizeDeliveryStatus(delivery.status) === "pending"
+      && project.messages?.some((message) => message.id === delivery.messageId)
+    ))
+    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+}
+
+function getPreferredAgentWindowForRole(project, roleId, taskId = "") {
+  const windows = getRunningAgentWindowsForRole(project, roleId, taskId);
+  if (windows.length === 0) {
+    return null;
+  }
+  return windows.find((win) => !getActiveAgentDeliveryForWindow(project, win.id)) || windows[0];
+}
+
+function isAgentTerminalInjectable(win) {
+  if (!win || !terminalBackendReadyIds.has(win.id)) {
+    return false;
+  }
+  const activeMode = String(terminalBackendActiveModes.get(win.id) || "").toLowerCase();
+  if (["error", "installing", "static", "shell"].includes(activeMode)) {
+    return false;
+  }
+  return true;
+}
+
+function getTerminalRecentOutput(windowId) {
+  return stripTerminalControlChars(terminalRecentOutput.get(windowId) || "");
+}
+
+function isCodeBuddyTerminalPromptReady(win) {
+  if (!isCodeBuddyAgentWindow(win)) {
+    return true;
+  }
+  if (String(terminalBackendActiveModes.get(win.id) || "").toLowerCase() === "mock") {
+    return true;
+  }
+  const recentOutput = getTerminalRecentOutput(win.id);
+  if (!recentOutput) {
+    return false;
+  }
+  return /CodeBuddy Code|Recent activity|Press\s+(?:Esc|Ctrl|\/)|^\s*>/im.test(recentOutput);
+}
+
+async function waitForAgentTerminalInteractiveReady(win, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isAgentTerminalInjectable(win)) {
+      await wait(120);
+      continue;
+    }
+    if (isCodeBuddyTerminalPromptReady(win)) {
+      if (isCodeBuddyAgentWindow(win)) {
+        await wait(700);
+      }
+      return true;
+    }
+    await wait(160);
+  }
+  return isAgentTerminalInjectable(win) && (!isCodeBuddyAgentWindow(win) || isCodeBuddyTerminalPromptReady(win));
 }
 
 function getInjectableWindowsForMessage(project, message) {
   return uniqueRoleIds(message?.toRoleIds || [])
-    .flatMap((roleId) => getRunningAgentWindowsForRole(project, roleId, message?.taskId || ""));
+    .map((roleId) => getPreferredAgentWindowForRole(project, roleId, message?.taskId || ""))
+    .filter(Boolean);
+}
+
+function isAgentAutoWorkflowActive() {
+  return state.settings.agentAutoWorkflowEnabled === true && state.settings.agentAutoWorkflowPaused !== true;
+}
+
+function getAgentAutoWorkflowStatusLabel() {
+  if (!state.settings.agentAutoWorkflowEnabled) {
+    return "未开启";
+  }
+  return state.settings.agentAutoWorkflowPaused ? "已中止" : "运行中";
+}
+
+function ensureAgentAutoWorkflowRunning(reason = "auto-start") {
+  state.settings ||= {};
+  const wasEnabled = state.settings.agentAutoWorkflowEnabled === true;
+  const wasPaused = state.settings.agentAutoWorkflowPaused === true;
+  state.settings.agentAutoWorkflowEnabled = true;
+  state.settings.agentAutoWorkflowPaused = false;
+  if (!wasEnabled || wasPaused) {
+    recordAppLog("agent.workflow.auto-started", {
+      projectId: state.activeProjectId || "",
+      reason,
+      wasEnabled,
+      wasPaused
+    });
+  }
+}
+
+async function waitForAutoWorkflowTargets(message, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  const project = getProject();
+  const roleIds = uniqueRoleIds(message?.toRoleIds || []);
+  while (Date.now() < deadline) {
+    const ready = roleIds.every((roleId) => getRunningAgentWindowsForRole(project, roleId, message?.taskId || "").length > 0);
+    if (ready) {
+      return true;
+    }
+    await wait(120);
+  }
+  return roleIds.every((roleId) => getRunningAgentWindowsForRole(project, roleId, message?.taskId || "").length > 0);
+}
+
+async function waitForAutoWorkflowTargetInteractivity(message, timeoutMs = 14000) {
+  const project = getProject();
+  const targets = getInjectableWindowsForMessage(project, message);
+  if (targets.length === 0) {
+    return { ok: false, reason: "no-injectable-agent-terminal" };
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  for (const win of targets) {
+    const remaining = Math.max(1200, deadline - Date.now());
+    const ready = await waitForAgentTerminalInteractiveReady(win, remaining);
+    if (!ready) {
+      return {
+        ok: false,
+        reason: isCodeBuddyAgentWindow(win) ? "codebuddy-prompt-not-ready" : "agent-terminal-not-ready",
+        windowId: win.id,
+        roleId: win.roleId
+      };
+    }
+  }
+
+  return { ok: true, targets };
+}
+
+async function ensureAutoWorkflowAgentTargets(message) {
+  const project = getProject();
+  if (!project || !message) {
+    return { ok: false, reason: "missing-project-or-message" };
+  }
+
+  const task = message.taskId ? project.tasks.find((item) => item.id === message.taskId) : null;
+  const desktopId = getTaskConversationId(task) || getActiveDesktopId(project);
+  const createdWindowIds = [];
+  uniqueRoleIds(message.toRoleIds || []).forEach((roleId) => {
+    const existing = getAgentWindowsForRole(project, roleId, message.taskId || "", { requireInjectable: false });
+    if (existing.length > 0) {
+      return;
+    }
+
+    const win = createProgram("terminal", roleId, {
+      terminalMode: "agent",
+      agentProvider: state.settings.agentProvider,
+      desktopId,
+      title: `${getRole(roleId).name} Agent(${getAgentProviderLabel(state.settings.agentProvider)})`
+    });
+    if (win) {
+      createdWindowIds.push(win.id);
+      recordAppLog("agent.workflow.terminal-created", {
+        projectId: project.id,
+        messageId: message.id,
+        roleId,
+        windowId: win.id,
+        desktopId
+      });
+    }
+  });
+
+  const ready = await waitForAutoWorkflowTargets(message, 12000);
+  const interactive = ready
+    ? await waitForAutoWorkflowTargetInteractivity(message)
+    : { ok: false, reason: "target-agent-not-ready", targets: [] };
+  return {
+    ok: ready && interactive.ok,
+    createdWindowIds,
+    reason: ready ? (interactive.reason || "") : "target-agent-not-ready",
+    targetWindowIds: interactive.targets?.map((win) => win.id) || []
+  };
+}
+
+function stopAgentAutoWorkflow(reason = "user-stop") {
+  const project = getProject();
+  state.settings.agentAutoWorkflowPaused = true;
+  let canceledCount = 0;
+  if (project?.agentDeliveries) {
+    const now = new Date().toISOString();
+    project.agentDeliveries.forEach((delivery) => {
+      if (delivery.autoWorkflow && delivery.status === "pending") {
+        delivery.status = "canceled";
+        delivery.canceledAt = now;
+        delivery.updatedAt = now;
+        delivery.lastFeedback = "用户已暂停 Kernel 自动调度。";
+        canceledCount += 1;
+      }
+    });
+  }
+  recordAppLog("agent.workflow.stopped", {
+    projectId: project?.id || "",
+    reason,
+    canceledCount
+  }, "warn");
+  saveState();
+  render();
+}
+
+function scheduleAgentDeliveryQueueDrain(windowId, delayMs = 250) {
+  if (!windowId || !state.settings.agentAutoWorkflowEnabled) {
+    return;
+  }
+  if (agentDeliveryDrainTimers.has(windowId)) {
+    clearTimeout(agentDeliveryDrainTimers.get(windowId));
+  }
+  const timer = setTimeout(() => {
+    agentDeliveryDrainTimers.delete(windowId);
+    drainAgentDeliveryQueueForWindow(windowId).catch((error) => {
+      recordAppLog("agent.workflow.queue-drain.error", {
+        projectId: state.activeProjectId || "",
+        windowId,
+        error: error.message
+      }, "error");
+    });
+  }, delayMs);
+  agentDeliveryDrainTimers.set(windowId, timer);
+}
+
+async function drainAgentDeliveryQueueForWindow(windowId) {
+  if (!isAgentAutoWorkflowActive()) {
+    return { ok: false, reason: "auto-workflow-inactive" };
+  }
+  const project = getProject();
+  const win = project?.windows?.find((item) => item.id === windowId);
+  if (!project || !win) {
+    return { ok: false, reason: "window-not-found" };
+  }
+  let activeDelivery = getActiveAgentDeliveryForWindow(project, windowId);
+  if (activeDelivery && shouldAutoReleaseActiveDelivery(project, win, activeDelivery)) {
+    const task = getTaskForDelivery(project, activeDelivery);
+    const reason = task && normalizeSubtaskStatus(task.status) === "done"
+      ? "task-ended"
+      : (activeDelivery.stuckDetectedAt ? "stuck-detected" : "stale-active-delivery");
+    releaseActiveAgentDelivery(project, win, activeDelivery, reason);
+    activeDelivery = null;
+    saveState();
+  }
+  if (activeDelivery) {
+    recordAppLog("agent.workflow.queue-drain.waiting", {
+      projectId: project.id,
+      windowId,
+      roleId: win.roleId,
+      activeDeliveryId: activeDelivery.id,
+      activeMessageId: activeDelivery.messageId
+    });
+    return { ok: false, reason: "agent-window-busy" };
+  }
+
+  const pendingDelivery = getPendingAutoWorkflowDeliveriesForWindow(project, windowId)[0];
+  if (!pendingDelivery) {
+    return { ok: false, reason: "no-pending-delivery" };
+  }
+
+  const ready = await waitForAgentTerminalInteractiveReady(win, 5000);
+  if (!ready) {
+    pendingDelivery.lastFeedback = "Queued; target Agent terminal is not interactive yet.";
+    pendingDelivery.updatedAt = new Date().toISOString();
+    recordAppLog("agent.workflow.queue-drain.not-ready", {
+      projectId: project.id,
+      windowId,
+      roleId: win.roleId,
+      deliveryId: pendingDelivery.id,
+      messageId: pendingDelivery.messageId
+    }, "warn");
+    saveState();
+    scheduleAgentDeliveryQueueDrain(windowId, 2000);
+    return { ok: false, reason: "agent-terminal-not-ready" };
+  }
+
+  const message = project.messages.find((item) => item.id === pendingDelivery.messageId);
+  const result = await confirmAgentDelivery(pendingDelivery.id, {
+    autoWorkflow: true,
+    sourceEventId: pendingDelivery.autoWorkflowSourceEventId || "queue-drain"
+  });
+  if (result?.ok && message) {
+    message.autoWorkflow = true;
+    message.autoWorkflowStatus = "submitted";
+    message.autoWorkflowDispatchedAt = new Date().toISOString();
+    recordAppLog("agent.workflow.queue-drained", {
+      projectId: project.id,
+      windowId,
+      roleId: win.roleId,
+      deliveryId: pendingDelivery.id,
+      messageId: pendingDelivery.messageId
+    });
+    saveState();
+    render();
+  }
+  return result;
+}
+
+function getPendingKernelAutoWorkflowMessages(project = getProject()) {
+  if (!project) {
+    return [];
+  }
+  finalizeCompletedKernelDispatchMessages(project, "pending-kernel-scan");
+  const retryStatuses = new Set([
+    "",
+    "disabled",
+    "paused",
+    "stopped",
+    "target-agent-not-ready",
+    "no-running-agent-terminal",
+    "no-injectable-agent-terminal",
+    "agent-terminal-not-ready",
+    "codebuddy-prompt-not-ready",
+    "queue-failed",
+    "delivery-not-confirmed",
+    "external-queued",
+    "queued",
+    "preparing",
+    "terminal-ready-queued"
+  ]);
+  const activeDeliveryStatuses = new Set(["pending", "sent", "submitted", "responded", "waiting", "completed"]);
+  return (project.messages || []).filter((message) => {
+    if ((message.source || "") !== "orchestrator-dispatch" || !message.toRoleIds?.length) {
+      return false;
+    }
+    if (isKernelDispatchMessageForCompletedWork(project, message)) {
+      return false;
+    }
+    if (!retryStatuses.has(message.autoWorkflowStatus || "")) {
+      return false;
+    }
+    return !(project.agentDeliveries || []).some((delivery) => (
+      delivery.messageId === message.id
+      && activeDeliveryStatuses.has(delivery.status)
+    ));
+  });
+}
+
+function resumePendingKernelAutoWorkflowMessages(reason = "auto-workflow-resume") {
+  if (!isAgentAutoWorkflowActive()) {
+    return [];
+  }
+  const project = getProject();
+  const finalizedCount = finalizeCompletedKernelDispatchMessages(project, reason);
+  const messages = getPendingKernelAutoWorkflowMessages(project);
+  if (messages.length === 0) {
+    if (finalizedCount > 0) {
+      saveState();
+      render();
+    }
+    return [];
+  }
+  messages.forEach((message) => {
+    message.autoWorkflow = true;
+    message.autoWorkflowStatus = "queued";
+  });
+  recordAppLog("agent.workflow.pending-kernel-messages-resumed", {
+    projectId: project.id,
+    reason,
+    messageIds: messages.map((message) => message.id),
+    count: messages.length
+  });
+  saveState();
+  messages.forEach((message) => scheduleAgentAutoWorkflow(message.id, reason));
+  return messages;
+}
+
+function startPendingKernelAutoWorkflowPump() {
+  if (pendingKernelAutoWorkflowTimer) {
+    return;
+  }
+  pendingKernelAutoWorkflowTimer = setInterval(() => {
+    if (!isAgentAutoWorkflowActive() || saveStateInFlight || saveStateDirty) {
+      return;
+    }
+    try {
+      const messages = resumePendingKernelAutoWorkflowMessages("kernel-sequence-pump");
+      if (messages.length > 0) {
+        recordAppLog("agent.workflow.kernel-sequence-pump.dispatched", {
+          projectId: getProject()?.id || "",
+          messageIds: messages.map((message) => message.id),
+          count: messages.length
+        });
+      }
+    } catch (error) {
+      recordAppLog("agent.workflow.kernel-sequence-pump.error", {
+        projectId: state.activeProjectId || "",
+        error: error.message
+      }, "error");
+    }
+  }, 1200);
+}
+
+function resumeAgentAutoWorkflow() {
+  state.settings.agentAutoWorkflowEnabled = true;
+  state.settings.agentAutoWorkflowPaused = false;
+  recordAppLog("agent.workflow.resumed", {
+    projectId: state.activeProjectId || ""
+  });
+  saveState();
+  render();
+  resumePendingKernelAutoWorkflowMessages("manual-resume");
+  getProject()?.windows
+    ?.filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
+    .forEach((win) => scheduleAgentDeliveryQueueDrain(win.id, 200));
+}
+
+async function autoDispatchAgentMessage(messageId, sourceEventId = "") {
+  const project = getProject();
+  const message = project?.messages?.find((item) => item.id === messageId);
+  if (!project || !message) {
+    return { ok: false, reason: "message-not-found" };
+  }
+  if (markKernelDispatchMessageCompleted(project, message, `auto-dispatch:${sourceEventId || "unknown"}`)) {
+    saveState();
+    render();
+    return { ok: false, reason: "completed-work" };
+  }
+
+  if (!state.settings.agentAutoWorkflowEnabled) {
+    return { ok: false, reason: "disabled" };
+  }
+  if (state.settings.agentAutoWorkflowPaused) {
+    message.autoWorkflow = true;
+    message.autoWorkflowStatus = "paused";
+    message.autoWorkflowStoppedAt = new Date().toISOString();
+    saveState();
+    recordAppLog("agent.workflow.auto-dispatch.skipped", {
+      projectId: project.id,
+      messageId,
+      sourceEventId,
+      reason: "paused"
+    }, "warn");
+    return { ok: false, reason: "paused" };
+  }
+
+  message.autoWorkflow = true;
+  message.autoWorkflowStatus = "preparing";
+  saveState();
+  recordAppLog("agent.workflow.auto-dispatch.started", {
+    projectId: project.id,
+    messageId,
+    sourceEventId,
+    fromRoleId: message.fromRoleId,
+    toRoleIds: message.toRoleIds,
+    taskId: message.taskId || ""
+  });
+
+  const missingPoolPath = uniqueRoleIds(message.toRoleIds || []).some((roleId) => !message.agentPoolPaths?.[roleId]);
+  if (missingPoolPath) {
+    await persistAgentPoolMessages(project, [message], "auto-dispatch-backfill");
+    saveState();
+  }
+
+  const targetResult = await ensureAutoWorkflowAgentTargets(message);
+  if (!targetResult.ok || !isAgentAutoWorkflowActive()) {
+    message.autoWorkflowStatus = state.settings.agentAutoWorkflowPaused ? "stopped" : targetResult.reason || "target-not-ready";
+    message.autoWorkflowStoppedAt = new Date().toISOString();
+    saveState();
+    render();
+    recordAppLog("agent.workflow.auto-dispatch.skipped", {
+      projectId: project.id,
+      messageId,
+      sourceEventId,
+      reason: message.autoWorkflowStatus,
+      createdWindowIds: targetResult.createdWindowIds || []
+    }, "warn");
+    return { ok: false, reason: message.autoWorkflowStatus };
+  }
+
+  const queueResult = queueAgentDeliveriesForMessage(messageId, {
+    limit: 8,
+    autoWorkflow: true,
+    sourceEventId
+  });
+  if (!queueResult.ok) {
+    message.autoWorkflowStatus = queueResult.reason || "queue-failed";
+    saveState();
+    render();
+    recordAppLog("agent.workflow.auto-dispatch.failed", {
+      projectId: project.id,
+      messageId,
+      sourceEventId,
+      reason: message.autoWorkflowStatus
+    }, "warn");
+    return queueResult;
+  }
+
+  let confirmedCount = 0;
+  let deferredCount = 0;
+  for (const deliveryId of queueResult.deliveryIds || []) {
+    if (!isAgentAutoWorkflowActive()) {
+      break;
+    }
+    const result = await confirmAgentDelivery(deliveryId, {
+      autoWorkflow: true,
+      sourceEventId
+    });
+    if (result?.ok) {
+      confirmedCount += 1;
+    } else if (result?.deferred) {
+      deferredCount += 1;
+    }
+  }
+
+  message.autoWorkflowStatus = isAgentAutoWorkflowActive()
+    ? (confirmedCount > 0 ? "submitted" : (deferredCount > 0 ? "queued" : "delivery-not-confirmed"))
+    : "stopped";
+  if (confirmedCount > 0) {
+    message.autoWorkflowDispatchedAt = new Date().toISOString();
+  }
+  saveState();
+  render();
+  recordAppLog("agent.workflow.auto-dispatched", {
+    projectId: project.id,
+    messageId,
+    sourceEventId,
+    queuedCount: queueResult.queuedCount,
+    confirmedCount,
+    deferredCount,
+    status: message.autoWorkflowStatus,
+    stopped: !isAgentAutoWorkflowActive()
+  });
+  return {
+    ok: confirmedCount > 0 || deferredCount > 0,
+    queuedCount: queueResult.queuedCount,
+    confirmedCount,
+    deferredCount
+  };
+}
+
+function scheduleAgentAutoWorkflow(messageId, sourceEventId = "") {
+  if (!state.settings.agentAutoWorkflowEnabled) {
+    return;
+  }
+  setTimeout(() => {
+    autoDispatchAgentMessage(messageId, sourceEventId).catch((error) => {
+      recordAppLog("agent.workflow.auto-dispatch.error", {
+        projectId: state.activeProjectId || "",
+        messageId,
+        sourceEventId,
+        error: error.message
+      }, "error");
+    });
+  }, 0);
+}
+
+function scheduleAgentAutoWorkflowForMessages(messages, sourceEventId = "") {
+  const project = getProject();
+  const finalizedCount = finalizeCompletedKernelDispatchMessages(project, `schedule:${sourceEventId || "unknown"}`);
+  const list = (messages || []).filter((message) => (
+    message?.id
+    && !isKernelDispatchMessageForCompletedWork(project, message)
+    && message.autoWorkflowStatus !== "completed"
+  ));
+  if (!state.settings.agentAutoWorkflowEnabled || list.length === 0) {
+    if (finalizedCount > 0) {
+      saveState();
+      render();
+    }
+    return;
+  }
+
+  recordAppLog("agent.workflow.batch-scheduled", {
+    projectId: state.activeProjectId || "",
+    sourceEventId,
+    messageIds: list.map((message) => message.id),
+    count: list.length
+  });
+  list.forEach((message) => scheduleAgentAutoWorkflow(message.id, sourceEventId));
+}
+
+function resumeAutoWorkflowMessagesForWindow(win, reason = "terminal-ready") {
+  if (!win || !state.settings.agentAutoWorkflowEnabled || state.settings.agentAutoWorkflowPaused) {
+    return;
+  }
+  const project = getProject();
+  if (!project) {
+    return;
+  }
+  const finalizedCount = finalizeCompletedKernelDispatchMessages(project, reason);
+  const taskContext = getTaskContextForWindow(win, project);
+  const retryStatuses = new Set([
+    "target-agent-not-ready",
+    "no-running-agent-terminal",
+    "queue-failed",
+    "delivery-not-confirmed",
+    "external-queued",
+    "queued",
+    "preparing"
+  ]);
+  const messages = (project.messages || []).filter((message) => (
+    message.toRoleIds?.includes(win.roleId)
+    && (message.autoWorkflow || ["orchestrator-dispatch"].includes(message.source || ""))
+    && (!message.taskId || !taskContext.taskId || message.taskId === taskContext.taskId)
+    && !isKernelDispatchMessageForCompletedWork(project, message)
+    && (!message.autoWorkflowStatus || retryStatuses.has(message.autoWorkflowStatus))
+    && !(project.agentDeliveries || []).some((delivery) => (
+      delivery.messageId === message.id
+      && delivery.windowId === win.id
+      && ["pending", "sent", "submitted", "responded", "waiting", "completed"].includes(delivery.status)
+    ))
+  ));
+  if (messages.length === 0) {
+    if (finalizedCount > 0) {
+      saveState();
+      render();
+    }
+    scheduleAgentDeliveryQueueDrain(win.id, 250);
+    return;
+  }
+  recordAppLog("agent.workflow.terminal-ready-resume", {
+    projectId: project.id,
+    windowId: win.id,
+    roleId: win.roleId,
+    reason,
+    messageIds: messages.map((message) => message.id),
+    count: messages.length
+  });
+  messages.forEach((message) => {
+    message.autoWorkflow = true;
+    message.autoWorkflowStatus = "terminal-ready-queued";
+    scheduleAgentAutoWorkflow(message.id, reason);
+  });
+  saveState();
+  scheduleAgentDeliveryQueueDrain(win.id, 350);
 }
 
 function stripTerminalControlChars(value) {
@@ -2596,20 +5366,64 @@ function buildTerminalInstructionPayload(message, targetWindow) {
   const project = getProject();
   const fromRole = getRole(message.fromRoleId);
   const toRole = getRole(targetWindow.roleId);
+  const taskContext = getTaskContextForWindow(targetWindow, project);
+  const projectMemoryLines = taskContext.projectMemorySummary
+    ? ["Project memory:", taskContext.projectMemorySummary, ""]
+    : [];
   const taskLabel = message.taskId ? getMessageTaskLabel(message.taskId) : "私聊";
-  const provider = getAgentProviderLabel(targetWindow.agentProvider);
+  const agentProvider = normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider);
+  const provider = getAgentProviderLabel(agentProvider);
+  const permissionPolicy = getAgentPermissionPolicy();
+  const poolPath = message.agentPoolPaths?.[targetWindow.roleId] || getAgentPoolMessagePath(targetWindow.roleId, message.id);
+  const mcpRetryLines = agentProvider === "codebuddy"
+    ? [
+        "CodeBuddy Code 后端如果显示 `mcp__coss: Still connecting` 或 `/mcp` 中 coss 为 Disconnected，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试；不要搜索或调用当前后端不存在的等待工具。",
+        "如果 coss 工具仍未暴露，请继续完成当前角色工作并输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"MCP disconnected; 当前进度说明\",\"toRoleIds\":[]} 作为降级留痕。"
+      ]
+    : [
+        "如果系统提示 `mcp__coss: Still connecting`，请等待几秒后重新搜索或调用 coss 工具；只有当前后端明确提供等待工具时才调用该工具。",
+        "不要因为 ToolSearch 暂时没有找到 coss 工具就停止；请至少等待并重试 3 次。"
+      ];
+  const autoWorkflowLines = message.autoWorkflow || message.source === "agent-event"
+    ? [
+        "这是 CosS Kernel 分配的上游任务上下文。",
+        "请先阅读消息中提到的交接文档、产物路径或注意事项，再继续你的角色工作。",
+        "完成自己的部分后，请通过 coss_submit_result({ status: \"done\" }) 提交结果，由 Kernel 启动下一步。"
+      ]
+    : [];
   return stripTerminalControlChars([
     "请处理来自 CosS 协作时间线的指令。",
     `目标角色：${toRole.name}`,
     `发送角色：${fromRole.name}`,
     `Agent 后端：${provider}`,
+    `Agent 权限模式：${permissionPolicy.label}`,
     `频道：${taskLabel}`,
+    `消息ID：${message.id}`,
+    `角色消息池：${poolPath}`,
     `消息来源：${message.source || "manual"}`,
     "",
+    permissionPolicy.instruction,
+    "",
+    ...autoWorkflowLines,
+    ...(autoWorkflowLines.length ? [""] : []),
+    "CosS v0.10 linear Kernel workflow:",
+    "0. Do not directly assign work to another Agent. CosS Kernel owns the workflow, role startup, resource locks, and downstream dispatch.",
+    `1. Call coss_pool_read({ roleId: "${targetWindow.roleId}", taskId: "${message.taskId || ""}" }) to read your own inbox.`,
+    `2. Call coss_pool_claim({ roleId: "${targetWindow.roleId}", messageId: "${message.id}" }) before processing this message.`,
+    "3. Call coss_claim_step before work; acquire locks with coss_acquire_lock before editing shared resources.",
+    "4. Submit structured results through coss_submit_result with status done when your own step is complete. The Kernel will schedule the next preplanned Agent after your step is done.",
+    "5. High-risk actions must use coss_request_approval and wait for user or orchestrator confirmation.",
+    "",
+    ...projectMemoryLines,
     message.content,
     "",
-    "请基于当前项目上下文继续处理；需要同步进度时输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"你的进度或阻塞说明\",\"toRoleIds\":[\"product-manager\"]}。",
-    "完成或阻塞时输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。"
+    "必须优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。",
+    "请按需调用：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_release_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval。",
+    ...mcpRetryLines,
+    "推荐开始顺序：先 coss_get_context，再 coss_get_task_board，再 coss_pool_read，处理本条消息前调用 coss_pool_claim，开始执行子任务时调用 coss_claim_step。",
+    "完成自己的 Step 时优先调用 coss_submit_result({ status: \"done\" })；不要直接发给其他角色，也不要创建未在任务板中的角色。",
+    "如果当前 Agent 后端暂时无法使用 MCP，再输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"你的结构化进度或无法继续的原因\",\"toRoleIds\":[]}。",
+    "Agent 只能使用三种状态：COSS_AGENT_STATUS:running 或 COSS_AGENT_STATUS:done；默认未开始就是 idle。"
   ].join("\n"));
 }
 
@@ -2746,7 +5560,7 @@ async function sendAgentDeliveryInstruction(project, delivery, targetWindow, con
 
   const fileRef = delivery.deliveryFileAbsolutePath || delivery.deliveryFilePath;
   const instruction = stripTerminalControlChars(
-    `请读取并执行 CosS 投递文件：${fileRef}。以该文件为唯一新增指令，忽略输入框已有提示或示例；完成或阻塞时输出 COSS_AGENT_STATUS:done 或 COSS_AGENT_STATUS:blocked。`
+    `请读取并执行 CosS 投递文件：${fileRef}。以该文件为唯一新增指令，忽略输入框已有提示或示例；执行中只使用 COSS_AGENT_STATUS:running，完成时输出 COSS_AGENT_STATUS:done。`
   );
   const instructionChunks = chunkTerminalText(instruction).map((data) => ({ data, delayAfter: 45 }));
   const ok = await sendTerminalInputChunks(targetWindow.id, [
@@ -2793,6 +5607,15 @@ function isDeliveryInstructionEcho(excerpt) {
 function isDeliverySystemFeedback(excerpt) {
   const text = stripTerminalControlChars(excerpt);
   if (!text) {
+    return true;
+  }
+  if (/CosS[\s\S]{0,120}terminal/i.test(text) && /(工作目录|请求模式|权限模式|会话|COSS_|宸ヤ綔|璇锋眰|鏉冮檺|浼氳瘽)/i.test(text)) {
+    return true;
+  }
+  if (/(CodeBuddy Code|Tips for getting started|Recent activity|for shortcuts|Press\s+(?:Esc|Ctrl|\/)|Open Web UI)/i.test(text)) {
+    return true;
+  }
+  if (/(shortcut|shortcuts)/i.test(text) || /^\s*[>?]\s*$/.test(text) || /^\s*[>?]\s*for\s+\w+/i.test(text)) {
     return true;
   }
   if (isPasteOnlyTerminalFeedback(text) || isDeliveryInstructionEcho(text)) {
@@ -2847,6 +5670,9 @@ function markDeliveryIfStuck(deliveryId) {
   }, "warn");
   saveState();
   refreshMessageTimelineList();
+  if (delivery.autoWorkflow && delivery.windowId) {
+    scheduleAgentDeliveryQueueDrain(delivery.windowId, 300);
+  }
   return true;
 }
 
@@ -2861,12 +5687,12 @@ function isAgentApprovalPromptOutput(excerpt) {
 
 function getDeliveryStatusLabel(status) {
   return {
-    pending: "待确认投递",
+    pending: "待调度",
     sent: "已提交",
     submitted: "已提交",
     responded: "Agent 已响应",
     waiting: "等待人工确认",
-    failed: "投递失败",
+    failed: "调度失败",
     canceled: "已取消"
   }[normalizeDeliveryStatus(status)] || status;
 }
@@ -2874,7 +5700,7 @@ function getDeliveryStatusLabel(status) {
 function getDeliveryMethodLabel(method) {
   return {
     "bracketed-paste": "Bracketed Paste",
-    "delivery-file-interactive": "投递文件 + 交互提交"
+    "delivery-file-interactive": "任务文件 + 交互提交"
   }[method] || method || "未提交";
 }
 
@@ -2883,6 +5709,11 @@ function queueAgentDeliveriesForMessage(messageId, options = {}) {
   const message = project?.messages?.find((item) => item.id === messageId);
   if (!project || !message) {
     return { ok: false, queuedCount: 0, reason: "message-not-found" };
+  }
+  if (markKernelDispatchMessageCompleted(project, message, "queue-delivery")) {
+    saveState();
+    render();
+    return { ok: false, queuedCount: 0, reason: "completed-work" };
   }
 
   project.agentDeliveries ||= [];
@@ -2904,9 +5735,14 @@ function queueAgentDeliveriesForMessage(messageId, options = {}) {
     const existing = project.agentDeliveries.find((delivery) => (
       delivery.messageId === message.id
       && delivery.windowId === targetWindow.id
-      && ["pending", "sent", "submitted", "responded", "waiting"].includes(delivery.status)
+      && ["pending", "sent", "submitted", "responded", "waiting", "completed"].includes(delivery.status)
     ));
     if (existing) {
+      existing.subtaskId ||= message.subtaskRefs?.[targetWindow.roleId] || "";
+      if (options.autoWorkflow) {
+        existing.autoWorkflow = true;
+        existing.autoWorkflowSourceEventId ||= options.sourceEventId || "";
+      }
       queued.push(existing);
       continue;
     }
@@ -2916,8 +5752,13 @@ function queueAgentDeliveriesForMessage(messageId, options = {}) {
       windowId: targetWindow.id,
       roleId: targetWindow.roleId,
       taskId: message.taskId || "",
+      subtaskId: message.subtaskRefs?.[targetWindow.roleId] || "",
       status: "pending",
       submissionProvider: normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider),
+      permissionMode: state.settings.agentPermissionMode,
+      permissionLabel: getAgentPermissionPolicy().label,
+      autoWorkflow: Boolean(options.autoWorkflow),
+      autoWorkflowSourceEventId: options.sourceEventId || "",
       createdAt: now,
       updatedAt: now
     });
@@ -2935,7 +5776,9 @@ function queueAgentDeliveriesForMessage(messageId, options = {}) {
       toRoleIds: message.toRoleIds,
       deliveryIds: queued.map((delivery) => delivery.id),
       windowIds: queued.map((delivery) => delivery.windowId),
-      queuedCount: queued.length
+      queuedCount: queued.length,
+      autoWorkflow: Boolean(options.autoWorkflow),
+      sourceEventId: options.sourceEventId || ""
     });
     saveState();
     render();
@@ -2953,7 +5796,7 @@ function injectMessageIntoAgentTerminals(messageId, options = {}) {
   return Promise.resolve(queueAgentDeliveriesForMessage(messageId, options));
 }
 
-async function confirmAgentDelivery(deliveryId) {
+async function confirmAgentDelivery(deliveryId, options = {}) {
   const project = getProject();
   const delivery = project?.agentDeliveries?.find((item) => item.id === deliveryId);
   const message = project?.messages?.find((item) => item.id === delivery?.messageId);
@@ -2965,6 +5808,68 @@ async function confirmAgentDelivery(deliveryId) {
     return { ok: false, reason: `delivery-${delivery.status}` };
   }
 
+  let activeDelivery = getActiveAgentDeliveryForWindow(project, targetWindow.id, delivery.id);
+  if (activeDelivery && shouldAutoReleaseActiveDelivery(project, targetWindow, activeDelivery, { force: options.force === true })) {
+    const task = getTaskForDelivery(project, activeDelivery);
+    const reason = options.force === true
+      ? "manual-force-confirm"
+      : (task && normalizeSubtaskStatus(task.status) === "done"
+        ? "task-ended"
+        : (activeDelivery.stuckDetectedAt ? "stuck-detected" : "stale-active-delivery"));
+    releaseActiveAgentDelivery(project, targetWindow, activeDelivery, reason);
+    activeDelivery = null;
+    saveState();
+  }
+  if (activeDelivery) {
+    delivery.lastFeedback = `Queued behind active delivery ${activeDelivery.id}.`;
+    delivery.updatedAt = new Date().toISOString();
+    recordAppLog("agent.delivery.deferred.busy", {
+      projectId: project.id,
+      deliveryId: delivery.id,
+      messageId: message.id,
+      windowId: targetWindow.id,
+      roleId: targetWindow.roleId,
+      activeDeliveryId: activeDelivery.id,
+      activeMessageId: activeDelivery.messageId
+    }, "warn");
+    saveState();
+    render();
+    return {
+      ok: false,
+      deferred: true,
+      reason: "agent-window-busy",
+      activeDeliveryId: activeDelivery.id
+    };
+  }
+
+  const olderPendingDelivery = getPendingAutoWorkflowDeliveriesForWindow(project, targetWindow.id)
+    .find((item) => (
+      item.id !== delivery.id
+      && new Date(item.createdAt || 0).getTime() <= new Date(delivery.createdAt || 0).getTime()
+    ));
+  if (olderPendingDelivery) {
+    delivery.lastFeedback = `Queued behind pending delivery ${olderPendingDelivery.id}.`;
+    delivery.updatedAt = new Date().toISOString();
+    recordAppLog("agent.delivery.deferred.ordered", {
+      projectId: project.id,
+      deliveryId: delivery.id,
+      messageId: message.id,
+      windowId: targetWindow.id,
+      roleId: targetWindow.roleId,
+      olderDeliveryId: olderPendingDelivery.id,
+      olderMessageId: olderPendingDelivery.messageId
+    }, "warn");
+    saveState();
+    render();
+    scheduleAgentDeliveryQueueDrain(targetWindow.id, 500);
+    return {
+      ok: false,
+      deferred: true,
+      reason: "older-delivery-pending",
+      olderDeliveryId: olderPendingDelivery.id
+    };
+  }
+
   const payload = buildTerminalInstructionPayload(message, targetWindow);
   const submission = await sendAgentDeliveryInstruction(project, delivery, targetWindow, payload);
   const ok = submission?.ok;
@@ -2974,6 +5879,8 @@ async function confirmAgentDelivery(deliveryId) {
   delivery.submissionProvider = submission?.provider || delivery.submissionProvider || normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider);
   delivery.submissionMethod = submission?.method || delivery.submissionMethod || "";
   delivery.submissionDetail = submission?.detail || delivery.submissionDetail || "";
+  delivery.permissionMode = normalizeAgentPermissionMode(state.settings.agentPermissionMode);
+  delivery.permissionLabel = getAgentPermissionPolicy(delivery.permissionMode).label;
   if (!ok) {
     delivery.status = "failed";
     delivery.lastError ||= submission?.error || "terminal-write-failed";
@@ -3017,7 +5924,7 @@ async function confirmAgentDelivery(deliveryId) {
       windowId: targetWindow.id,
       roleId: targetWindow.roleId,
       taskId: message.taskId || "",
-      excerpt: "CosS 已确认投递，等待终端输出。",
+      excerpt: "CosS 已调度任务，等待终端输出。",
       createdAt: now,
       updatedAt: now
     }));
@@ -3031,8 +5938,12 @@ async function confirmAgentDelivery(deliveryId) {
     roleId: targetWindow.roleId,
     provider: delivery.submissionProvider,
     method: delivery.submissionMethod,
+    permissionMode: delivery.permissionMode,
+    permissionLabel: delivery.permissionLabel,
     deliveryFilePath: delivery.deliveryFilePath || "",
-    contentLength: message.content.length
+    contentLength: message.content.length,
+    autoWorkflow: Boolean(options.autoWorkflow || delivery.autoWorkflow),
+    sourceEventId: options.sourceEventId || delivery.autoWorkflowSourceEventId || ""
   });
   saveState();
   render();
@@ -3123,6 +6034,16 @@ function recordTerminalOutputReference(windowId, data) {
   project.terminalOutputRefs = project.terminalOutputRefs.slice(-300);
 
   const previousDeliveryStatus = delivery.status;
+  const backendReadyAt = terminalBackendReadyAt.get(windowId) || "";
+  const backendReadyAtMs = backendReadyAt ? new Date(backendReadyAt).getTime() : 0;
+  const deliverySentAtMs = new Date(delivery.sentAt || delivery.submittedAt || delivery.createdAt || 0).getTime();
+  const isStartupOutputForExistingDelivery = Boolean(
+    backendReadyAtMs
+    && Number.isFinite(deliverySentAtMs)
+    && deliverySentAtMs > 0
+    && deliverySentAtMs < backendReadyAtMs
+    && Date.now() - backendReadyAtMs < 4000
+  );
   if (isAgentApprovalPromptOutput(excerpt)) {
     delivery.status = "waiting";
     delivery.waitingAt = now;
@@ -3132,7 +6053,7 @@ function recordTerminalOutputReference(windowId, data) {
       deliveryStuckTimers.delete(delivery.id);
     }
     delivery.lastFeedback = "Agent 正在等待人工确认。";
-  } else if (!isPasteOnlyTerminalFeedback(excerpt) && !isDeliveryInstructionEcho(excerpt) && !["responded", "waiting"].includes(delivery.status)) {
+  } else if (!isStartupOutputForExistingDelivery && !isDeliverySystemFeedback(excerpt) && !["responded", "waiting"].includes(delivery.status)) {
     delivery.status = "responded";
     delivery.respondedAt = now;
     delivery.stuckDetectedAt = "";
@@ -3191,6 +6112,7 @@ function getProjectTimelineEvents(project) {
 
   return [...messageItems, ...agentItems]
     .filter((item) => !taskId || item.taskId === taskId)
+    .filter((item) => itemMatchesMessageFlowSelection(item))
     .filter((item) => {
       if (!query) {
         return true;
@@ -3211,6 +6133,7 @@ function getProjectTimelineEvents(project) {
         event.provider,
         event.status,
         event.type,
+        event.toolName,
         event.message,
         getMessageTaskLabel(event.taskId)
       ].join(" ").toLowerCase().includes(query);
@@ -3230,9 +6153,10 @@ function getTimelineItemDate(item) {
 function getTimelineItemLabel(item) {
   if (item.kind === "agent-event") {
     const event = item.event;
+    const toolSuffix = event.toolName ? ` · ${event.toolName}` : "";
     return {
       title: `Agent · ${getRole(event.roleId).name}`,
-      subtitle: event.status || event.type || "event",
+      subtitle: `${event.status || event.type || "event"}${toolSuffix}`,
       summary: event.message || event.sessionId || "Agent 输出了状态事件。"
     };
   }
@@ -3287,52 +6211,6 @@ function renderTimelineNode(item, isSelected, index, total) {
   `;
 }
 
-function renderDeliveryRows(deliveries, refs = []) {
-  if (!deliveries.length) {
-    return "";
-  }
-
-  return `
-    <div class="delivery-list">
-      ${deliveries.map((delivery) => {
-        const deliveryRefs = refs.filter((ref) => ref.deliveryId === delivery.id);
-        const latestRef = deliveryRefs.at(-1);
-        const canRetry = ["failed", "canceled"].includes(delivery.status) || (delivery.status === "submitted" && delivery.stuckDetectedAt);
-        const providerLabel = delivery.submissionProvider ? getAgentProviderLabel(delivery.submissionProvider) : "未提交";
-        const filePath = delivery.deliveryFileAbsolutePath || delivery.deliveryFilePath || "";
-        return `
-          <div class="delivery-row ${escapeHtml(delivery.status)} ${delivery.stuckDetectedAt ? "stuck" : ""}">
-            <div class="delivery-row-head">
-              <span>${escapeHtml(getRole(delivery.roleId).name)} · ${escapeHtml(getDeliveryStatusLabel(delivery.status))}</span>
-              <span>${escapeHtml(formatDateTime(delivery.updatedAt))}</span>
-            </div>
-            <div class="delivery-meta">
-              <span>后端：${escapeHtml(providerLabel)}</span>
-              <span>方式：${escapeHtml(getDeliveryMethodLabel(delivery.submissionMethod))}</span>
-              ${delivery.attempts ? `<span>尝试：${escapeHtml(delivery.attempts)}</span>` : ""}
-              ${delivery.stuckDetectedAt ? `<span>疑似卡住：${escapeHtml(formatDateTime(delivery.stuckDetectedAt))}</span>` : ""}
-            </div>
-            ${filePath ? `<code class="delivery-path">${escapeHtml(filePath)}</code>` : ""}
-            ${delivery.submissionDetail ? `<em class="delivery-feedback">${escapeHtml(delivery.submissionDetail)}</em>` : ""}
-            ${delivery.lastError ? `<em>${escapeHtml(delivery.lastError)}</em>` : ""}
-            ${delivery.lastFeedback ? `<em class="delivery-feedback">${escapeHtml(delivery.lastFeedback)}</em>` : ""}
-            ${latestRef?.excerpt ? `<pre class="delivery-output-preview">${escapeHtml(latestRef.excerpt.slice(-420))}</pre>` : ""}
-            <div class="delivery-actions">
-              ${delivery.status === "pending" ? `
-                <button class="secondary-button compact" data-action="confirm-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">确认投递</button>
-                <button class="secondary-button compact" data-action="cancel-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">取消</button>
-              ` : ""}
-              ${canRetry ? `
-                <button class="secondary-button compact" data-action="retry-agent-delivery" data-delivery-id="${escapeHtml(delivery.id)}">重试</button>
-              ` : ""}
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
 function renderTimelineDetail(project, item) {
   if (!item) {
     return `<div class="message-empty">请选择时间轴节点查看详情。</div>`;
@@ -3353,6 +6231,7 @@ function renderTimelineDetail(project, item) {
           <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : "会话事件")}</span>
           <span>${escapeHtml(event.status || "event")}</span>
           <span>${escapeHtml(event.structured ? "structured-event" : event.type || "status")}</span>
+          ${event.toolName ? `<span>${escapeHtml(event.toolName)}</span>` : ""}
         </div>
         <p>${escapeHtml(event.message || event.sessionId || "Agent 输出了状态事件。")}</p>
       </div>
@@ -3363,15 +6242,9 @@ function renderTimelineDetail(project, item) {
   const fromRole = getRole(message.fromRoleId);
   const toNames = message.toRoleIds.map((roleId) => getRole(roleId).name).join("、");
   const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : "私聊";
-  const injectableWindows = getInjectableWindowsForMessage(project, message);
-  const deliveries = getDeliveriesForMessage(project, message.id);
   const refs = getOutputRefsForMessage(project, message.id);
   const injectedLabel = message.injectedWindowIds?.length
     ? `<span>已注入 ${message.injectedWindowIds.length} 个终端</span>`
-    : "";
-  const submittedDeliveryCount = deliveries.filter((delivery) => ["sent", "submitted", "responded", "waiting"].includes(delivery.status)).length;
-  const deliverySummary = deliveries.length
-    ? `<span>投递 ${submittedDeliveryCount}/${deliveries.length}</span>`
     : "";
 
   return `
@@ -3384,24 +6257,40 @@ function renderTimelineDetail(project, item) {
         <span>${escapeHtml(channelLabel)}</span>
         <span>${escapeHtml(message.source || "manual")}</span>
         ${injectedLabel}
-        ${deliverySummary}
         ${refs.length ? `<span>${refs.length} 条输出引用</span>` : ""}
       </div>
+      ${renderRelayStageChips(project, message)}
       <p>${escapeHtml(message.content)}</p>
-      ${renderDeliveryRows(deliveries, refs)}
       <div class="message-row-actions">
-        ${injectableWindows.length > 0 ? `<button class="secondary-button compact" data-action="inject-message-terminal" data-message-id="${escapeHtml(message.id)}">加入投递队列</button>` : ""}
         ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">查看输出</button>` : ""}
       </div>
     </div>
   `;
 }
 
+function normalizeAgentFlowSelection(project) {
+  if (!messageFlowSelection.roleId && !messageFlowSelection.edgeKey) {
+    return false;
+  }
+  const graph = getAgentFlowGraph(project);
+  const roleOk = !messageFlowSelection.roleId || graph.nodes.some((node) => node.id === messageFlowSelection.roleId);
+  const edgeOk = !messageFlowSelection.edgeKey || graph.edges.some((edge) => edge.key === messageFlowSelection.edgeKey);
+  if (roleOk && edgeOk) {
+    return false;
+  }
+  messageFlowSelection = { roleId: "", edgeKey: "" };
+  return true;
+}
+
 function renderMessageRows(project) {
+  normalizeAgentFlowSelection(project);
   const timeline = getProjectTimelineEvents(project);
   if (timeline.length === 0) {
     selectedTimelineItemId = "";
-    return `<div class="message-empty">暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。</div>`;
+    return `
+      ${renderAgentFlowGraph(project)}
+      <div class="message-empty">暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。</div>
+    `;
   }
 
   const timelineKeys = new Set(timeline.map(getTimelineItemKey));
@@ -3413,6 +6302,7 @@ function renderMessageRows(project) {
   const selectedItem = timeline.find((item) => getTimelineItemKey(item) === selectedTimelineItemId) || timeline[0];
 
   return `
+    ${renderAgentFlowGraph(project)}
     <div class="message-timeline-shell">
       <div class="message-timeline-scroll" aria-label="协作横向时间轴">
         <div class="message-timeline-track" style="--timeline-count:${chronological.length};">
@@ -3422,6 +6312,194 @@ function renderMessageRows(project) {
       <div class="message-timeline-detail" data-message-timeline-detail>
         ${renderTimelineDetail(project, selectedItem)}
       </div>
+    </div>
+  `;
+}
+
+function getAgentFlowGraph(project) {
+  const taskId = messageTimelineFilters.taskId || "";
+  const query = String(messageTimelineFilters.query || "").trim().toLowerCase();
+  const nodes = new Map();
+  const edges = new Map();
+  const addNode = (roleId, source = "") => {
+    const id = roleId || "human";
+    if (!nodes.has(id)) {
+      nodes.set(id, {
+        id,
+        label: getFlowRoleLabel(id),
+        source,
+        sent: 0,
+        received: 0
+      });
+    }
+    return nodes.get(id);
+  };
+
+  (project?.messages || [])
+    .filter((message) => !taskId || message.taskId === taskId)
+    .filter((message) => {
+      if (!query) {
+        return true;
+      }
+      return [
+        getRole(message.fromRoleId).name,
+        ...(message.toRoleIds || []).map((roleId) => getRole(roleId).name),
+        message.content,
+        message.source
+      ].join(" ").toLowerCase().includes(query);
+    })
+    .forEach((message) => {
+      const fromId = getFlowMessageFromId(message);
+      const fromNode = addNode(fromId, message.source || "");
+      fromNode.sent += 1;
+      uniqueRoleIds(message.toRoleIds || []).forEach((toRoleId) => {
+        const toNode = addNode(toRoleId, message.source || "");
+        toNode.received += 1;
+        const key = getFlowEdgeKey(fromId, toRoleId);
+        const edge = edges.get(key) || {
+          key,
+          fromId,
+          toId: toRoleId,
+          count: 0,
+          latestAt: "",
+          taskIds: new Set(),
+          sources: new Set(),
+          messages: []
+        };
+        edge.count += 1;
+        if (!edge.latestAt || new Date(message.createdAt || 0).getTime() > new Date(edge.latestAt || 0).getTime()) {
+          edge.latestAt = message.createdAt || edge.latestAt;
+        }
+        if (message.taskId) {
+          edge.taskIds.add(message.taskId);
+        }
+        if (message.source) {
+          edge.sources.add(message.source);
+        }
+        edge.messages.push(message);
+        edges.set(key, edge);
+      });
+    });
+
+  return {
+    nodes: Array.from(nodes.values()),
+    edges: Array.from(edges.values())
+      .map((edge) => ({
+        ...edge,
+        taskIds: Array.from(edge.taskIds),
+        sources: Array.from(edge.sources),
+        messages: edge.messages.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime())
+      }))
+      .sort((a, b) => new Date(a.latestAt || 0).getTime() - new Date(b.latestAt || 0).getTime())
+  };
+}
+
+function getVisibleFlowMessages(graph) {
+  const byId = new Map();
+  graph.edges.forEach((edge) => {
+    edge.messages.forEach((message) => byId.set(message.id, message));
+  });
+  return Array.from(byId.values()).sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+}
+
+function renderAgentFlowSelection(project, graph) {
+  const selectedEdge = messageFlowSelection.edgeKey
+    ? graph.edges.find((edge) => edge.key === messageFlowSelection.edgeKey)
+    : null;
+  const selectedRole = messageFlowSelection.roleId
+    ? graph.nodes.find((node) => node.id === messageFlowSelection.roleId)
+    : null;
+  if (!selectedEdge && !selectedRole) {
+    return "";
+  }
+
+  const messages = selectedEdge
+    ? selectedEdge.messages
+    : getVisibleFlowMessages(graph).filter((message) => messageMatchesFlowRole(message, selectedRole.id));
+  const title = selectedEdge
+    ? `${getFlowRoleLabel(selectedEdge.fromId)} -> ${getFlowRoleLabel(selectedEdge.toId)}`
+    : `${selectedRole.label} 相关消息`;
+  const hint = selectedEdge
+    ? "点击边后显示该角色流向上的消息列表。"
+    : "点击节点后，时间线已筛选为该角色相关消息。";
+  const messageRows = messages.length
+    ? messages.slice(-8).reverse().map((message) => `
+      <button class="agent-flow-message-item" data-action="select-message-timeline-node" data-timeline-item-id="message:${escapeHtml(message.id)}">
+        <strong>${escapeHtml(getFlowRoleLabel(getFlowMessageFromId(message)))} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</strong>
+        <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
+        <p>${escapeHtml(message.content)}</p>
+        <small>${escapeHtml(message.taskId ? getMessageTaskLabel(message.taskId) : "私聊")} · ${escapeHtml(message.source || "manual")}</small>
+      </button>
+    `).join("")
+    : `<div class="agent-flow-empty">当前筛选下暂无消息。</div>`;
+
+  return `
+    <div class="agent-flow-selection">
+      <div class="agent-flow-selection-head">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(hint)}</span>
+        </div>
+        <button class="secondary-button compact" data-action="clear-agent-flow-selection">清除筛选</button>
+      </div>
+      <div class="agent-flow-message-list">${messageRows}</div>
+    </div>
+  `;
+}
+
+function renderAgentFlowGraph(project) {
+  const graph = getAgentFlowGraph(project);
+  if (graph.nodes.length === 0) {
+    return `
+      <div class="agent-flow-panel">
+        <div class="agent-flow-header">
+          <strong>角色消息池流向</strong>
+          <span>等待首条角色消息写入消息池</span>
+        </div>
+      </div>
+    `;
+  }
+  const selectedRoleId = graph.nodes.some((node) => node.id === messageFlowSelection.roleId) ? messageFlowSelection.roleId : "";
+  const selectedEdgeKey = graph.edges.some((edge) => edge.key === messageFlowSelection.edgeKey) ? messageFlowSelection.edgeKey : "";
+  const hasSelection = Boolean(selectedRoleId || selectedEdgeKey);
+  const roleNodes = graph.nodes.map((node, index) => `
+    <button class="agent-flow-node node-${index % 5} ${node.id === selectedRoleId ? "selected" : ""}"
+      title="${escapeHtml(node.label)}"
+      data-action="select-agent-flow-role"
+      data-role-id="${escapeHtml(node.id)}"
+      aria-pressed="${node.id === selectedRoleId ? "true" : "false"}">
+      <span class="agent-flow-dot"></span>
+      <strong>${escapeHtml(node.label)}</strong>
+      <small>发 ${node.sent} / 收 ${node.received}</small>
+    </button>
+  `).join("");
+  const edgeRows = graph.edges.length
+    ? graph.edges.map((edge, index) => `
+      <button class="agent-flow-edge edge-${index % 5} ${edge.key === selectedEdgeKey ? "selected" : ""}"
+        data-action="select-agent-flow-edge"
+        data-flow-edge-key="${escapeHtml(edge.key)}"
+        data-from-role-id="${escapeHtml(edge.fromId)}"
+        data-to-role-id="${escapeHtml(edge.toId)}"
+        aria-pressed="${edge.key === selectedEdgeKey ? "true" : "false"}">
+        <span>${escapeHtml(graph.nodes.find((node) => node.id === edge.fromId)?.label || getFlowRoleLabel(edge.fromId))}</span>
+        <i></i>
+        <span>${escapeHtml(graph.nodes.find((node) => node.id === edge.toId)?.label || getFlowRoleLabel(edge.toId))}</span>
+        <em>${edge.count}</em>
+      </button>
+    `).join("")
+    : `<div class="agent-flow-empty">已有角色节点，暂无角色之间的交接消息。</div>`;
+  return `
+    <div class="agent-flow-panel">
+      <div class="agent-flow-header">
+        <strong>角色消息池流向</strong>
+        <span>${graph.nodes.length} 个节点 · ${graph.edges.length} 条流向${hasSelection ? " · 已筛选" : ""}</span>
+        ${hasSelection ? `<button class="secondary-button compact" data-action="clear-agent-flow-selection">清除</button>` : ""}
+      </div>
+      <div class="agent-flow-body">
+        <div class="agent-flow-nodes">${roleNodes}</div>
+        <div class="agent-flow-edges">${edgeRows}</div>
+      </div>
+      ${renderAgentFlowSelection(project, graph)}
     </div>
   `;
 }
@@ -3487,6 +6565,36 @@ function selectMessageTimelineNode(itemId) {
   }
 }
 
+function selectAgentFlowRole(roleId) {
+  if (!roleId) {
+    return;
+  }
+  const sameSelection = messageFlowSelection.roleId === roleId && !messageFlowSelection.edgeKey;
+  messageFlowSelection = sameSelection
+    ? { roleId: "", edgeKey: "" }
+    : { roleId, edgeKey: "" };
+  selectedTimelineItemId = "";
+  refreshMessageTimelineList();
+}
+
+function selectAgentFlowEdge(edgeKey) {
+  if (!edgeKey) {
+    return;
+  }
+  const sameSelection = messageFlowSelection.edgeKey === edgeKey && !messageFlowSelection.roleId;
+  messageFlowSelection = sameSelection
+    ? { roleId: "", edgeKey: "" }
+    : { roleId: "", edgeKey };
+  selectedTimelineItemId = "";
+  refreshMessageTimelineList();
+}
+
+function clearAgentFlowSelection() {
+  messageFlowSelection = { roleId: "", edgeKey: "" };
+  selectedTimelineItemId = "";
+  refreshMessageTimelineList();
+}
+
 function showMessageCenterModal(defaults = {}) {
   closeMenus();
   const project = getProject();
@@ -3505,54 +6613,26 @@ function showMessageCenterModal(defaults = {}) {
     return;
   }
 
-  messageComposerDefaults = { ...messageComposerDefaults, ...defaults };
   if (Object.prototype.hasOwnProperty.call(defaults, "filterTaskId")) {
     messageTimelineFilters = { ...messageTimelineFilters, taskId: defaults.filterTaskId || "" };
   } else if (!modalWasOpen) {
     const currentTaskId = messageComposerDefaults.taskId || getCurrentTaskFilterId(project);
     messageTimelineFilters = { ...messageTimelineFilters, taskId: currentTaskId || "", query: "" };
+    messageFlowSelection = { roleId: "", edgeKey: "" };
     messageTimelineScrollLeft = 0;
   }
   ensureProjectShape(project);
-  const { fromRoleId, toRoleId } = getDefaultMessageRoles(messageComposerDefaults);
-  const selectedTaskId = messageComposerDefaults.taskId || "";
   const selectedFilterTaskId = messageTimelineFilters.taskId || "";
-  const taskOptions = project.tasks
-    .map((task) => `<option value="${escapeHtml(task.id)}" ${task.id === selectedTaskId ? "selected" : ""}>${escapeHtml(task.title)}</option>`)
-    .join("");
   const filterTaskOptions = project.tasks
     .map((task) => `<option value="${escapeHtml(task.id)}" ${task.id === selectedFilterTaskId ? "selected" : ""}>${escapeHtml(task.title)}</option>`)
     .join("");
 
   renderModal(`
     <div class="modal message-center-modal">
-      <h2>v0.5.7 协作时间线</h2>
-      <p>消息和 Agent 结构化事件会保存在当前项目中，用于驱动协作角标、任务群聊和角色私聊。</p>
-      <div class="message-composer">
-        <div class="field">
-          <label for="messageFromRole">发送角色</label>
-          <select id="messageFromRole" data-action="message-from-role">${renderRoleSelectOptions(fromRoleId)}</select>
-        </div>
-        <div class="field">
-          <label for="messageToRole">接收角色</label>
-          <select id="messageToRole">${renderRoleSelectOptions(toRoleId, fromRoleId)}</select>
-        </div>
-        <div class="field">
-          <label for="messageTaskId">消息频道</label>
-          <select id="messageTaskId">
-            <option value="">私聊</option>
-            ${taskOptions}
-          </select>
-        </div>
-        <div class="field message-content-field">
-          <label for="messageContent">消息内容</label>
-          <textarea id="messageContent" placeholder="输入角色之间需要同步的上下文、阻塞点或交接事项。"></textarea>
-          <div id="messageStatus" class="form-status muted">选择发送角色和接收角色后即可发送。</div>
-        </div>
-      </div>
+      <h2>v0.10 Kernel 时间线</h2>
+      <p>这里只展示中央调度器、Agent 结构化结果、资源锁、审批和任务板事件。</p>
       <div class="modal-actions">
         <button class="secondary-button" data-action="close-modal">关闭</button>
-        <button class="primary-button" data-action="send-role-message">发送消息</button>
       </div>
       <div class="message-filterbar">
         <label>
@@ -3577,15 +6657,6 @@ function showMessageCenterModal(defaults = {}) {
   }
 }
 
-function setMessageStatus(message, type = "error") {
-  const status = document.getElementById("messageStatus");
-  if (!status) {
-    return;
-  }
-  status.className = `form-status ${type}`;
-  status.textContent = message;
-}
-
 function showTerminalOutputRefsModal(messageId) {
   const project = getProject();
   const message = project?.messages?.find((item) => item.id === messageId);
@@ -3597,7 +6668,7 @@ function showTerminalOutputRefsModal(messageId) {
   renderModal(`
     <div class="modal terminal-output-ref-modal">
       <h2>终端输出引用</h2>
-      <p>这些输出来自已确认投递的 Agent 终端，点击对应窗口可回到角色程序继续查看。</p>
+      <p>这些输出来自 Kernel 调度的 Agent 终端，点击对应窗口可回到角色程序继续查看。</p>
       <div class="task-plan-summary">
         <strong>${escapeHtml(getRole(message.fromRoleId).name)} → ${escapeHtml(message.toRoleIds.map((roleId) => getRole(roleId).name).join("、"))}</strong>
         <span>${escapeHtml(message.content)}</span>
@@ -3619,164 +6690,6 @@ function showTerminalOutputRefsModal(messageId) {
       </div>
     </div>
   `);
-}
-
-function sendRoleMessageFromModal() {
-  const project = getProject();
-  const fromRoleId = document.getElementById("messageFromRole")?.value;
-  const toRoleId = document.getElementById("messageToRole")?.value;
-  const taskId = document.getElementById("messageTaskId")?.value || null;
-  const content = document.getElementById("messageContent")?.value.trim();
-
-  if (!project || !fromRoleId || !toRoleId || !content) {
-    setMessageStatus("请完整填写发送角色、接收角色和消息内容。");
-    return;
-  }
-  if (fromRoleId === toRoleId) {
-    setMessageStatus("发送角色和接收角色不能相同。");
-    return;
-  }
-
-  const message = createMessage(fromRoleId, [toRoleId], content, taskId, {
-    source: "manual",
-    channelType: taskId ? "task" : "direct"
-  });
-  appendProjectMessage(project, message);
-
-  messageComposerDefaults = { fromRoleId, toRoleId, taskId: taskId || "" };
-  saveState();
-  recordAppLog("role.message.sent", {
-    projectId: project.id,
-    messageId: message.id,
-    fromRoleId,
-    toRoleIds: message.toRoleIds,
-    channelType: message.channelType,
-    taskId: message.taskId,
-    contentLength: message.content.length
-  });
-  render();
-  showMessageCenterModal(messageComposerDefaults);
-  setMessageStatus("消息已发送。", "ready");
-}
-
-function getTaskAndSubtask(taskId, subtaskId) {
-  const project = getProject();
-  const task = project?.tasks.find((item) => item.id === taskId);
-  const subtask = task?.subtasks.find((item) => item.id === subtaskId);
-  return { project, task, subtask };
-}
-
-function buildSubtaskInstructionContent(task, subtask) {
-  return [
-    `任务：${task.title}`,
-    `子任务：${subtask.title}`,
-    `目标角色：${getRole(subtask.roleId).name}`,
-    `执行说明：${subtask.description}`,
-    "",
-    "请基于以上上下文开始处理，并在遇到阻塞时同步给相关角色。"
-  ].join("\n");
-}
-
-function showSubtaskInstructionModal(taskId, subtaskId) {
-  closeMenus();
-  const { project, task, subtask } = getTaskAndSubtask(taskId, subtaskId);
-  if (!project || !task || !subtask) {
-    return;
-  }
-
-  const toRoleId = getRole(subtask.roleId).id;
-  const defaultFromRoleId = toRoleId === "product-manager" ? "tech-lead" : "product-manager";
-  const injectableWindows = getRunningAgentWindowsForRole(project, toRoleId, task.id);
-  renderModal(`
-    <div class="modal subtask-instruction-modal">
-      <h2>发送给角色</h2>
-      <p>把当前子任务上下文写入协作消息，角色终端可据此继续处理。</p>
-      <div class="message-composer">
-        <div class="field">
-          <label for="instructionFromRole">发送角色</label>
-          <select id="instructionFromRole">${renderRoleSelectOptions(defaultFromRoleId, toRoleId)}</select>
-        </div>
-        <div class="field">
-          <label for="instructionToRole">接收角色</label>
-          <select id="instructionToRole">${renderRoleSelectOptions(toRoleId, defaultFromRoleId)}</select>
-        </div>
-        <div class="field">
-          <label>任务频道</label>
-          <input value="${escapeHtml(task.title)}" disabled>
-        </div>
-        <div class="field message-content-field">
-          <label for="instructionContent">指令内容</label>
-          <textarea id="instructionContent">${escapeHtml(buildSubtaskInstructionContent(task, subtask))}</textarea>
-          <label class="checkbox-line">
-            <input id="instructionInjectTerminal" type="checkbox" ${injectableWindows.length > 0 ? "checked" : "disabled"}>
-            <span>${injectableWindows.length > 0 ? `同时注入 ${getRole(toRoleId).name} 的运行中 Agent 终端` : `未找到 ${getRole(toRoleId).name} 的运行中 Agent 终端`}</span>
-          </label>
-          <div id="instructionStatus" class="form-status muted">发送后会写入当前任务的协作时间线。</div>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
-        <button class="primary-button" data-action="send-subtask-instruction" data-task-id="${escapeHtml(task.id)}" data-subtask-id="${escapeHtml(subtask.id)}">发送指令</button>
-      </div>
-    </div>
-  `);
-}
-
-function setInstructionStatus(message, type = "error") {
-  const status = document.getElementById("instructionStatus");
-  if (!status) {
-    return;
-  }
-  status.className = `form-status ${type}`;
-  status.textContent = message;
-}
-
-async function sendSubtaskInstructionFromModal(taskId, subtaskId) {
-  const { project, task, subtask } = getTaskAndSubtask(taskId, subtaskId);
-  const fromRoleId = document.getElementById("instructionFromRole")?.value;
-  const toRoleId = document.getElementById("instructionToRole")?.value;
-  const content = document.getElementById("instructionContent")?.value.trim();
-  const injectTerminal = document.getElementById("instructionInjectTerminal")?.checked;
-
-  if (!project || !task || !subtask || !fromRoleId || !toRoleId || !content) {
-    setInstructionStatus("请完整填写发送角色、接收角色和指令内容。");
-    return;
-  }
-  if (fromRoleId === toRoleId) {
-    setInstructionStatus("发送角色和接收角色不能相同。");
-    return;
-  }
-
-  const message = appendProjectMessage(
-    project,
-    createMessage(fromRoleId, [toRoleId], content, task.id, {
-      source: "task-instruction",
-      channelType: "task"
-    })
-  );
-  task.updatedAt = message.createdAt;
-  messageComposerDefaults = { fromRoleId, toRoleId, taskId: task.id };
-  messageTimelineFilters = { taskId: task.id, query: "" };
-  saveState();
-  recordAppLog("task.instruction.sent", {
-    projectId: project.id,
-    taskId: task.id,
-    subtaskId: subtask.id,
-    messageId: message.id,
-    fromRoleId,
-    toRoleIds: message.toRoleIds,
-    source: message.source
-  });
-  let injectResult = { ok: false, queuedCount: 0, reason: "not-requested" };
-  if (injectTerminal) {
-    injectResult = await injectMessageIntoAgentTerminals(message.id, { limit: 1 });
-  }
-  render();
-  showMessageCenterModal({ ...messageComposerDefaults, filterTaskId: task.id });
-  const injectSuffix = injectTerminal
-    ? (injectResult.ok ? `并已加入 ${injectResult.queuedCount} 个待确认投递。` : "但未找到可投递的运行中 Agent 终端。")
-    : "";
-  setMessageStatus(`任务指令已发送。${injectSuffix}`, injectTerminal && !injectResult.ok ? "warn" : "ready");
 }
 
 async function showAboutModal() {
@@ -3927,7 +6840,11 @@ function approvePendingCommand() {
     return;
   }
 
-  window.cossAPI?.sendTerminalInput?.(pendingCommandApproval.windowId, "\r");
+  window.cossAPI?.sendTerminalInput?.(pendingCommandApproval.windowId, "\r", {
+    bypassPermissionGuard: true,
+    clearInputGuard: true,
+    reason: "renderer-approved"
+  });
   updateCommandLog(pendingCommandApproval.logId, "approved");
   pendingCommandApproval = null;
   closeModal();
@@ -3940,10 +6857,76 @@ function rejectPendingCommand() {
   }
 
   const view = terminalViews.get(pendingCommandApproval.windowId);
-  window.cossAPI?.sendTerminalInput?.(pendingCommandApproval.windowId, "\u0015");
+  window.cossAPI?.sendTerminalInput?.(pendingCommandApproval.windowId, "\u0015", {
+    bypassPermissionGuard: true,
+    clearInputGuard: true,
+    reason: "renderer-rejected"
+  });
   view?.term?.writeln("");
   view?.term?.writeln("\x1b[33mCosS 已阻止该命令，未发送 Enter 执行。\x1b[0m");
   updateCommandLog(pendingCommandApproval.logId, "rejected");
+  pendingCommandApproval = null;
+  closeModal();
+}
+
+function renderCommandStatus(status) {
+  return {
+    pending: "等待确认",
+    approved: "已确认执行",
+    "session-approved": "本会话已授权",
+    "approved-by-grant": "会话授权执行",
+    executed: "已执行",
+    rejected: "已拒绝"
+  }[status] || status;
+}
+
+function showCommandApprovalModal() {
+  if (!pendingCommandApproval) {
+    return;
+  }
+
+  const role = getRole(pendingCommandApproval.roleId);
+  const assessment = pendingCommandApproval.assessment;
+  renderModal(`
+    <div class="modal command-approval">
+      <h2>命令执行需要确认</h2>
+      <p>${escapeHtml(role.name)} 即将执行一个 ${renderSeverityLabel(assessment.severity)} 命令。你可以只允许本次执行，也可以在当前会话内允许同一角色执行同类命令。</p>
+      <div class="risk-summary ${assessment.severity}">
+        <strong>${escapeHtml(assessment.label)}</strong>
+        <span>${escapeHtml(assessment.description)}</span>
+      </div>
+      <pre class="command-preview">${escapeHtml(pendingCommandApproval.command)}</pre>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="reject-command">拒绝执行</button>
+        <button class="secondary-button" data-action="approve-command-session">本会话允许同类命令</button>
+        <button class="primary-button" data-action="approve-command">允许一次</button>
+      </div>
+    </div>
+  `);
+}
+
+function approvePendingCommand(options = {}) {
+  if (!pendingCommandApproval) {
+    return;
+  }
+
+  const win = getWindowState(pendingCommandApproval.windowId);
+  let grant = null;
+  if (options.remember && win) {
+    grant = createCommandApprovalGrant(win, pendingCommandApproval.assessment, pendingCommandApproval.command);
+  }
+
+  window.cossAPI?.sendTerminalInput?.(pendingCommandApproval.windowId, "\r", {
+    bypassPermissionGuard: true,
+    clearInputGuard: true,
+    reason: options.remember ? "renderer-session-approved" : "renderer-approved",
+    grantId: grant?.id || ""
+  });
+  updateCommandLog(
+    pendingCommandApproval.logId,
+    options.remember ? "session-approved" : "approved",
+    grant ? { grantId: grant.id, grantScope: grant.scope } : {}
+  );
   pendingCommandApproval = null;
   closeModal();
 }
@@ -4121,7 +7104,7 @@ function renderLogRows() {
 function showLogsModal() {
   renderModal(`
     <div class="modal log-panel">
-      <h2>v0.2 命令审计与环境</h2>
+      <h2>命令审计与环境</h2>
       <p>这里记录角色终端执行过的命令，并提供 Claude Code 环境重新检测。</p>
       <section class="log-section">
         <div class="log-section-title">
@@ -4150,6 +7133,16 @@ function renderAgentProviderOption(value, label, description) {
     <button class="agent-provider-option ${active ? "active" : ""}" data-action="set-agent-provider" data-provider="${value}">
       <strong>${escapeHtml(label)}</strong>
       <span>${escapeHtml(description)}</span>
+    </button>
+  `;
+}
+
+function renderAgentPermissionOption(policy) {
+  const active = normalizeAgentPermissionMode(state.settings.agentPermissionMode) === policy.id;
+  return `
+    <button class="permission-policy-option ${active ? "active" : ""}" data-action="set-agent-permission-mode" data-permission-mode="${escapeHtml(policy.id)}">
+      <strong>${escapeHtml(policy.label)}</strong>
+      <span>${escapeHtml(policy.description)}</span>
     </button>
   `;
 }
@@ -4213,7 +7206,7 @@ function renderModelSettingsSection() {
 
   return `
     <div class="settings-section-title">
-      <strong>v0.3 模型配置</strong>
+      <strong>模型配置</strong>
       <span>默认系统模型固定为 ${escapeHtml(MODEL_PROVIDER_PRESETS.system.baseUrl)} / ${escapeHtml(MODEL_PROVIDER_PRESETS.system.modelName)}。</span>
     </div>
     <div class="settings-row">
@@ -4274,6 +7267,53 @@ function renderSettingsPlaceholder(title, description, items = []) {
   `;
 }
 
+function renderMemorySettingsSection() {
+  const project = getProject();
+  if (!project) {
+    return renderSettingsPlaceholder("记忆", "当前没有打开的项目。", ["先创建或选择一个项目"]);
+  }
+  const memory = ensureProjectMemoryShape(project);
+  const taskCount = memory.taskHistory.length;
+  const artifactCount = memory.artifacts.length;
+  const decisionCount = memory.decisions.length;
+  const updatedAt = memory.updatedAt ? formatDateTime(memory.updatedAt) : "尚未刷新";
+  return `
+    <div class="settings-section-title">
+      <strong>项目记忆</strong>
+      <span>项目记忆会在新建任务时提供给 Kernel Planner，并通过 MCP 上下文提供给 Agent，避免每个新任务都像新项目一样重新规划。</span>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>当前项目</strong>
+        <span>${escapeHtml(project.name)} · ${escapeHtml(project.path || "")}</span>
+      </div>
+      <button class="settings-toggle-button" data-action="toggle-project-memory" aria-pressed="${memory.enabled !== false}">
+        <span class="settings-toggle ${memory.enabled !== false ? "on" : ""}"></span>
+      </button>
+    </div>
+    <div class="settings-row project-memory-actions-row">
+      <div>
+        <strong>记忆状态</strong>
+        <span>${memory.enabled !== false ? "已开启" : "已关闭"} · ${taskCount} 个任务摘要 · ${artifactCount} 个产物 · ${decisionCount} 条决策 · ${escapeHtml(updatedAt)}</span>
+      </div>
+      <div class="settings-action-stack">
+        <button class="secondary-button" data-action="refresh-project-memory">刷新记忆</button>
+        <button class="secondary-button" data-action="save-project-memory">保存备注</button>
+        <button class="secondary-button danger" data-action="clear-project-memory">清空</button>
+      </div>
+    </div>
+    <div class="project-memory-panel">
+      <label for="projectMemoryManualNotes">手写项目备注</label>
+      <textarea id="projectMemoryManualNotes" spellcheck="false" placeholder="例如：本项目已选 React + Vite；后端接口前缀为 /api；不要重复创建脚手架。">${escapeHtml(memory.manualNotes || "")}</textarea>
+      <div class="project-memory-help">这部分会被原样放入新任务规划提示词，适合记录架构选择、目录约定、已确认边界和不要重复的事项。</div>
+    </div>
+    <div class="project-memory-panel">
+      <label>自动摘要</label>
+      <pre class="project-memory-summary">${escapeHtml(formatProjectMemoryForDisplay(memory))}</pre>
+    </div>
+  `;
+}
+
 function renderSystemSettingsSection() {
   const activeModel = getActiveModelConfig();
   return `
@@ -4308,6 +7348,49 @@ function renderSystemSettingsSection() {
   `;
 }
 
+function renderMcpConfigStatus() {
+  if (!mcpConfigStatus) {
+    return `
+      <div class="model-connectivity-status idle" data-mcp-config-status>
+        <strong>尚未检测当前项目 MCP 配置</strong>
+        <span>点击“检测配置”可检查 .mcp.json、.coss/mcp/coss-mcp.json 以及 Claude Code / Codex / CodeBuddy Code 的项目可发现状态。</span>
+      </div>
+    `;
+  }
+
+  if (mcpConfigStatus.state === "writing" || mcpConfigStatus.state === "checking") {
+    return `
+      <div class="model-connectivity-status testing" data-mcp-config-status>
+        <strong>${mcpConfigStatus.state === "checking" ? "正在检测 MCP 配置" : "正在生成 MCP 配置"}</strong>
+        <span>${escapeHtml(mcpConfigStatus.message || "请稍候...")}</span>
+      </div>
+    `;
+  }
+
+  const root = mcpConfigStatus.rootConfig || {};
+  const coss = mcpConfigStatus.cossConfig || {};
+  const rootReady = root.exists && root.valid && root.matches;
+  const cossReady = coss.exists && coss.valid && coss.matches && coss.metaMatches !== false;
+  const providers = [
+    ["Claude Code", rootReady],
+    ["Codex", rootReady],
+    ["CodeBuddy Code", rootReady]
+  ];
+  const checkedAt = mcpConfigStatus.checkedAt ? ` · ${formatDateTime(mcpConfigStatus.checkedAt)}` : "";
+
+  return `
+    <div class="model-connectivity-status ${mcpConfigStatus.ok ? "ready" : "missing"}" data-mcp-config-status>
+      <strong>${mcpConfigStatus.ok ? "项目 MCP 配置健康" : "项目 MCP 配置需要修复"}</strong>
+      <span>${escapeHtml(mcpConfigStatus.error || `检测时间${checkedAt}`)}</span>
+      <span>.mcp.json：${rootReady ? "可发现" : root.exists ? root.valid ? "coss server 不匹配" : `解析失败：${root.error || "JSON 无效"}` : "缺失"}${root.path ? ` · ${root.path}` : ""}</span>
+      <span>.coss/mcp/coss-mcp.json：${cossReady ? "已同步" : coss.exists ? coss.valid ? "内容不匹配" : `解析失败：${coss.error || "JSON 无效"}` : "缺失"}${coss.path ? ` · ${coss.path}` : ""}</span>
+      <div class="mcp-agent-discovery-list">
+        ${providers.map(([label, ready]) => `<span class="${ready ? "ready" : "missing"}">${escapeHtml(label)}：${ready ? "可发现" : "待修复"}</span>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderAgentSettingsSection() {
   return `
     <div class="settings-row agent-provider-row">
@@ -4321,6 +7404,21 @@ function renderAgentSettingsSection() {
         ${renderAgentProviderOption("codebuddy", "CodeBuddy Code", "适合 CodeBuddy Code 代码代理任务。")}
       </div>
     </div>
+    <div class="settings-row">
+      <div>
+        <strong>CosS MCP 工具层</strong>
+        <span>为当前项目生成 v0.10 Kernel MCP 配置，让 Agent 通过任务板、租约步骤、结构化结果、资源锁和审批完成协作。</span>
+      </div>
+      <div class="settings-action-stack">
+        <button class="settings-toggle-button" data-action="toggle-agent-mcp-auto-config" aria-pressed="${state.settings.agentMcpAutoConfigEnabled === true}" title="创建 Agent 终端时自动维护项目 MCP 配置">
+          <span class="settings-toggle ${state.settings.agentMcpAutoConfigEnabled === true ? "on" : ""}"></span>
+        </button>
+        <button class="secondary-button" data-action="check-project-mcp-config">检测配置</button>
+        <button class="secondary-button" data-action="write-project-mcp-config">生成/修复</button>
+        <button class="secondary-button" data-action="show-mcp-audit">查看审计</button>
+      </div>
+    </div>
+    <div class="settings-status-slot">${renderMcpConfigStatus()}</div>
     <div class="settings-row">
       <div>
         <strong>Claude Code 自动检测</strong>
@@ -4402,7 +7500,7 @@ function renderAgentSettingsSection() {
     <div class="settings-code-editor">
       <textarea data-agent-prompt-template spellcheck="false">${escapeHtml(state.settings.agentPromptTemplate || defaultState.settings.agentPromptTemplate)}</textarea>
       <div class="settings-code-help">
-        支持占位符：{{roleName}}、{{roleDescription}}、{{projectName}}、{{workspace}}、{{agentProvider}}、{{sessionId}}、{{taskTitle}}、{{taskGoal}}、{{subtaskTitle}}、{{subtaskDescription}}。
+        支持占位符：{{roleName}}、{{roleDescription}}、{{projectName}}、{{workspace}}、{{agentProvider}}、{{agentPermissionLabel}}、{{agentPermissionInstructions}}、{{sessionId}}、{{taskTitle}}、{{taskGoal}}、{{subtaskTitle}}、{{subtaskDescription}}。
       </div>
     </div>
     <div class="settings-row">
@@ -4418,7 +7516,21 @@ function renderAgentSettingsSection() {
 }
 
 function renderSecuritySettingsSection() {
+  const activePolicy = getAgentPermissionPolicy();
   return `
+    <div class="settings-row permission-policy-row">
+      <div>
+        <strong>Agent 权限模式</strong>
+        <span>当前模式：${escapeHtml(activePolicy.label)}。新建 Agent 终端和后续任务投递都会携带该权限说明。</span>
+      </div>
+      <div class="permission-policy-grid">
+        ${Object.values(AGENT_PERMISSION_POLICIES).map(renderAgentPermissionOption).join("")}
+      </div>
+    </div>
+    <div class="settings-status-slot permission-policy-status">
+      <strong>${escapeHtml(activePolicy.label)}</strong>
+      <span>${escapeHtml(activePolicy.instruction)}</span>
+    </div>
     <div class="settings-row">
       <div>
         <strong>终端安全确认</strong>
@@ -4436,16 +7548,115 @@ function renderSecuritySettingsSection() {
   `;
 }
 
+function formatFileSize(size) {
+  const value = Number(size) || 0;
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${value} B`;
+}
+
+function renderStorageOperationStatus() {
+  if (!storageOperationStatus) {
+    return "";
+  }
+  return `
+    <div class="model-connectivity-status ${storageOperationStatus.ok ? "ready" : "missing"}" data-storage-operation-status>
+      <strong>${escapeHtml(storageOperationStatus.title || (storageOperationStatus.ok ? "操作完成" : "操作失败"))}</strong>
+      <span>${escapeHtml(storageOperationStatus.message || "")}</span>
+    </div>
+  `;
+}
+
+function renderStorageSettingsSection() {
+  const info = latestStorageInfo;
+  const backups = info?.backups || [];
+  return `
+    <div class="settings-row">
+      <div>
+        <strong>SQLite 状态存储</strong>
+        <span>${info ? (info.sqliteEnabled ? "当前工作区状态已使用 SQLite 文件保存。" : info.sqliteReason) : "尚未读取存储信息。"}</span>
+      </div>
+      <button class="secondary-button" data-action="refresh-storage-info">刷新</button>
+    </div>
+    <div class="settings-status-slot storage-status-card" data-storage-info>
+      ${
+        info
+          ? `
+            <strong>${escapeHtml(info.mode)} · Schema ${escapeHtml(info.schemaVersion)}</strong>
+            <span>SQLite：${escapeHtml(info.sqlitePath || "未启用")} · ${formatFileSize(info.sqliteSize)} · ${escapeHtml(formatDateTime(info.sqliteModifiedAt))}</span>
+            <span>JSON 兼容快照：${escapeHtml(info.statePath || "")} · ${formatFileSize(info.stateSize)}</span>
+            <span>备份目录：${escapeHtml(info.backupDirectory || "")} · ${info.backupCount || 0} 个备份</span>
+          `
+          : "点击刷新读取 SQLite、JSON 快照和备份信息。"
+      }
+    </div>
+    ${renderStorageOperationStatus()}
+    <div class="settings-row">
+      <div>
+        <strong>导出状态数据</strong>
+        <span>导出当前 SQLite 中的工作区状态，便于迁移到其他机器或人工备份。</span>
+      </div>
+      <button class="secondary-button" data-action="export-storage-state">导出</button>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>导入状态数据</strong>
+        <span>导入前会自动创建备份，导入后会写入 SQLite 并刷新 JSON 兼容快照。</span>
+      </div>
+      <button class="secondary-button" data-action="import-storage-state">导入</button>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>立即创建备份</strong>
+        <span>把当前 SQLite 状态文件复制到备份目录，保留最近 ${escapeHtml(12)} 个备份。</span>
+      </div>
+      <button class="secondary-button" data-action="create-storage-backup">创建备份</button>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>导出诊断包</strong>
+        <span>包含存储摘要、脱敏状态快照和近期日志，用于排查异常恢复或协作问题。</span>
+      </div>
+      <button class="secondary-button" data-action="export-diagnostics-package">导出诊断包</button>
+    </div>
+    <div class="settings-row">
+      <div>
+        <strong>打开数据目录</strong>
+        <span>查看 SQLite、JSON 快照、备份、诊断包和日志目录。</span>
+      </div>
+      <button class="secondary-button" data-action="open-storage-directory">打开目录</button>
+    </div>
+    <div class="storage-backup-list">
+      <strong>最近备份</strong>
+      ${
+        backups.length
+          ? backups.map((backup) => `
+              <div class="storage-backup-item">
+                <span>${escapeHtml(backup.name)}</span>
+                <em>${escapeHtml(backup.type)} · ${formatFileSize(backup.size)} · ${escapeHtml(formatDateTime(backup.createdAt))}</em>
+              </div>
+            `).join("")
+          : `<span class="muted-text">暂无备份。</span>`
+      }
+    </div>
+  `;
+}
+
 function renderSettingsContent() {
   return {
     account: () => renderSettingsPlaceholder("账户管理", "账户登录、团队身份和同步能力将在后续版本接入。", ["本地模式继续可用", "后续支持团队空间和权限"]),
     system: renderSystemSettingsSection,
     agent: renderAgentSettingsSection,
     memory: () => renderSettingsPlaceholder("记忆", "这里将管理项目记忆、角色记忆和可清理的上下文缓存。", ["项目记忆开关", "角色长期记忆", "记忆导出与清理"]),
+    memory: renderMemorySettingsSection,
     model: renderModelSettingsSection,
     assistant: () => renderSettingsPlaceholder("助理设置", "这里将配置全局助理行为、默认语气和任务确认策略。", ["默认助理角色", "任务确认策略", "自动总结"]),
     personalization: () => renderSettingsPlaceholder("个性化", "这里将配置主题、字号、桌面背景和窗口偏好。", ["浅色/深色主题", "工作区背景", "窗口默认尺寸"]),
-    data: () => renderSettingsPlaceholder("数据管理", "这里将管理本地工作区数据、备份、导入和导出。", ["状态文件位置", "备份与恢复", "清理缓存"]),
+    data: renderStorageSettingsSection,
     security: renderSecuritySettingsSection,
     help: () => renderSettingsPlaceholder("帮助与反馈", "这里将放置使用说明、问题反馈和诊断信息。", ["快捷入口", "诊断包", "反馈记录"])
   }[activeSettingsSection]?.() || renderSystemSettingsSection();
@@ -4492,6 +7703,59 @@ async function checkClaudeStatus() {
   const nextMount = document.getElementById("claudeStatusMount");
   if (nextMount) {
     nextMount.innerHTML = renderClaudeStatus(latestClaudeStatus);
+  }
+}
+
+async function refreshStorageInfo({ rerender = true } = {}) {
+  if (!window.cossAPI?.getStorageInfo) {
+    latestStorageInfo = null;
+    return null;
+  }
+
+  try {
+    latestStorageInfo = await window.cossAPI.getStorageInfo();
+  } catch (error) {
+    storageOperationStatus = {
+      ok: false,
+      title: "读取存储信息失败",
+      message: error.message
+    };
+  }
+
+  if (rerender && activeSettingsSection === "data") {
+    showSettingsModal();
+  }
+  return latestStorageInfo;
+}
+
+async function runStorageOperation(actionName, operation) {
+  storageOperationStatus = {
+    ok: true,
+    title: actionName,
+    message: "正在执行..."
+  };
+  showSettingsModal();
+
+  try {
+    const result = await operation();
+    storageOperationStatus = {
+      ok: Boolean(result?.ok),
+      title: result?.ok ? `${actionName}完成` : `${actionName}未完成`,
+      message: result?.canceled
+        ? "用户已取消。"
+        : result?.error || result?.path || result?.backupPath || "操作已完成。"
+    };
+    await refreshStorageInfo({ rerender: false });
+    showSettingsModal();
+    return result;
+  } catch (error) {
+    storageOperationStatus = {
+      ok: false,
+      title: `${actionName}失败`,
+      message: error.message
+    };
+    showSettingsModal();
+    return { ok: false, error: error.message };
   }
 }
 
@@ -4594,6 +7858,270 @@ async function testAgentLogin(provider) {
 function refreshSettingsModalIfOpen() {
   if (document.querySelector(".settings-shell")) {
     showSettingsModal();
+  }
+}
+
+function getCurrentProjectMcpRequest() {
+  const project = getProject();
+  if (!project?.path) {
+    return null;
+  }
+  return {
+    projectId: project.id,
+    projectPath: project.path
+  };
+}
+
+async function checkCurrentProjectMcpConfig({ rerender = true } = {}) {
+  const request = getCurrentProjectMcpRequest();
+  if (!request) {
+    mcpConfigStatus = {
+      ok: false,
+      error: "请先创建或选择一个带项目路径的工作区。"
+    };
+    if (rerender) {
+      refreshSettingsModalIfOpen();
+    }
+    return { ok: false, error: mcpConfigStatus.error };
+  }
+
+  if (!window.cossAPI?.checkProjectMcpConfig) {
+    mcpConfigStatus = {
+      ok: false,
+      error: "当前运行环境未暴露 MCP 配置检测接口。"
+    };
+    if (rerender) {
+      refreshSettingsModalIfOpen();
+    }
+    return { ok: false, error: mcpConfigStatus.error };
+  }
+
+  mcpConfigStatus = {
+    state: "checking",
+    message: `正在检测 ${request.projectPath}`
+  };
+  if (rerender) {
+    refreshSettingsModalIfOpen();
+  }
+
+  try {
+    const result = await window.cossAPI.checkProjectMcpConfig(request);
+    mcpConfigStatus = result || { ok: false, error: "MCP 配置检测无返回。" };
+    recordAppLog("settings.mcp-project-config.checked", {
+      projectId: request.projectId,
+      ok: Boolean(result?.ok),
+      rootConfigMatches: Boolean(result?.rootConfig?.matches),
+      cossConfigMatches: Boolean(result?.cossConfig?.matches),
+      error: result?.ok ? "" : (result?.error || "")
+    }, result?.ok ? "info" : "warn");
+    if (rerender) {
+      refreshSettingsModalIfOpen();
+    }
+    return mcpConfigStatus;
+  } catch (error) {
+    mcpConfigStatus = {
+      ok: false,
+      error: error.message
+    };
+    recordAppLog("settings.mcp-project-config.check.failed", {
+      projectId: request.projectId,
+      error: error.message
+    }, "error");
+    if (rerender) {
+      refreshSettingsModalIfOpen();
+    }
+    return { ok: false, error: error.message };
+  }
+}
+
+async function writeCurrentProjectMcpConfig() {
+  const request = getCurrentProjectMcpRequest();
+  if (!request) {
+    mcpConfigStatus = {
+      ok: false,
+      error: "请先创建或选择一个带项目路径的工作区。"
+    };
+    refreshSettingsModalIfOpen();
+    return { ok: false, error: mcpConfigStatus.error };
+  }
+
+  if (!window.cossAPI?.writeProjectMcpConfig) {
+    mcpConfigStatus = {
+      ok: false,
+      error: "当前运行环境未暴露 MCP 配置生成接口。"
+    };
+    refreshSettingsModalIfOpen();
+    return { ok: false, error: mcpConfigStatus.error };
+  }
+
+  mcpConfigStatus = {
+    state: "writing",
+    message: `正在写入 ${request.projectPath}`
+  };
+  refreshSettingsModalIfOpen();
+
+  try {
+    const result = await window.cossAPI.writeProjectMcpConfig(request);
+    if (result?.ok) {
+      await checkCurrentProjectMcpConfig({ rerender: false });
+    } else {
+      mcpConfigStatus = {
+        ok: false,
+        error: result?.error || "MCP 配置生成失败。"
+      };
+    }
+    recordAppLog("settings.mcp-project-config.completed", {
+      projectId: request.projectId,
+      ok: Boolean(result?.ok),
+      rootConfigPath: result?.rootConfigPath || "",
+      cossConfigPath: result?.cossConfigPath || "",
+      error: result?.ok ? "" : (result?.error || "")
+    }, result?.ok ? "info" : "warn");
+    refreshSettingsModalIfOpen();
+    return result;
+  } catch (error) {
+    mcpConfigStatus = {
+      ok: false,
+      error: error.message
+    };
+    recordAppLog("settings.mcp-project-config.failed", {
+      projectId: request.projectId,
+      error: error.message
+    }, "error");
+    refreshSettingsModalIfOpen();
+    return { ok: false, error: error.message };
+  }
+}
+
+async function showMcpAuditModal() {
+  closeMenus();
+  const project = getProject();
+  const taskOptions = (project?.tasks || [])
+    .map((task) => `<option value="${escapeHtml(task.id)}" ${mcpAuditFilters.taskId === task.id ? "selected" : ""}>${escapeHtml(task.title)}</option>`)
+    .join("");
+  const roleOptions = ROLE_TEMPLATES
+    .map((role) => `<option value="${escapeHtml(role.id)}" ${mcpAuditFilters.roleId === role.id ? "selected" : ""}>${escapeHtml(role.name)}</option>`)
+    .join("");
+  const toolOptions = MCP_TOOL_NAMES
+    .map((name) => `<option value="${escapeHtml(name)}" ${mcpAuditFilters.tool === name ? "selected" : ""}>${escapeHtml(name)}</option>`)
+    .join("");
+  const renderAuditShell = (body, eventsCount = null) => `
+    <div class="modal mcp-audit-modal">
+      <h2>MCP 工具审计</h2>
+      <p>${eventsCount === null
+        ? "正在读取最近的 mcp.* 日志事件。"
+        : `最近 ${eventsCount} 条 MCP 事件。可按角色、任务、工具和关键词过滤。`}</p>
+      <div class="mcp-audit-filterbar">
+        <label>
+          <span>角色</span>
+          <select id="mcpAuditRoleFilter">
+            <option value="">全部角色</option>
+            ${roleOptions}
+          </select>
+        </label>
+        <label>
+          <span>任务</span>
+          <select id="mcpAuditTaskFilter">
+            <option value="">全部任务</option>
+            ${taskOptions}
+          </select>
+        </label>
+        <label>
+          <span>工具</span>
+          <select id="mcpAuditToolFilter">
+            <option value="">全部工具</option>
+            ${toolOptions}
+          </select>
+        </label>
+        <label>
+          <span>搜索</span>
+          <input id="mcpAuditQueryFilter" value="${escapeHtml(mcpAuditFilters.query || "")}" placeholder="事件、payload、错误">
+        </label>
+        <button class="secondary-button compact" data-action="apply-mcp-audit-filters">应用</button>
+      </div>
+      ${body}
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="show-settings">返回设置</button>
+        <button class="secondary-button" data-action="show-mcp-audit">刷新</button>
+        <button class="primary-button" data-action="close-modal">关闭</button>
+      </div>
+    </div>
+  `;
+
+  renderModal(`
+    ${renderAuditShell(`<div class="message-empty">正在读取...</div>`)}
+  `);
+
+  try {
+    const result = window.cossAPI?.getMcpAuditEvents
+      ? await window.cossAPI.getMcpAuditEvents({ limit: 80, ...mcpAuditFilters })
+      : { ok: false, error: "当前运行环境未暴露 MCP 审计接口。", events: [] };
+    const events = result?.events || [];
+    renderModal(`
+      ${renderAuditShell(`
+        <div class="mcp-audit-list">
+          ${events.length ? events.map((entry) => `
+            <div class="mcp-audit-row ${escapeHtml(entry.level || "info")}">
+              <div>
+                <strong>${escapeHtml(entry.event || "")}</strong>
+                <span>${escapeHtml(formatDateTime(entry.timestamp || ""))} · ${escapeHtml(entry.level || "info")} · ${escapeHtml(entry.fileName || "")}</span>
+              </div>
+              <pre>${escapeHtml(JSON.stringify(entry.payload || {}, null, 2))}</pre>
+            </div>
+          `).join("") : `<div class="message-empty">${escapeHtml(result?.error || "暂无 MCP 审计事件。")}</div>`}
+        </div>
+      `, events.length)}
+    `);
+  } catch (error) {
+    renderModal(`
+      ${renderAuditShell(`<div class="message-empty">${escapeHtml(error.message)}</div>`, 0)}
+    `);
+  }
+}
+
+function showTaskMcpConfigPrompt(task, status) {
+  renderModal(`
+    <div class="modal">
+      <h2>为本次任务启用 MCP 自动协作</h2>
+      <p>当前项目 MCP 配置尚未就绪。生成后，Claude Code、Codex、CodeBuddy Code 可通过 CosS MCP 工具读取任务、领取消息、续租步骤和回传结构化结果。</p>
+      <div class="model-connectivity-status missing">
+        <strong>${escapeHtml(task?.title || "新任务")} · MCP 配置待修复</strong>
+        <span>${escapeHtml(status?.error || ".mcp.json 或 .coss/mcp/coss-mcp.json 缺失/不匹配。")}</span>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">暂不处理</button>
+        <button class="secondary-button" data-action="open-agent-settings">打开智能体设置</button>
+        <button class="primary-button" data-action="write-task-mcp-config">生成/修复配置</button>
+      </div>
+    </div>
+  `);
+}
+
+async function ensureProjectMcpConfigAfterTaskCreated(task) {
+  const project = getProject();
+  if (!project?.path || !task) {
+    return;
+  }
+
+  if (state.settings.agentMcpAutoConfigEnabled) {
+    const result = await writeCurrentProjectMcpConfig();
+    recordAppLog("task.mcp-config.auto-maintained", {
+      projectId: project.id,
+      taskId: task.id,
+      ok: Boolean(result?.ok),
+      error: result?.ok ? "" : (result?.error || "")
+    }, result?.ok ? "info" : "warn");
+    return;
+  }
+
+  const status = await checkCurrentProjectMcpConfig({ rerender: false });
+  if (!status?.ok) {
+    recordAppLog("task.mcp-config.prompted", {
+      projectId: project.id,
+      taskId: task.id,
+      reason: status?.error || "not-ready"
+    }, "warn");
+    showTaskMcpConfigPrompt(task, status);
   }
 }
 
@@ -4856,6 +8384,7 @@ async function executeCustomMenuCommand(command) {
 
 function render() {
   const project = getProject();
+  captureTaskListScrollState();
   hydratedBrowserViews.clear();
   appRoot.innerHTML = `
     <div class="app-frame">
@@ -4872,17 +8401,54 @@ function render() {
   attachWindowDragHandlers();
   hydrateTerminalWindows();
   hydrateBrowserViews();
+  restoreTaskListScrollState();
+}
+
+function captureTaskListScrollState() {
+  const windowContent = document.querySelector(".program-window.task-list .window-content");
+  const items = document.querySelector(".task-list-items");
+  const detail = document.querySelector(".task-list-detail");
+  taskListScrollState = {
+    windowContent: Number.isFinite(windowContent?.scrollTop) ? windowContent.scrollTop : taskListScrollState.windowContent,
+    items: Number.isFinite(items?.scrollTop) ? items.scrollTop : taskListScrollState.items,
+    detail: Number.isFinite(detail?.scrollTop) ? detail.scrollTop : taskListScrollState.detail
+  };
+}
+
+function restoreTaskListScrollState() {
+  const stateToRestore = { ...taskListScrollState };
+  requestAnimationFrame(() => {
+    const windowContent = document.querySelector(".program-window.task-list .window-content");
+    const items = document.querySelector(".task-list-items");
+    const detail = document.querySelector(".task-list-detail");
+    if (windowContent) {
+      windowContent.scrollTop = stateToRestore.windowContent || 0;
+    }
+    if (items) {
+      items.scrollTop = stateToRestore.items || 0;
+    }
+    if (detail) {
+      detail.scrollTop = stateToRestore.detail || 0;
+    }
+  });
 }
 
 function renderSidebar(project) {
   const projects = state.projects
-    .map((item) => `
-      <button class="project-item ${item.id === state.activeProjectId ? "active" : ""}" data-action="select-project" data-project-id="${item.id}">
-        <span class="nav-icon">${icon("file")}</span>
-        <span class="project-name">${escapeHtml(item.name)}</span>
-        <span class="project-time">${nowTimeLabel()}</span>
-      </button>
-    `)
+    .map((item) => {
+      const createdLabel = formatProjectCreatedTime(item);
+      const createdTitle = formatDateTime(item.createdAt || item.lastOpenedAt || "");
+      return `
+      <div class="project-item ${item.id === state.activeProjectId ? "active" : ""}">
+        <button class="project-open" data-action="select-project" data-project-id="${item.id}" title="${escapeHtml(item.name)}">
+          <span class="nav-icon">${icon("file")}</span>
+          <span class="project-name">${escapeHtml(item.name)}</span>
+          <span class="project-time" title="${escapeHtml(createdTitle ? `创建于 ${createdTitle}` : "创建时间未知")}">${escapeHtml(createdLabel)}</span>
+        </button>
+        <button class="project-delete" title="删除项目" data-action="show-delete-project" data-project-id="${escapeHtml(item.id)}">×</button>
+      </div>
+    `;
+    })
     .join("");
 
   return `
@@ -4909,7 +8475,7 @@ function renderSidebar(project) {
         <button class="icon-button" title="新建项目" data-action="show-create-project">${icon("plus")}</button>
       </div>
       <div class="project-list">
-        ${projects || `<div class="project-item">暂无项目</div>`}
+        ${projects || `<div class="project-list-empty">暂无项目</div>`}
       </div>
       <div class="sidebar-footer">
         <div class="profile-name">Mood_01</div>
@@ -5119,14 +8685,23 @@ function renderCollabOverlay(project) {
     .map((win) => {
       const status = getWindowStatus(win);
       const collaborators = getCollaboratorsForWindow(win);
+      const relayStage = getAgentRelayStageForWindow(win);
+      const isAgentWindow = win.type === "terminal" && normalizeTerminalMode(win.terminalMode) === "agent";
+      const relayClass = isAgentWindow ? `relay-${relayStage.className || getRelayStageClass(relayStage.stage)}` : "";
+      const badgeTitle = isAgentWindow
+        ? `协作状态：${getStatusLabel(status)}；Agent 接力阶段：${relayStage.label}`
+        : `协作状态：${getStatusLabel(status)}`;
+      const badgeContent = isAgentWindow
+        ? (relayStage.symbol || getRelayStageSymbol(relayStage.stage))
+        : (collaborators.length || statusSymbol(status));
       return `
         <div class="collab-overlay-item ${win.maximized ? "maximized" : ""}"
           data-window-id="${win.id}"
           style="${renderCollabOverlayStyle(win)}">
-          <button class="collab-badge ${status}" title="协作状态：${getStatusLabel(status)}" data-action="toggle-popover" data-window-id="${win.id}">
-            ${collaborators.length || statusSymbol(status)}
+          <button class="collab-badge ${status} ${relayClass}" title="${escapeHtml(badgeTitle)}" data-action="toggle-popover" data-window-id="${win.id}" data-relay-stage="${escapeHtml(relayStage.stage || "idle")}">
+            ${escapeHtml(badgeContent)}
           </button>
-          ${activePopoverWindowId === win.id ? renderCollabPopover(win, collaborators, status) : ""}
+          ${activePopoverWindowId === win.id ? renderCollabPopover(win, collaborators, status, relayStage) : ""}
         </div>
       `;
     })
@@ -5163,12 +8738,15 @@ function renderBrowserContent(win) {
     <div class="browser-program">
       <div class="browser-tabs">
         ${win.browserTabs.map((tab) => `
-          <button class="browser-tab ${tab.id === win.activeBrowserTabId ? "active" : ""}" data-action="browser-switch-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">
-            <span>${escapeHtml(tab.title || tab.url || "新标签")}</span>
-          </button>
+          <div class="browser-tab-shell ${tab.id === win.activeBrowserTabId ? "active" : ""}">
+            <button class="browser-tab ${tab.id === win.activeBrowserTabId ? "active" : ""}" data-action="browser-switch-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">
+              ${tab.favicon ? `<img class="browser-tab-favicon" src="${escapeHtml(tab.favicon)}" alt="" />` : `<span class="browser-tab-fallback"></span>`}
+              <span>${escapeHtml(tab.title || tab.url || "新标签")}</span>
+            </button>
+            ${win.browserTabs.length > 1 ? `<button class="browser-tab-close" title="关闭标签" data-action="browser-close-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">×</button>` : ""}
+          </div>
         `).join("")}
         <button class="icon-button" title="新标签" data-action="browser-new-tab" data-window-id="${escapeHtml(win.id)}">+</button>
-        ${win.browserTabs.length > 1 ? `<button class="icon-button" title="关闭当前标签" data-action="browser-close-tab" data-window-id="${escapeHtml(win.id)}">×</button>` : ""}
       </div>
       <div class="browser-bar">
         <button class="icon-button" title="后退" data-action="browser-back" data-window-id="${escapeHtml(win.id)}">‹</button>
@@ -5195,10 +8773,58 @@ function renderBrowserContent(win) {
   `;
 }
 
+function getFileEditorMetrics(content, cursorIndex = 0) {
+  const text = String(content || "");
+  const safeCursor = Math.max(0, Math.min(Number(cursorIndex) || 0, text.length));
+  const beforeCursor = text.slice(0, safeCursor);
+  const lines = Math.max(1, text.split(/\r\n|\r|\n/).length);
+  const line = beforeCursor.split(/\r\n|\r|\n/).length;
+  const lastBreak = Math.max(beforeCursor.lastIndexOf("\n"), beforeCursor.lastIndexOf("\r"));
+  const column = safeCursor - lastBreak;
+  return {
+    line,
+    column,
+    lines,
+    chars: text.length
+  };
+}
+
+function renderFileLineNumbers(content) {
+  const metrics = getFileEditorMetrics(content);
+  return Array.from({ length: metrics.lines }, (_item, index) => String(index + 1)).join("\n");
+}
+
+function renderFileEditorFooter(win, content = win.fileDraft || "", cursorIndex = 0) {
+  const metrics = getFileEditorMetrics(content, cursorIndex);
+  const dirtyLabel = win.fileDirty ? "未保存" : "已保存";
+  const pathLabel = win.filePath || "未选择文件";
+  return `${pathLabel} · 第 ${metrics.line} 行，第 ${metrics.column} 列 · ${metrics.lines} 行 · ${metrics.chars} 字符 · ${dirtyLabel} · Ctrl+S 保存`;
+}
+
+function syncFileEditorChrome(windowId) {
+  const win = getWindowState(windowId);
+  const editor = document.querySelector(`[data-file-editor="${CSS.escape(windowId)}"]`);
+  if (!win || !editor) {
+    return;
+  }
+
+  const content = String(editor.value || "");
+  const lines = document.querySelector(`[data-file-lines="${CSS.escape(windowId)}"]`);
+  if (lines) {
+    lines.textContent = renderFileLineNumbers(content);
+    lines.scrollTop = editor.scrollTop;
+  }
+  const footer = document.querySelector(`[data-file-footer="${CSS.escape(windowId)}"]`);
+  if (footer) {
+    footer.textContent = renderFileEditorFooter(win, content, editor.selectionStart || 0);
+  }
+}
+
 function renderFileContent(win) {
   const role = getRole(win.roleId);
   const project = getProject();
   const fileList = Array.isArray(win.fileList) ? win.fileList : [];
+  const fileDraft = String(win.fileDraft || "");
   return `
     <div class="real-file-editor" data-file-window="${escapeHtml(win.id)}">
       <div class="file-toolbar">
@@ -5237,7 +8863,13 @@ function renderFileContent(win) {
             }
           </div>
         </aside>
-        <textarea class="file-editor-textarea" data-file-editor="${escapeHtml(win.id)}" spellcheck="false" placeholder="打开或新建项目内文本文件。">${escapeHtml(win.fileDraft || "")}</textarea>
+        <section class="file-editor-pane">
+          <div class="file-editor-main">
+            <pre class="file-editor-lines" data-file-lines="${escapeHtml(win.id)}">${escapeHtml(renderFileLineNumbers(fileDraft))}</pre>
+            <textarea class="file-editor-textarea" data-file-editor="${escapeHtml(win.id)}" spellcheck="false" placeholder="打开或新建项目内文本文件。">${escapeHtml(fileDraft)}</textarea>
+          </div>
+          <div class="file-editor-footer" data-file-footer="${escapeHtml(win.id)}">${escapeHtml(renderFileEditorFooter(win, fileDraft))}</div>
+        </section>
       </div>
     </div>
   `;
@@ -5270,18 +8902,25 @@ function renderTaskContent() {
     </div>
   `;
   const taskCards = filteredPairs
-    .map(({ task, subtask }) => `
-      <div class="task-card ${escapeHtml(normalizeSubtaskStatus(subtask.status))}">
+    .map(({ task, subtask }) => {
+      const kernelState = getSubtaskKernelProjection(task, subtask);
+      const leaseLabel = kernelState.step?.lease?.expiresAt
+        ? `lease ${formatDateTime(kernelState.step.lease.expiresAt)}`
+        : "no lease";
+      return `
+      <div class="task-card ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
         <div class="task-card-head">
           <div class="task-role">${escapeHtml(getRole(subtask.roleId).name)} · ${escapeHtml(task.title)} · ${escapeHtml(task.model?.modelName || "agent-brain")}</div>
-          ${renderSubtaskStatusChip(subtask.status)}
+          <div class="task-chip-group">${renderKernelPhaseChip(kernelState.phase, kernelState)}${renderSubtaskStatusChip(kernelState.status)}</div>
         </div>
         <div class="task-title">${escapeHtml(subtask.title)}</div>
         <div class="task-desc">${escapeHtml(subtask.description)}</div>
-        <div class="task-desc">规划来源：${escapeHtml(task.planner?.status === "success" ? "LLM Gateway" : "本地降级")}</div>
+        <div class="task-desc">Kernel Step: ${escapeHtml(kernelState.step?.id || "pending")} · ${escapeHtml(leaseLabel)}</div>
+        <div class="task-desc">规划来源：${escapeHtml(task.planner?.status === "success" ? "Kernel Planner" : "本地降级")}</div>
         ${renderSubtaskActions(task.id, subtask)}
       </div>
-    `)
+    `;
+    })
     .join("");
 
   return `${roleFilter}${taskCards || `<div class="message-empty">当前角色暂无子任务。</div>`}${renderRecentAgentEvents(project)}`;
@@ -5338,8 +8977,9 @@ function renderTaskListDetail(project, task) {
   const messages = getTaskMessages(project, task.id);
   const deliveries = getTaskDeliveries(project, task.id);
   const refs = getTaskOutputRefs(project, task.id);
-  const status = getTaskStatusValue(task);
-  const doneCount = getTaskDoneCount(task);
+  const projection = getTaskKernelProjection(task);
+  const status = projection.status;
+  const doneCount = projection.doneCount;
   return `
     <aside class="task-list-detail">
       <div class="task-detail-head">
@@ -5356,6 +8996,12 @@ function renderTaskListDetail(project, task) {
           : `<button class="secondary-button compact" data-action="archive-task" data-task-id="${escapeHtml(task.id)}">归档任务</button>`}
       </div>
       <div class="task-detail-metrics">
+        <span>idle ${projection.counts.idle || 0}</span>
+        <span>running ${projection.activeCount || 0}</span>
+        <span>done ${projection.counts.done || 0}</span>
+        <span>locks ${projection.activeLocks.length}</span>
+        <span>approvals ${projection.pendingApprovals.length}</span>
+        <span>events ${projection.events.length}</span>
         <span>子任务 ${doneCount}/${task.subtasks?.length || 0}</span>
         <span>消息 ${messages.length}</span>
         <span>投递 ${deliveries.length}</span>
@@ -5364,14 +9010,19 @@ function renderTaskListDetail(project, task) {
       </div>
       <div class="task-detail-section">
         <strong>子任务</strong>
-        ${(task.subtasks || []).map((subtask) => `
-          <div class="task-detail-subtask ${escapeHtml(normalizeSubtaskStatus(subtask.status))}">
+        ${(task.subtasks || []).map((subtask) => {
+          const kernelState = getSubtaskKernelProjection(task, subtask);
+          return `
+          <div class="task-detail-subtask ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
             <span>${escapeHtml(getRole(subtask.roleId).name)}</span>
             <strong>${escapeHtml(subtask.title)}</strong>
-            ${renderSubtaskStatusChip(subtask.status)}
+            <span class="task-chip-group">${renderKernelPhaseChip(kernelState.phase, kernelState)}${renderSubtaskStatusChip(kernelState.status)}</span>
             <p>${escapeHtml(subtask.description || "")}</p>
+            <p>Kernel Step: ${escapeHtml(kernelState.step?.id || "pending")}</p>
+            ${renderSubtaskActions(task.id, subtask)}
           </div>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
       <div class="task-detail-section">
         <strong>关联投递</strong>
@@ -5432,8 +9083,9 @@ function renderTaskListContent() {
             <div class="task-list-layout">
               <div class="task-list-items">
                 ${visibleTasks.length ? visibleTasks.map((task, index) => {
-                  const status = getTaskStatusValue(task);
-                  const doneCount = getTaskDoneCount(task);
+                  const projection = getTaskKernelProjection(task);
+                  const status = projection.status;
+                  const doneCount = projection.doneCount;
                   return `
                     <button class="task-list-item ${selectedTask?.id === task.id ? "active" : ""} ${task.archived ? "archived" : ""}" data-action="select-task-list-task" data-task-id="${escapeHtml(task.id)}">
                       <div class="task-list-row-head">
@@ -5445,16 +9097,22 @@ function renderTaskListContent() {
                       </div>
                       <div class="task-list-meta">
                         <span>${escapeHtml(getTaskModelName(task))}</span>
+                        <span>running ${projection.activeCount || 0}</span>
+                        <span>locks ${projection.activeLocks.length}</span>
+                        <span>approvals ${projection.pendingApprovals.length}</span>
                         <span>${doneCount}/${task.subtasks?.length || 0} 已完成</span>
                         <span>${escapeHtml(formatDateTime(task.confirmedAt || task.createdAt))}</span>
                         ${task.archived ? `<span>已归档</span>` : ""}
                       </div>
                       <div class="task-list-subtasks">
-                        ${(task.subtasks || []).map((subtask) => `
-                          <span class="task-list-subtask ${escapeHtml(normalizeSubtaskStatus(subtask.status))}">
+                        ${(task.subtasks || []).map((subtask) => {
+                          const kernelState = getSubtaskKernelProjection(task, subtask);
+                          return `
+                          <span class="task-list-subtask ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
                             ${escapeHtml(getRole(subtask.roleId).name)} · ${escapeHtml(subtask.title)}
                           </span>
-                        `).join("")}
+                        `;
+                        }).join("")}
                       </div>
                     </button>
                   `;
@@ -5494,6 +9152,13 @@ function renderRecentAgentEvents(project) {
 function renderSubtaskStatusChip(status) {
   const normalized = normalizeSubtaskStatus(status);
   return `<span class="subtask-status ${escapeHtml(normalized)}">${escapeHtml(SUBTASK_STATUS_DEFS[normalized].label)}</span>`;
+}
+
+function renderKernelPhaseChip(phase, options = {}) {
+  const normalized = normalizeKernelPhase(phase, options.status || "pending");
+  const def = KERNEL_PHASE_DEFS[normalized] || KERNEL_PHASE_DEFS.idle;
+  const expired = options.leaseExpired === true;
+  return `<span class="kernel-phase-chip ${escapeHtml(normalized)} ${expired ? "expired" : ""}">${escapeHtml(expired ? "租约过期" : def.label)}</span>`;
 }
 
 function getSubtaskTaskUrl(task, subtask) {
@@ -5550,38 +9215,55 @@ function renderSubtaskActions(taskId, subtask) {
   const project = getProject();
   const task = project?.tasks.find((item) => item.id === taskId);
   const status = normalizeSubtaskStatus(subtask.status);
+  const executeLabel = status === "done" ? "重新执行" : "执行";
+  const canExecuteSubtask = task && canManuallyExecuteKernelSubtask(task, subtask);
+  const executeButton = canExecuteSubtask
+    ? `<button class="primary-button compact" data-action="execute-kernel-subtask" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">${escapeHtml(executeLabel)}</button>`
+    : "";
   const button = (label, nextStatus, kind = "secondary") => (
     `<button class="${kind}-button compact" data-action="set-subtask-status" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(label)}</button>`
   );
-  const instructionButton = `<button class="secondary-button compact" data-action="show-subtask-instruction" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">发送给角色</button>`;
   const url = getSubtaskTaskUrl(task, subtask);
   const taskUrlButton = url
     ? `<button class="secondary-button compact" data-action="open-task-url" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">打开任务 URL</button>`
     : "";
-  const actions = {
-    pending: [button("开始执行", "running", "primary")],
-    running: [button("标记完成", "done", "primary"), button("标记阻塞", "blocked")],
-    waiting: [button("继续执行", "running", "primary"), button("标记完成", "done"), button("标记阻塞", "blocked")],
-    blocked: [button("继续执行", "running", "primary"), button("标记完成", "done")],
-    done: [button("重新打开", "pending")]
+  let actions = {
+    idle: [button("开始执行", "running", "primary")],
+    running: [button("标记完成", "done", "primary")],
+    done: [button("重新打开", "idle")]
   }[status] || [];
-  return `<div class="task-actions">${[...actions, instructionButton, taskUrlButton].join("")}</div>`;
+  if (!canExecuteSubtask || status !== "running") {
+    actions = [];
+  }
+  return `<div class="task-actions">${[executeButton, ...actions, taskUrlButton].join("")}</div>`;
 }
 
-function renderCollabPopover(win, collaborators, status) {
+function renderCollabPopover(win, collaborators, status, relayStage = getAgentRelayStageForWindow(win)) {
   const names = collaborators.map((role) => role.name).join("、") || "暂无协作对象";
-  const messages = (getProject()?.messages || [])
+  const project = getProject();
+  const taskContext = getTaskContextForWindow(win, project);
+  const kernelStep = (taskContext.taskId
+    ? (project?.tasks || []).filter((task) => task.id === taskContext.taskId)
+    : getConversationTasks(project, win.desktopId))
+    .flatMap((task) => getTaskKernelProjection(task).steps.map((step) => ({ task, step })))
+    .filter(({ step }) => step.roleId === win.roleId)
+    .sort((a, b) => new Date(b.step.lease?.heartbeatAt || b.step.updatedAt || 0).getTime() - new Date(a.step.lease?.heartbeatAt || a.step.updatedAt || 0).getTime())[0];
+  const kernelLine = kernelStep
+    ? `<div>Kernel Step: ${escapeHtml(kernelStep.step.id)} · ${renderKernelPhaseChip(kernelStep.step.phase, kernelStep.step)}${kernelStep.step.lease?.expiresAt ? ` · lease ${escapeHtml(formatDateTime(kernelStep.step.lease.expiresAt))}` : ""}</div>`
+    : "";
+  const messages = `${kernelLine}${(project?.messages || [])
     .filter((message) => message.fromRoleId === win.roleId || message.toRoleIds.includes(win.roleId))
     .slice(-3)
     .map((message) => `<div>${escapeHtml(getRole(message.fromRoleId).name)}：${escapeHtml(message.content)}</div>`)
-    .join("");
+    .join("")}`;
 
   return `
     <div class="collab-popover">
       <strong>${escapeHtml(getStatusLabel(status))}</strong>
+      ${normalizeTerminalMode(win.terminalMode) === "agent" ? `<div>Agent 接力阶段：${escapeHtml(relayStage.label)}</div>` : ""}
       <div>协作对象：${escapeHtml(names)}</div>
       ${messages || "<div>还没有消息。</div>"}
-      <button class="secondary-button compact" data-action="show-message-center" data-role-id="${escapeHtml(win.roleId)}">发送消息</button>
+      <button class="secondary-button compact" data-action="show-message-center" data-role-id="${escapeHtml(win.roleId)}">查看时间线</button>
     </div>
   `;
 }
@@ -5704,6 +9386,7 @@ function createBrowserTab(windowId, url = DEFAULT_BROWSER_URL) {
     id: uid("tab"),
     url: normalizeBrowserUrl(url),
     title: "",
+    favicon: getBrowserFaviconUrl(url),
     status: "ready",
     createdAt: new Date().toISOString()
   };
@@ -5729,7 +9412,7 @@ function switchBrowserTab(windowId, tabId) {
   render();
 }
 
-function closeBrowserTab(windowId) {
+function closeBrowserTab(windowId, tabId = "") {
   const win = getWindowState(windowId);
   if (!win) {
     return;
@@ -5738,10 +9421,15 @@ function closeBrowserTab(windowId) {
   if (win.browserTabs.length <= 1) {
     return;
   }
-  const closingTabId = win.activeBrowserTabId;
+  const closingTabId = tabId || win.activeBrowserTabId;
   const closingIndex = win.browserTabs.findIndex((tab) => tab.id === closingTabId);
+  if (closingIndex < 0) {
+    return;
+  }
   win.browserTabs = win.browserTabs.filter((tab) => tab.id !== closingTabId);
-  win.activeBrowserTabId = win.browserTabs[Math.max(0, closingIndex - 1)]?.id || win.browserTabs[0].id;
+  if (win.activeBrowserTabId === closingTabId) {
+    win.activeBrowserTabId = win.browserTabs[Math.max(0, closingIndex - 1)]?.id || win.browserTabs[0].id;
+  }
   recordAppLog("browser.tab.closed", { projectId: state.activeProjectId, windowId, tabId: closingTabId });
   saveState();
   render();
@@ -5774,7 +9462,7 @@ function openBrowserUrlInWindow(windowId, url, newTab = false) {
   navigateBrowserWindow(windowId, url);
 }
 
-function openPopupUrlInsideCosSBrowser(url, sourceWindowId = "") {
+function openPopupUrlInsideCosSBrowser(url, sourceWindowId = "", options = {}) {
   const project = getProject();
   if (!project || !url) {
     return;
@@ -5799,7 +9487,11 @@ function openPopupUrlInsideCosSBrowser(url, sourceWindowId = "") {
   }
 
   focusWindow(targetWindow.id, { render: false });
-  navigateBrowserWindow(targetWindow.id, url);
+  if (options.currentTab) {
+    navigateBrowserWindow(targetWindow.id, url);
+  } else {
+    createBrowserTab(targetWindow.id, url);
+  }
   recordAppLog("browser.popup.redirected", {
     projectId: project.id,
     windowId: targetWindow.id,
@@ -6228,6 +9920,10 @@ function cleanupTerminalView(windowId, disposeBackend = false) {
 
   if (disposeBackend && terminalBackendIds.has(windowId)) {
     terminalBackendIds.delete(windowId);
+    terminalBackendReadyIds.delete(windowId);
+    terminalBackendActiveModes.delete(windowId);
+    terminalBackendReadyAt.delete(windowId);
+    terminalRecentOutput.delete(windowId);
     window.cossAPI?.disposeTerminal?.(windowId);
   }
 }
@@ -6256,6 +9952,22 @@ function handleTerminalInput(win, inputState, term, data) {
 
       if (command && assessment.requiresApproval) {
         sendBufferedTerminalInput(win, passthrough);
+        const grant = findCommandApprovalGrant(win, assessment);
+        if (grant) {
+          markCommandApprovalGrantUsed(grant, win, assessment, command);
+          createCommandLog(win, command, assessment, "approved-by-grant", {
+            grantId: grant.id,
+            grantScope: grant.scope
+          });
+          window.cossAPI?.sendTerminalInput?.(win.id, char, {
+            bypassPermissionGuard: true,
+            clearInputGuard: true,
+            reason: "renderer-session-grant",
+            grantId: grant.id
+          });
+          inputState.commandBuffer = "";
+          return;
+        }
         const log = createCommandLog(win, command, assessment, "pending");
         pendingCommandApproval = {
           windowId: win.id,
@@ -6331,7 +10043,48 @@ function hydrateTerminalWindows() {
       return;
     }
 
-    cleanupTerminalView(win.id, false);
+    if (existingView) {
+      let reattached = false;
+      try {
+        existingView.resizeObserver?.disconnect();
+        mount.innerHTML = "";
+        if (existingView.term.element) {
+          mount.appendChild(existingView.term.element);
+        } else {
+          existingView.term.open(mount);
+        }
+        existingView.mount = mount;
+        existingView.resizeObserver = new ResizeObserver(() => {
+          try {
+            existingView.fitAddon?.fit();
+            window.cossAPI.resizeTerminal(win.id, existingView.term.cols, existingView.term.rows);
+          } catch (error) {
+            console.warn("Failed to refit reattached terminal", error);
+          }
+        });
+        existingView.resizeObserver.observe(mount);
+        reattached = true;
+      } catch (error) {
+        console.warn("Failed to reattach terminal view", error);
+        cleanupTerminalView(win.id, false);
+      }
+
+      if (reattached) {
+        requestAnimationFrame(() => {
+          try {
+            existingView.fitAddon?.fit();
+            window.cossAPI.resizeTerminal(win.id, existingView.term.cols, existingView.term.rows);
+            if (focusedWindowId === win.id) {
+              existingView.term.focus();
+            }
+          } catch (error) {
+            console.warn("Failed to refit reattached terminal", error);
+          }
+        });
+        return;
+      }
+    }
+
     mount.innerHTML = "";
 
     const role = getRole(win.roleId);
@@ -6377,6 +10130,7 @@ function hydrateTerminalWindows() {
     });
     const unsubscribeData = window.cossAPI.onTerminalData(({ id, data }) => {
       if (id === win.id) {
+        terminalRecentOutput.set(id, `${terminalRecentOutput.get(id) || ""}${data}`.slice(-5000));
         term.write(data);
         recordTerminalOutputReference(win.id, data);
       }
@@ -6386,6 +10140,9 @@ function hydrateTerminalWindows() {
         term.writeln("");
         term.writeln(`\x1b[33m进程已退出，代码 ${exitCode ?? "unknown"}。关闭并重新创建终端可启动新会话。\x1b[0m`);
         terminalBackendIds.delete(win.id);
+        terminalBackendReadyIds.delete(win.id);
+        terminalBackendActiveModes.delete(win.id);
+        terminalBackendReadyAt.delete(win.id);
       }
     });
     const resizeObserver = new ResizeObserver(() => fit());
@@ -6432,14 +10189,29 @@ function hydrateTerminalWindows() {
         taskContext,
         rolePromptTemplate: state.settings.agentPromptTemplate,
         agentFallbackToShell: state.settings.agentFallbackToShell !== false,
+        agentPermissionMode: state.settings.agentPermissionMode,
+        agentMcpAutoConfigEnabled: state.settings.agentMcpAutoConfigEnabled === true,
         codeBuddyApiKey: state.settings.codeBuddyApiKey || "",
         cols: term.cols,
         rows: term.rows
       })
       .then((result) => {
+        const activeMode = String(result?.activeMode || result?.mode || "").toLowerCase();
+        terminalBackendActiveModes.set(win.id, activeMode);
+        if (!["error", "installing", "static", "shell"].includes(activeMode)) {
+          terminalBackendReadyIds.add(win.id);
+          terminalBackendReadyAt.set(win.id, Date.now());
+          if (normalizeTerminalMode(win.terminalMode) === "agent") {
+            resumeAutoWorkflowMessagesForWindow(win, result?.reattached ? "terminal-reattached" : "terminal-ready");
+          }
+        } else {
+          terminalBackendReadyIds.delete(win.id);
+          terminalBackendReadyAt.delete(win.id);
+        }
         if (result?.reattached && result.transcript) {
           term.reset();
           term.write(result.transcript);
+          terminalRecentOutput.set(win.id, String(result.transcript || "").slice(-5000));
         }
         if (win.agentSession && result?.agentSession) {
           win.agentSession = {
@@ -6456,6 +10228,9 @@ function hydrateTerminalWindows() {
         if (!backendWasKnown) {
           terminalBackendIds.delete(win.id);
         }
+        terminalBackendReadyIds.delete(win.id);
+        terminalBackendActiveModes.delete(win.id);
+        terminalBackendReadyAt.delete(win.id);
         term.writeln(`\x1b[31m终端启动失败：${error.message}\x1b[0m`);
       });
   });
@@ -6893,6 +10668,16 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "show-delete-project") {
+    showDeleteProjectModal(target.dataset.projectId);
+    return;
+  }
+
+  if (action === "confirm-delete-project") {
+    deleteProject(target.dataset.projectId);
+    return;
+  }
+
   if (action === "show-role-picker") {
     showRolePicker(target.dataset.type);
     return;
@@ -6923,7 +10708,7 @@ document.addEventListener("click", (event) => {
   }
 
   if (action === "browser-close-tab") {
-    closeBrowserTab(target.dataset.windowId);
+    closeBrowserTab(target.dataset.windowId, target.dataset.tabId || "");
     return;
   }
 
@@ -7035,6 +10820,14 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "open-agent-settings") {
+    closeMenus();
+    activeSettingsSection = "agent";
+    showSettingsModal();
+    checkCurrentProjectMcpConfig();
+    return;
+  }
+
   if (action === "show-about") {
     showAboutModal();
     return;
@@ -7050,6 +10843,113 @@ document.addEventListener("click", (event) => {
       ? target.dataset.section
       : "system";
     showSettingsModal();
+    if (activeSettingsSection === "data") {
+      refreshStorageInfo();
+    }
+    return;
+  }
+
+  if (action === "refresh-storage-info") {
+    refreshStorageInfo();
+    return;
+  }
+
+  if (action === "toggle-project-memory") {
+    const project = getProject();
+    if (project) {
+      const memory = ensureProjectMemoryShape(project);
+      memory.enabled = memory.enabled === false;
+      memory.updatedAt = new Date().toISOString();
+      memory.lastSource = "settings-toggle";
+      recordAppLog("project.memory.toggled", {
+        projectId: project.id,
+        enabled: memory.enabled !== false
+      });
+      saveState();
+    }
+    showSettingsModal();
+    return;
+  }
+
+  if (action === "refresh-project-memory") {
+    const project = getProject();
+    if (project) {
+      rebuildProjectMemory(project, "settings-refresh");
+      recordAppLog("project.memory.refreshed", {
+        projectId: project.id,
+        taskCount: project.memory?.taskHistory?.length || 0,
+        artifactCount: project.memory?.artifacts?.length || 0,
+        decisionCount: project.memory?.decisions?.length || 0
+      });
+      saveState();
+    }
+    showSettingsModal();
+    return;
+  }
+
+  if (action === "save-project-memory") {
+    const project = getProject();
+    if (project) {
+      const memory = ensureProjectMemoryShape(project);
+      memory.manualNotes = String(document.getElementById("projectMemoryManualNotes")?.value || "").slice(0, 6000);
+      rebuildProjectMemory(project, "settings-save");
+      recordAppLog("project.memory.manual-notes.saved", {
+        projectId: project.id,
+        length: memory.manualNotes.length
+      });
+      saveState();
+    }
+    showSettingsModal();
+    return;
+  }
+
+  if (action === "clear-project-memory") {
+    const project = getProject();
+    if (project) {
+      project.memory = createEmptyProjectMemory(true);
+      project.memory.updatedAt = new Date().toISOString();
+      project.memory.lastSource = "settings-clear";
+      recordAppLog("project.memory.cleared", {
+        projectId: project.id
+      }, "warn");
+      saveState();
+    }
+    showSettingsModal();
+    return;
+  }
+
+  if (action === "create-storage-backup") {
+    runStorageOperation("创建备份", () => window.cossAPI.createStorageBackup());
+    return;
+  }
+
+  if (action === "export-storage-state") {
+    runStorageOperation("导出状态数据", () => window.cossAPI.exportStorageState());
+    return;
+  }
+
+  if (action === "import-storage-state") {
+    runStorageOperation("导入状态数据", async () => {
+      const result = await window.cossAPI.importStorageState();
+      if (result?.ok) {
+        const loaded = await window.cossAPI.loadState();
+        if (loaded?.projects?.length) {
+          normalizeStoredWindowStacks(loaded);
+          state = loaded;
+        }
+      }
+      return result;
+    });
+    return;
+  }
+
+  if (action === "export-diagnostics-package") {
+    runStorageOperation("导出诊断包", () => window.cossAPI.exportDiagnosticsPackage());
+    return;
+  }
+
+  if (action === "open-storage-directory") {
+    runStorageOperation("打开数据目录", () => window.cossAPI.openStorageDirectory());
     return;
   }
 
@@ -7057,6 +10957,18 @@ document.addEventListener("click", (event) => {
     state.settings.agentProvider = normalizeAgentProvider(target.dataset.provider);
     recordAppLog("settings.agent-provider.changed", {
       provider: state.settings.agentProvider
+    });
+    saveState();
+    showSettingsModal();
+    return;
+  }
+
+  if (action === "set-agent-permission-mode") {
+    state.settings.agentPermissionMode = normalizeAgentPermissionMode(target.dataset.permissionMode);
+    const policy = getAgentPermissionPolicy();
+    recordAppLog("settings.agent-permission.changed", {
+      mode: policy.id,
+      label: policy.label
     });
     saveState();
     showSettingsModal();
@@ -7073,8 +10985,54 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "toggle-agent-mcp-auto-config") {
+    state.settings.agentMcpAutoConfigEnabled = state.settings.agentMcpAutoConfigEnabled !== true;
+    recordAppLog("settings.agent-mcp-auto-config.changed", {
+      enabled: state.settings.agentMcpAutoConfigEnabled === true
+    });
+    saveState();
+    showSettingsModal();
+    return;
+  }
+
+  if (action === "check-project-mcp-config") {
+    checkCurrentProjectMcpConfig();
+    return;
+  }
+
+  if (action === "write-project-mcp-config") {
+    writeCurrentProjectMcpConfig();
+    return;
+  }
+
+  if (action === "write-task-mcp-config") {
+    writeCurrentProjectMcpConfig().then(() => {
+      activeSettingsSection = "agent";
+      showSettingsModal();
+    });
+    return;
+  }
+
+  if (action === "show-mcp-audit") {
+    showMcpAuditModal();
+    return;
+  }
+
+  if (action === "apply-mcp-audit-filters") {
+    mcpAuditFilters = {
+      roleId: document.getElementById("mcpAuditRoleFilter")?.value || "",
+      taskId: document.getElementById("mcpAuditTaskFilter")?.value || "",
+      tool: document.getElementById("mcpAuditToolFilter")?.value || "",
+      query: document.getElementById("mcpAuditQueryFilter")?.value.trim() || ""
+    };
+    showMcpAuditModal();
+    return;
+  }
+
   if (action === "reset-agent-prompt-template") {
-    state.settings.agentPromptTemplate = defaultState.settings.agentPromptTemplate;
+    state.settings.agentPromptTemplate = ensureAgentPromptMcpInstructions(
+      ensureAgentPromptPermissionPlaceholders(defaultState.settings.agentPromptTemplate)
+    );
     recordAppLog("settings.agent-prompt-template.reset", {
       length: state.settings.agentPromptTemplate.length
     });
@@ -7144,51 +11102,8 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  if (action === "send-role-message") {
-    sendRoleMessageFromModal();
-    return;
-  }
-
-  if (action === "show-subtask-instruction") {
-    showSubtaskInstructionModal(target.dataset.taskId, target.dataset.subtaskId);
-    return;
-  }
-
   if (action === "open-task-url") {
     openTaskUrlForSubtask(target.dataset.taskId, target.dataset.subtaskId);
-    return;
-  }
-
-  if (action === "send-subtask-instruction") {
-    sendSubtaskInstructionFromModal(target.dataset.taskId, target.dataset.subtaskId);
-    return;
-  }
-
-  if (action === "inject-message-terminal") {
-    injectMessageIntoAgentTerminals(target.dataset.messageId).then((result) => {
-      showMessageCenterModal(messageComposerDefaults);
-      setMessageStatus(
-        result.ok ? `已加入 ${result.queuedCount} 个待确认投递。` : "未找到可投递的运行中 Agent 终端。",
-        result.ok ? "ready" : "warn"
-      );
-    });
-    return;
-  }
-
-  if (action === "confirm-agent-delivery") {
-    confirmAgentDelivery(target.dataset.deliveryId).then(() => showMessageCenterModal(messageComposerDefaults));
-    return;
-  }
-
-  if (action === "cancel-agent-delivery") {
-    cancelAgentDelivery(target.dataset.deliveryId);
-    showMessageCenterModal(messageComposerDefaults);
-    return;
-  }
-
-  if (action === "retry-agent-delivery") {
-    retryAgentDelivery(target.dataset.deliveryId);
-    showMessageCenterModal(messageComposerDefaults);
     return;
   }
 
@@ -7202,6 +11117,21 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "select-agent-flow-role") {
+    selectAgentFlowRole(target.dataset.roleId || "");
+    return;
+  }
+
+  if (action === "select-agent-flow-edge") {
+    selectAgentFlowEdge(target.dataset.flowEdgeKey || "");
+    return;
+  }
+
+  if (action === "clear-agent-flow-selection") {
+    clearAgentFlowSelection();
+    return;
+  }
+
   if (action === "focus-terminal-ref-window") {
     closeModal();
     focusWindow(target.dataset.windowId);
@@ -7209,7 +11139,9 @@ document.addEventListener("click", (event) => {
   }
 
   if (action === "confirm-task-plan") {
-    confirmTaskPlanInConversation();
+    confirmTaskPlanInConversation().catch((error) => {
+      recordAppLog("task.confirm.error", { error: error.message }, "error");
+    });
     return;
   }
 
@@ -7228,6 +11160,17 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  if (action === "execute-kernel-subtask") {
+    executeKernelSubtask(target.dataset.taskId, target.dataset.subtaskId).catch((error) => {
+      recordAppLog("kernel.step.manual-execute.error", {
+        taskId: target.dataset.taskId || "",
+        subtaskId: target.dataset.subtaskId || "",
+        error: error.message
+      }, "error");
+    });
+    return;
+  }
+
   if (action === "close-modal") {
     pendingTaskPlanDraft = null;
     if (pendingCommandApproval) {
@@ -7240,6 +11183,11 @@ document.addEventListener("click", (event) => {
 
   if (action === "approve-command") {
     approvePendingCommand();
+    return;
+  }
+
+  if (action === "approve-command-session") {
+    approvePendingCommand({ remember: true });
     return;
   }
 
@@ -7353,11 +11301,20 @@ document.addEventListener("input", (event) => {
         status.textContent = win.fileStatus;
         status.classList.remove("error");
       }
+      syncFileEditorChrome(win.id);
     }
   }
 });
 
 document.addEventListener("scroll", (event) => {
+  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
+  if (fileEditor) {
+    const lines = document.querySelector(`[data-file-lines="${CSS.escape(fileEditor.dataset.fileEditor)}"]`);
+    if (lines) {
+      lines.scrollTop = fileEditor.scrollTop;
+    }
+  }
+
   const scroller = event.target instanceof Element ? event.target.closest(".message-timeline-scroll") : null;
   if (scroller) {
     messageTimelineScrollLeft = scroller.scrollLeft;
@@ -7474,6 +11431,20 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+document.addEventListener("keyup", (event) => {
+  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
+  if (fileEditor) {
+    syncFileEditorChrome(fileEditor.dataset.fileEditor);
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
+  if (fileEditor) {
+    syncFileEditorChrome(fileEditor.dataset.fileEditor);
+  }
+});
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -7568,7 +11539,15 @@ loadState().then(async () => {
     isWindowMaximized = false;
   }
   render();
+  startExternalStateRefresh();
+  startPendingKernelAutoWorkflowPump();
   if (state.activeProjectId) {
     bootWorkspace(state.activeProjectId);
   }
+  setTimeout(() => {
+    resumePendingKernelAutoWorkflowMessages("state-load");
+    getProject()?.windows
+      ?.filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
+      .forEach((win) => scheduleAgentDeliveryQueueDrain(win.id, 350));
+  }, 900);
 });

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "msg-current-step-3",
+  "projectId": "project-e2e",
+  "roleId": "frontend-engineer",
+  "fromRoleId": "system",
+  "toRoleIds": [
+    "frontend-engineer"
+  ],
+  "taskId": "task-current-step",
+  "channelType": "task",
+  "channelId": "task:task-current-step",
+  "source": "orchestrator-dispatch",
+  "status": "idle",
+  "content": "Current step dispatch.",
+  "createdAt": "2026-01-01T02:10:00.000Z",
+  "startedAt": "",
+  "runningBy": "",
+  "messageRef": {
+    "projectMessageId": "msg-current-step-3"
+  }
+}

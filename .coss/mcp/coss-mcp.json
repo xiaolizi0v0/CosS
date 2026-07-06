@@ -1,0 +1,45 @@
+{
+  "generatedBy": "CosS",
+  "appVersion": "0.10.0",
+  "generatedAt": "2026-07-05T15:52:29.415Z",
+  "projectId": "project-1783177127694-e90389a587b28",
+  "projectPath": "D:\\CosS",
+  "mcpServers": {
+    "coss": {
+      "type": "stdio",
+      "description": "CosS v0.10 Kernel MCP tools for durable task context, leased steps, structured results, locks, approvals, and projections.",
+      "defer_loading": false,
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "D:\\CosS\\src\\coss-mcp-server.cjs",
+        "--user-data",
+        "C:\\Users\\xiaolizi0v0\\AppData\\Roaming\\coss-desktop",
+        "--project-id",
+        "project-1783177127694-e90389a587b28"
+      ],
+      "env": {
+        "COSS_MCP_USER_DATA": "C:\\Users\\xiaolizi0v0\\AppData\\Roaming\\coss-desktop",
+        "COSS_MCP_PROJECT_ID": "project-1783177127694-e90389a587b28"
+      }
+    }
+  },
+  "tools": [
+    "coss_get_context",
+    "coss_list_roles",
+    "coss_get_task_board",
+    "coss_pool_read",
+    "coss_pool_claim",
+    "coss_list_tasks",
+    "coss_claim_task",
+    "coss_claim_step",
+    "coss_heartbeat_step",
+    "coss_release_step",
+    "coss_get_kernel_events",
+    "coss_report_status",
+    "coss_submit_result",
+    "coss_acquire_lock",
+    "coss_release_lock",
+    "coss_request_approval"
+  ],
+  "note": "CosS v0.10 Agents must use the Kernel task board, leased step claiming, structured results, locks, and approvals."
+}

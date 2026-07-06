@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "msg-1782976349498-d3bea674e003a",
+  "projectId": "project-e2e",
+  "roleId": "frontend-engineer",
+  "fromRoleId": "backend-engineer",
+  "toRoleIds": [
+    "frontend-engineer"
+  ],
+  "taskId": "task-agent-queue",
+  "channelType": "task",
+  "channelId": "task:task-agent-queue",
+  "source": "agent-event",
+  "status": "queued",
+  "content": "C asks B to align the form with the backend register contract.",
+  "createdAt": "2026-07-02T07:12:29.498Z",
+  "claimedAt": "",
+  "claimedBy": "",
+  "messageRef": {
+    "projectMessageId": "msg-1782976349498-d3bea674e003a"
+  }
+}

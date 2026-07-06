@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "msg-1783143081855-dc5dbdd8ae6ae",
+  "projectId": "project-e2e",
+  "roleId": "product-manager",
+  "fromRoleId": "tech-lead",
+  "toRoleIds": [
+    "product-manager"
+  ],
+  "taskId": "task-renderer-kernel",
+  "channelType": "task",
+  "channelId": "task:task-renderer-kernel",
+  "source": "orchestrator-dispatch",
+  "status": "idle",
+  "content": "CosS Kernel 调度任务板：Renderer Kernel task\n任务ID：task-renderer-kernel\n步骤ID：step-subtask-renderer-kernel\n目标角色：产品经理 (product-manager)\n步骤标题：Update status from UI\n步骤说明：This subtask is advanced through task-list UI actions.\n\n中央线性调度规则：\n1. 不要直接把任务分配给其他 Agent，不要自行创建不存在的角色。\n2. 只能使用 coss_get_task_board、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval 等 CosS MCP 工具回写结果。\n3. 只处理当前 Step；完成后调用 coss_submit_result({ status: \"done\" })，Kernel 会自动启动预先规划好的下一步。\n4. 高风险动作、发出邮件、删除文件、支付、系统设置修改等必须走 coss_request_approval 或等待用户确认。\n5. 输出必须结构化；不要只在终端自然语言回复。\n\n允许能力：requirements.define, acceptance.define, workflow.propose, artifact.write_docs",
+  "createdAt": "2026-07-04T05:31:21.855Z",
+  "startedAt": "",
+  "runningBy": "",
+  "messageRef": {
+    "projectMessageId": "msg-1783143081855-dc5dbdd8ae6ae"
+  }
+}

@@ -1,5 +1,6 @@
 module.exports = {
   testDir: "./tests/e2e",
+  testMatch: "**/*.cjs",
   timeout: 30000,
   expect: {
     timeout: 5000
