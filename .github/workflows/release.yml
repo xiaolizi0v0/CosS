@@ -81,7 +81,7 @@ jobs:
             asset: linux-arm64.zip
             include_helper: false
           - label: macos-x64
-            os: macos-13
+            os: macos-latest
             platform: darwin
             arch: x64
             asset: macos-x64.zip
