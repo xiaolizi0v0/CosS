@@ -1,4 +1,7 @@
 node_modules/
+.coss/
+.codebuddy/
+.mcp.json
 dist/
 out/
 release-assets/
