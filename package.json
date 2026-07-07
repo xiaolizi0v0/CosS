@@ -87,7 +87,9 @@
         "tar.gz"
       ],
       "category": "public.app-category.developer-tools",
-      "identity": null
+      "identity": null,
+      "singleArchFiles": "**/node_modules/node-pty/prebuilds/{darwin-x64,darwin-arm64}/**/*",
+      "x64ArchFiles": "**/node_modules/node-pty/prebuilds/**/*.node"
     }
   }
 }
