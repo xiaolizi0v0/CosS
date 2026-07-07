@@ -58,39 +58,35 @@ jobs:
       contents: read
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+      USE_HARD_LINKS: false
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: windows-x64
             os: windows-latest
-            platform: win32
-            arch: x64
-            asset: win-x64-portable.zip
+            builder_args: --win nsis msi zip --x64
             include_helper: true
           - label: linux-x64
             os: ubuntu-latest
-            platform: linux
-            arch: x64
-            asset: linux-x64.zip
+            builder_args: --linux AppImage deb rpm --x64
             include_helper: false
           - label: linux-arm64
             os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-            asset: linux-arm64.zip
+            builder_args: --linux AppImage deb rpm --arm64
             include_helper: false
           - label: macos-x64
             os: macos-latest
-            platform: darwin
-            arch: x64
-            asset: macos-x64.zip
+            builder_args: --mac dmg tar.gz --x64
             include_helper: false
           - label: macos-arm64
             os: macos-latest
-            platform: darwin
-            arch: arm64
-            asset: macos-arm64.zip
+            builder_args: --mac dmg tar.gz --arm64
+            include_helper: false
+          - label: macos-universal
+            os: macos-latest
+            builder_args: --mac dmg tar.gz --universal
             include_helper: false
 
     steps:
@@ -109,8 +105,19 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Install Linux packaging dependencies
+        if: startsWith(matrix.label, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libarchive-tools
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Prepare native terminal helper directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-work/coss-terminal-helper | Out-Null
 
       - name: Build native terminal helper
         if: ${{ matrix.include_helper }}
@@ -118,7 +125,6 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $log = "build-${{ matrix.label }}.log"
-          New-Item -ItemType Directory -Force -Path release-work/coss-terminal-helper | Out-Null
 
           dotnet publish native/coss-terminal-helper/CosS.TerminalHelper.csproj `
             -c Release `
@@ -134,7 +140,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Package Electron app
+      - name: Package installers
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -148,42 +154,29 @@ jobs:
             throw "Release tag/ref name is empty."
           }
 
-          New-Item -ItemType Directory -Force -Path release-assets, release-work | Out-Null
-
-          $platform = "${{ matrix.platform }}"
-          $arch = "${{ matrix.arch }}"
-          $folder = "CosS-$platform-$arch"
-          $asset = "release-assets/CosS-Desktop-$tag-${{ matrix.asset }}"
-
-          $packagerArgs = @(
-            ".",
-            "CosS",
-            "--platform=$platform",
-            "--arch=$arch",
-            "--out=release-work",
-            "--overwrite",
-            "--ignore=^/(\.git|\.github|release-assets|release-work|test-results|playwright-report|tmp|native/.*/(bin|obj))(/|$)",
-            "--ignore=^/\.coss(/|$)",
-            "--ignore=^/tests(/|$)",
-            "--ignore=^/文档(/|$)"
-          )
-
-          if ($platform -eq "win32") {
-            $packagerArgs += "--icon=src/app-icon.ico"
-            $packagerArgs += "--extra-resource=release-work/coss-terminal-helper"
+          if (Test-Path dist) {
+            Remove-Item -Recurse -Force dist
           }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
 
-          & npx --yes '@electron/packager@18.3.6' @packagerArgs 2>&1 | Tee-Object -FilePath $log -Append
+          & npx electron-builder ${{ matrix.builder_args }} --publish never 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
-          Compress-Archive `
-            -Path "release-work/$folder/*" `
-            -DestinationPath $asset `
-            -Force
+          $patterns = @("*.exe", "*.msi", "*.zip", "*.AppImage", "*.deb", "*.rpm", "*.dmg", "*.tar.gz")
+          foreach ($pattern in $patterns) {
+            Get-ChildItem -Path dist -File -Filter $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+              Copy-Item -Path $_.FullName -Destination release-assets -Force
+            }
+          }
 
-          Get-ChildItem release-assets -File | Format-Table Name, Length
+          $assetCount = @(Get-ChildItem release-assets -File).Count
+          if ($assetCount -eq 0) {
+            throw "electron-builder produced no release assets."
+          }
+
+          Get-ChildItem release-assets -File | Sort-Object Name | Format-Table Name, Length
 
       - name: Print build log on failure
         if: failure()
@@ -236,11 +229,11 @@ jobs:
             build-${{ matrix.label }}.log
             warnings-${{ matrix.label }}.txt
 
-      - name: Upload platform asset
+      - name: Upload platform assets
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: release-asset-${{ matrix.label }}
+          name: release-assets-${{ matrix.label }}
           retention-days: 7
           path: release-assets/*
           if-no-files-found: error
@@ -252,6 +245,7 @@ jobs:
     if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v')) }}
     permissions:
       contents: write
+      id-token: write
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
@@ -262,11 +256,11 @@ jobs:
       - name: Download platform assets
         uses: actions/download-artifact@v4
         with:
-          pattern: release-asset-*
+          pattern: release-assets-*
           merge-multiple: true
           path: release-assets
 
-      - name: Add source archive and checksums
+      - name: Add source archive
         shell: bash
         run: |
           set -euo pipefail
@@ -279,7 +273,36 @@ jobs:
 
           mkdir -p release-assets
           git archive --format=zip --output="release-assets/CosS-Desktop-${tag}-source.zip" HEAD
+          ls -lh release-assets
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          for file in release-assets/*; do
+            case "$file" in
+              *.sig|*.pem|*checksums.txt) continue ;;
+            esac
+            cosign sign-blob --yes \
+              --output-signature "${file}.sig" \
+              --output-certificate "${file}.pem" \
+              "$file"
+          done
+
+      - name: Add checksums
+        shell: bash
+        run: |
+          set -euo pipefail
           (cd release-assets && sha256sum * | sort -k2 > checksums.txt)
+          cosign sign-blob --yes \
+            --output-signature release-assets/checksums.txt.sig \
+            --output-certificate release-assets/checksums.txt.pem \
+            release-assets/checksums.txt
           ls -lh release-assets
 
       - name: Upload combined workflow artifact

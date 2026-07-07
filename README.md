@@ -46,14 +46,13 @@ npm.cmd start
 - 推送到 `main` 或提交 PR 时：执行 preflight，并行打包各平台产物，作为 workflow artifacts 保存（不发布 Release）
 - 推送 `v*` 标签或手动运行 `Release` workflow 并填写 `tag` 时：并行打包并发布 GitHub Release Assets
 
-Release Assets 包含：
+Release Assets 使用 electron-builder 生成安装包，包含：
 
-- `CosS-Desktop-<tag>-win-x64-portable.zip` — Windows x64 便携版（内置原生终端辅助程序）
-- `CosS-Desktop-<tag>-linux-x64.zip` — Linux x64 版本
-- `CosS-Desktop-<tag>-linux-arm64.zip` — Linux arm64 版本
-- `CosS-Desktop-<tag>-macos-x64.zip` — macOS Intel 版本
-- `CosS-Desktop-<tag>-macos-arm64.zip` — macOS Apple Silicon 版本
+- Windows x64：`.exe` 安装程序、`.msi` 安装包、`.zip` 便携包（内置原生终端辅助程序）
+- Linux x64 / arm64：`.AppImage`、`.deb`、`.rpm`
+- macOS x64 / arm64 / universal：`.dmg`、`.app.tar.gz`
 - `CosS-Desktop-<tag>-source.zip` — 源码归档
+- `*.sig` / `*.pem` — cosign keyless 签名与证书
 - `checksums.txt` — SHA-256 校验和
 
 ```powershell
