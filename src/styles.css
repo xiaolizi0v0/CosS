@@ -1309,6 +1309,41 @@ body.sidebar-resizing {
 
 .pixel-path {
   position: absolute;
+  margin: 0;
+  z-index: 1;
+  top: 52%;
+  left: 8%;
+  width: 84%;
+  height: 12%;
+  border-radius: 99px;
+  background: #b08b5c;
+  box-shadow: 0 0 0 6px rgba(147, 122, 77, 0.38);
+}
+
+.world-empty-intro {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  z-index: 10;
+}
+
+.world-empty-intro strong {
+  display: block;
+  font-size: 20px;
+  color: #172033;
+  margin-bottom: 8px;
+}
+
+.world-empty-intro span {
+  display: block;
+  font-size: 14px;
+  color: #64748b;
+  max-width: 440px;
+  line-height: 1.6;
+}
+  position: absolute;
   left: 6%;
   right: 6%;
   top: 57%;

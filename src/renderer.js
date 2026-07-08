@@ -240,6 +240,9 @@ const I18N_RESOURCES = window.COSS_I18N?.resources || {};
 const defaultState = {
   activeProjectId: null,
   projects: [],
+  activeWorldId: "",
+  activeSidebarSection: "projects",
+  worlds: [],
   deletedProjectIds: [],
   settings: {
     agentProvider: "claude",
@@ -484,6 +487,20 @@ function formatProjectCreatedTime(project) {
 function uid(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+
+const WORLD_MAP_DEFAULT = { key: "default-meadow", width: 64, height: 64, tileSize: 32 };
+const WORLD_AGENT_POSITIONS = [
+  { x: 12, y: 15 }, { x: 25, y: 20 }, { x: 40, y: 15 },
+  { x: 15, y: 30 }, { x: 32, y: 32 }, { x: 50, y: 28 },
+  { x: 20, y: 45 }, { x: 35, y: 48 }, { x: 48, y: 45 },
+  { x: 28, y: 38 }
+];
+const WORLD_DEFAULT_OBJECTS = [
+  { id: "announcement-board", type: "board", name: "公告栏", x: 30, y: 29, width: 3, height: 2, action: "publish-world-task" },
+  { id: "chat-square", type: "building", name: "群聊屋", x: 20, y: 18, width: 4, height: 3, action: "open-world-chat" },
+  { id: "spawn-plaza", type: "plot", name: "角色创建点", x: 42, y: 26, width: 5, height: 4, action: "create-world-agent" }
+];
+const WORLD_AGENT_STATUSES = new Set(["idle", "planning", "running", "waiting", "done", "blocked", "failed"]);
 
 function createDefaultModelConfigs() {
   return Object.fromEntries(
@@ -2016,6 +2033,9 @@ function ensureProjectShape(project) {
 }
 
 function ensureStateShape(nextState) {
+  nextState.worlds = (Array.isArray(nextState.worlds) ? nextState.worlds : []).map(ensureWorldShape);
+  nextState.activeWorldId = typeof nextState.activeWorldId === "string" ? nextState.activeWorldId : "";
+  nextState.activeSidebarSection = (nextState.activeSidebarSection === "worlds" || nextState.activeSidebarSection === "projects") ? nextState.activeSidebarSection : "projects";
   nextState.deletedProjectIds = uniqueStrings(nextState.deletedProjectIds || []);
   nextState.settings ||= {};
   nextState.settings.agentProvider = normalizeAgentProvider(nextState.settings.agentProvider);
@@ -9458,6 +9478,13 @@ function render() {
   const sidebarContent = sidebarCollapsed ? "" : `${renderSidebar(project)}<div class="sidebar-resizer" data-sidebar-resizer title="${escapeHtml(t("sidebar.resizer.title", "拖动调整侧边栏宽度"))}"></div>`;
   captureTaskListScrollState();
   hydratedBrowserViews.clear();
+
+  // innerHTML 会销毁所有 DOM（包括 Phaser canvas），必须先销毁引擎实例
+  if (worldEngineInstance) {
+    worldEngineInstance.destroy();
+    worldEngineInstance = null;
+  }
+
   appRoot.innerHTML = `
     <div class="app-frame">
       ${renderAppTitlebar()}
@@ -9469,6 +9496,7 @@ function render() {
       ${roleMenu ? renderRoleMenu() : ""}
     </div>
   `;
+
   attachWindowFocusHandlers();
   attachWindowDragHandlers();
   attachSidebarResizeHandlers();
@@ -9476,6 +9504,60 @@ function render() {
   hydrateTerminalWindows();
   hydrateBrowserViews();
   restoreTaskListScrollState();
+  mountWorldEngineIfNeeded();
+}
+
+let worldEngineInstance = null;
+
+function mountWorldEngineIfNeeded() {
+  const shell = document.querySelector(".world-canvas-shell");
+  const currentWorldId = shell?.closest("[data-world-id]")?.dataset?.worldId;
+  const world = currentWorldId ? getWorldById(currentWorldId) : null;
+
+  if (!shell || !world) {
+    if (worldEngineInstance) {
+      worldEngineInstance.destroy();
+      worldEngineInstance = null;
+    }
+    return;
+  }
+
+  if (worldEngineInstance) {
+    worldEngineInstance.updateWorld(world, {
+      selectedAgentId: worldEngineInstance.selectedAgentId || ""
+    });
+    return;
+  }
+
+  const existingPhaserCanvas = shell.querySelector("canvas");
+  if (existingPhaserCanvas) {
+    shell.querySelector(".world-engine-placeholder")?.remove();
+  } else {
+    const placeholder = shell.querySelector(".world-engine-placeholder");
+    if (placeholder) placeholder.remove();
+  }
+
+  if (window.CossWorldEngine?.mountWorldGame) {
+    worldEngineInstance = window.CossWorldEngine.mountWorldGame(shell, world, {
+      onObjectClick(object) {
+        handleWorldObjectAction(object);
+      },
+      onAgentClick(agent) {
+        if (agent?.roleId) {
+          showWorldAgentActionModal(agent.roleId);
+        }
+      },
+      onAgentDoubleClick(agent) {
+        // Optional double-click behavior
+      },
+      onMapClick(point) {
+        // Optional map click behavior
+      },
+      onCameraChange(camera) {
+        // Camera change callback
+      }
+    });
+  }
 }
 
 function captureTaskListScrollState() {
@@ -9508,6 +9590,8 @@ function restoreTaskListScrollState() {
 }
 
 function renderSidebar(project) {
+  const showingWorlds = state.activeSidebarSection === "worlds";
+
   const projects = state.projects
     .map((item) => {
       const createdLabel = formatProjectCreatedTime(item);
@@ -9525,6 +9609,19 @@ function renderSidebar(project) {
     })
     .join("");
 
+  const worldItems = state.worlds.length ? state.worlds.map((item) => `
+    <div class="project-item ${item.id === state.activeWorldId ? "active" : ""}">
+      <button class="project-open" data-action="select-world" data-world-id="${escapeHtml(item.id)}" title="${escapeHtml(item.name)}">
+        <span class="nav-icon">${icon("globe")}</span>
+        <span class="project-name">${escapeHtml(item.name)}</span>
+      </button>
+      <button class="project-delete" title="${escapeHtml(t("world.delete.tooltip", "删除世界"))}" data-action="show-delete-world" data-world-id="${escapeHtml(item.id)}">×</button>
+    </div>
+  `).join("") : "";
+
+  const listTitle = showingWorlds ? t("nav.worlds", "世界") : t("nav.projects", "项目");
+  const plusAction = showingWorlds ? "show-create-world" : "show-create-project";
+
   return `
     <aside class="sidebar">
       <div class="brand-row">
@@ -9538,14 +9635,18 @@ function renderSidebar(project) {
       <nav class="nav">
         <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>${escapeHtml(t("nav.newTask", "新建任务"))}</button>
         <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>${escapeHtml(t("nav.messages", "消息"))}</button>
-        <button class="nav-item active"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
+        <button class="nav-item ${!showingWorlds ? "active" : ""}" data-action="show-project-list"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
+        <button class="nav-item ${showingWorlds ? "active" : ""}" data-action="show-world-list"><span class="nav-icon">${icon("globe")}</span>${escapeHtml(t("nav.worlds", "世界"))}</button>
       </nav>
       <div class="section-title">
-        <span>${escapeHtml(t("nav.projects", "项目"))} (${state.projects.length})</span>
-        <button class="icon-button" title="${escapeHtml(t("nav.newProject", "新建项目"))}" data-action="show-create-project">${icon("plus")}</button>
+        <span>${escapeHtml(listTitle)} (${(showingWorlds ? state.worlds : state.projects).length})</span>
+        <button class="icon-button" title="${escapeHtml(showingWorlds ? t("world.create.title", "新建世界") : t("nav.newProject", "新建项目"))}" data-action="${escapeHtml(plusAction)}">${icon("plus")}</button>
       </div>
       <div class="project-list">
-        ${projects || `<div class="project-list-empty">${escapeHtml(t("nav.noProjects", "暂无项目"))}</div>`}
+        ${showingWorlds
+          ? (worldItems || `<div class="project-list-empty">${escapeHtml(t("world.list.empty", "暂无世界"))}</div>`)
+          : (projects || `<div class="project-list-empty">${escapeHtml(t("nav.noProjects", "暂无项目"))}</div>`)
+        }
       </div>
       <div class="sidebar-footer">
         <div class="profile-name">${escapeHtml(getUserProfile().displayName || t("account.defaultName", "本地用户"))}</div>
@@ -9584,6 +9685,51 @@ function renderResizeHandles(win) {
 }
 
 function renderWorkspace(project) {
+  const world = getWorld();
+
+  // 当侧边栏显示世界列表时，渲染世界主页
+  if (state.activeSidebarSection === "worlds") {
+    const agents = world?.agents || [];
+    const chatCount = world?.chatMessages?.length || 0;
+    return `
+      <section class="workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}">
+        ${sidebarCollapsed ? `<button class="sidebar-floating-toggle sidebar-toggle-button" title="${escapeHtml(t("nav.showSidebar", "显示侧边栏"))}" data-action="toggle-sidebar">${icon("sidebar")}</button>` : ""}
+        <div class="workspace-topbar">
+          <div class="project-heading">
+            <h1 class="workspace-title">${world ? escapeHtml(world.name) : escapeHtml(t("world.noWorld", "未选择世界"))}</h1>
+            <div class="workspace-subtitle">${world ? `${escapeHtml(world.path || "")} · ${escapeHtml(t("world.home.subtitle", "2D Agent 世界 MVP2.0"))} · ${escapeHtml(t("world.home.agentCount", "{{count}} 个角色 Agent", { count: agents.length }))}` : escapeHtml(t("world.createToStart", "创建世界后进入 2D Agent 世界"))}</div>
+          </div>
+          <div class="workspace-actions">
+            ${world ? `<button class="secondary-button" data-action="show-world-chat">${icon("assistant")}${escapeHtml(t("world.chat.title", "群聊"))}<span class="button-badge">${chatCount}</span></button>` : ""}
+            <button class="secondary-button" data-action="show-create-world">${icon("plus")}${escapeHtml(t("world.create.title", "新建世界"))}</button>
+          </div>
+        </div>
+        ${world ? `
+        <div class="world-stage" data-world-id="${escapeHtml(world.id)}">
+          <div class="world-canvas-shell">
+            <div class="world-engine-placeholder">
+              <div class="pixel-map" role="img" aria-label="${escapeHtml(t("world.home.aria", "世界主页，像素小人代表角色 Agent"))}">
+                <div class="world-empty-intro">
+                  <strong>${escapeHtml(t("world.home.title", "世界主页"))}</strong>
+                  <span>${escapeHtml(t("world.home.desc", "这是世界概念的 MVP：一个 2D 卡通像素场景，角色 Agent 以像素小人形式常驻在世界中。"))}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        ` : `
+        <div class="world-stage empty">
+          <div class="empty-state">
+            <h2>${escapeHtml(t("world.empty.title", "创建一个世界开始"))}</h2>
+            <p>${escapeHtml(t("world.empty.desc", "世界会保存自己的名称和文件夹，并展示角色 Agent 的 2D 像素主页。"))}</p>
+            <button class="primary-button" data-action="show-create-world">${icon("plus")}${escapeHtml(t("world.create.title", "新建世界"))}</button>
+          </div>
+        </div>
+        `}
+      </section>
+    `;
+  }
+
   const isBooting = project && bootingProjectId === project.id;
   const activeDesktop = project ? getActiveDesktop(project) : null;
   const visibleWindows = project ? getVisibleWindows(project) : [];
@@ -12586,6 +12732,95 @@ document.addEventListener("click", (event) => {
     closeMenus();
     return;
   }
+
+  // 世界空间 action
+  if (action === "show-world-chat") {
+    showWorldChatModal();
+    return;
+  }
+
+  if (action === "scroll-to-bottom") {
+    const chatList = document.querySelector(".world-chat-list");
+    if (chatList) {
+      chatList.scrollTop = chatList.scrollHeight;
+    }
+    const indicator = document.querySelector(".world-chat-new-msg");
+    if (indicator) {
+      indicator.classList.remove("visible");
+    }
+    return;
+  }
+
+  if (action === "show-world-task-publisher") {
+    showWorldTaskPublisherModal();
+    return;
+  }
+
+  if (action === "show-world-agent-actions") {
+    showWorldAgentActionModal(target.dataset.roleId);
+    return;
+  }
+
+  if (action === "publish-world-task") {
+    const goal = document.getElementById("worldTaskGoal")?.value?.trim();
+    if (!goal) {
+      setWorldTaskStatus(t("world.task.validation.empty", "请填写任务内容。"));
+      return;
+    }
+    publishWorldTask(goal);
+    return;
+  }
+
+  if (action === "create-world-agent") {
+    const roleId = target.dataset.roleId;
+    if (roleId) {
+      createWorldAgent(roleId, Number(target.dataset.x), Number(target.dataset.y));
+    }
+    return;
+  }
+
+  // 世界导航 action
+  if (action === "show-world-list") {
+    showWorldList();
+    return;
+  }
+
+  if (action === "show-project-list") {
+    state.activeSidebarSection = "projects";
+    saveState();
+    render();
+    return;
+  }
+
+  if (action === "show-create-world") {
+    showCreateWorldModal();
+    return;
+  }
+
+  if (action === "create-world") {
+    createWorldFromModal();
+    return;
+  }
+
+  if (action === "select-world") {
+    selectWorld(target.dataset.worldId);
+    return;
+  }
+
+  if (action === "show-delete-world") {
+    showDeleteWorldModal(target.dataset.worldId);
+    return;
+  }
+
+  if (action === "confirm-delete-world") {
+    deleteWorld(target.dataset.worldId);
+    return;
+  }
+
+  if (action === "choose-world-directory") {
+    chooseWorldDirectoryFromModal();
+    return;
+  }
 });
 
 document.addEventListener("input", (event) => {
@@ -13510,4 +13745,541 @@ async function runWorldAgentTurn(worldId, taskId, agentId, phase, round) {
   task.updatedAt = new Date().toISOString();
   refreshWorldUiAfterStateChange(taskId);
   return result;
+}
+
+// ================= 世界辅助函数 =================
+function getWorld() {
+  const worlds = state.worlds || [];
+  return worlds.find((w) => w.id === state.activeWorldId) || worlds[0] || null;
+}
+
+function getWorldById(worldId) {
+  return (state.worlds || []).find((w) => w.id === worldId) || null;
+}
+
+function getWorldRoleModuleSummary(roleId) {
+  const m = {
+    "product-manager": t("world.module.pm", "需求分析和任务规划"),
+    "tech-lead": t("world.module.tl", "技术方案和代码审查"),
+    "frontend-engineer": t("world.module.fe", "前端界面和交互实现"),
+    "backend-engineer": t("world.module.be", "后端接口和业务逻辑"),
+    "qa-engineer": t("world.module.qa", "测试验证和质量保障"),
+    "ai-agent-engineer": t("world.module.ai", "AI Agent 集成和工具链")
+  };
+  return m[roleId] || t("world.module.default", "当前角色模块");
+}
+
+function ensureWorldAgentKernel(agent, world) {
+  if (!agent.kernel) {
+    agent.kernel = { terminalId: uid("wrn"), runs: [], status: "idle" };
+  }
+  return agent.kernel;
+}
+
+function getWorldAgentKernelLine(agent, world) {
+  const kernel = agent.kernel;
+  if (!kernel) return t("world.agentRun.noAgent", "该角色尚未入住世界。");
+  return t("world.agentRun.kernelLine", "CLI={provider} / {terminalId}", {
+    provider: kernel.providerLabel || "codebuddy",
+    terminalId: kernel.terminalId || ""
+  });
+}
+
+function getWorldAgentRunLabel(run) {
+  if (!run) return t("world.run.empty", "世界任务");
+  const phaseLabel = run.phase === "module-claim" ? t("world.run.claim", "模块认领") : t("world.run.execute", "执行");
+  return `${phaseLabel} #${run.round || 1}`;
+}
+
+function upsertWorldAgentRun(agent, run, world) {
+  const kernel = ensureWorldAgentKernel(agent, world);
+  const idx = kernel.runs.findIndex((r) => r.id === run.id);
+  if (idx >= 0) kernel.runs[idx] = run;
+  else kernel.runs.push(run);
+  kernel.runs = kernel.runs.slice(-20);
+  kernel.latestOutput = run.output || kernel.latestOutput || "";
+  kernel.status = run.status;
+  kernel.lastStartedAt = run.startedAt || kernel.lastStartedAt || "";
+  return run;
+}
+
+// ================= 世界聊天函数 =================
+function addWorldChatMessage(world, message) {
+  world.chatMessages ||= [];
+  world.chatMessages.push({
+    id: uid("world-chat"),
+    createdAt: new Date().toISOString(),
+    ...message
+  });
+}
+
+function getWorldChatTranscript(world, taskId = "") {
+  const messages = (world?.chatMessages || []).filter((m) => !taskId || m.taskId === taskId);
+  return messages.map((m) => {
+    const role = getRole(m.roleId);
+    return `${trRoleName(role)}（${formatDateTime(m.createdAt) || ""}）：${m.content || ""}`;
+  }).join("\n");
+}
+
+function createWorldTaskConversation(world, task, createdAt) {
+  addWorldChatMessage(world, {
+    type: "announcement",
+    roleId: "system",
+    taskId: task.id,
+    content: t("world.task.announcement", "公告栏发布新任务：{goal}", { goal: task.goal }),
+    createdAt
+  });
+  addWorldChatMessage(world, {
+    type: "system",
+    roleId: "system",
+    taskId: task.id,
+    content: t("world.task.stationStart", "世界中转站启动：只递送各角色 CodeBuddy CLI 内核最终输出的群聊消息，不替角色决策，不复用项目主页智能体终端。"),
+    createdAt
+  });
+}
+
+function refreshWorldUiAfterStateChange(taskId = "") {
+  saveState();
+  render();
+  const chatModal = document.querySelector(".world-chat-modal");
+  if (chatModal) {
+    updateWorldChatModal(chatModal.dataset.worldChatTaskId || taskId || "");
+  }
+}
+
+function updateWorldChatModal(taskId = "") {
+  const world = getWorld();
+  if (!world) return;
+  const chatList = document.querySelector(".world-chat-list");
+  if (!chatList) {
+    showWorldChatModal(taskId);
+    return;
+  }
+  const messages = (world.chatMessages || []).filter((message) => !taskId || message.taskId === taskId);
+  const content = messages.length ? messages.map((message) => {
+    const role = getRole(message.roleId);
+    const isSystem = message.roleId === "system";
+    return `
+      <div class="world-chat-message ${isSystem ? "system" : "agent"}">
+        <div class="world-chat-avatar">${escapeHtml(isSystem ? "系" : trRoleName(role).slice(0, 1))}</div>
+        <div class="world-chat-bubble">
+          <div class="world-chat-meta"><strong>${escapeHtml(isSystem ? t("role.system.name", "系统") : trRoleName(role))}</strong><span>${escapeHtml(formatDateTime(message.createdAt))}</span></div>
+          <p>${escapeHtml(message.content || "")}</p>
+        </div>
+      </div>
+    `;
+  }).join("") : `<div class="message-empty"><strong>${escapeHtml(t("world.chat.empty.title", "暂无聊天记录"))}</strong><p>${escapeHtml(t("world.chat.empty.desc", "点击公告栏发布任务后，角色会在这里进行一轮交流。"))}</p></div>`;
+  chatList.innerHTML = content;
+
+  const indicator = document.querySelector(".world-chat-new-msg");
+  if (indicator) {
+    const isAtBottom = chatList.scrollHeight - chatList.scrollTop - chatList.clientHeight <= 60;
+    if (isAtBottom) {
+      indicator.classList.remove("visible");
+    } else {
+      const newCount = messages.length - (chatList.dataset.renderedCount || 0);
+      const btn = indicator.querySelector(".new-msg-btn");
+      if (btn) {
+        btn.textContent = t("world.chat.newMessages", "{count} 条新消息", { count: newCount > 0 ? newCount : 1 });
+      }
+      indicator.classList.add("visible");
+    }
+  }
+  chatList.dataset.renderedCount = messages.length;
+}
+
+function showWorldChatModal(taskId = "") {
+  const world = getWorld();
+  if (!world) return;
+  const messages = (world.chatMessages || []).filter((message) => !taskId || message.taskId === taskId);
+  const content = messages.length ? messages.map((message) => {
+    const role = getRole(message.roleId);
+    const isSystem = message.roleId === "system";
+    return `
+      <div class="world-chat-message ${isSystem ? "system" : "agent"}">
+        <div class="world-chat-avatar">${escapeHtml(isSystem ? "系" : trRoleName(role).slice(0, 1))}</div>
+        <div class="world-chat-bubble">
+          <div class="world-chat-meta"><strong>${escapeHtml(isSystem ? t("role.system.name", "系统") : trRoleName(role))}</strong><span>${escapeHtml(formatDateTime(message.createdAt))}</span></div>
+          <p>${escapeHtml(message.content || "")}</p>
+        </div>
+      </div>
+    `;
+  }).join("") : `<div class="message-empty"><strong>${escapeHtml(t("world.chat.empty.title", "暂无聊天记录"))}</strong><p>${escapeHtml(t("world.chat.empty.desc", "点击公告栏发布任务后，角色会在这里进行一轮交流。"))}</p></div>`;
+  renderModal(`
+    <div class="modal world-chat-modal" data-world-chat-task-id="${escapeHtml(taskId || "")}">
+      <div class="world-chat-titlebar">
+        <div class="world-chat-titlebar-title">
+          <h2>${escapeHtml(t("world.chat.title", "世界群聊"))}</h2>
+          <p>${escapeHtml(t("world.chat.desc", "这里以微信群聊样式展示角色 Agent 交流记录。"))}</p>
+        </div>
+        <button class="world-chat-close-button" type="button" data-action="close-modal" aria-label="${escapeHtml(t("common.close", "关闭"))}">×</button>
+      </div>
+      <div class="world-chat-list">${content}</div>
+      <div class="world-chat-new-msg">
+        <button class="new-msg-btn" data-action="scroll-to-bottom">${escapeHtml(t("world.chat.newMessages", "{count} 条新消息", { count: 0 }))}</button>
+      </div>
+    </div>
+  `);
+  const chatList = document.querySelector(".world-chat-list");
+  if (chatList) {
+    chatList.scrollTop = chatList.scrollHeight;
+    chatList.dataset.renderedCount = messages.length;
+    chatList.addEventListener("scroll", () => {
+      const indicator = document.querySelector(".world-chat-new-msg");
+      if (!indicator) return;
+      const isAtBottom = chatList.scrollHeight - chatList.scrollTop - chatList.clientHeight <= 60;
+      if (isAtBottom) indicator.classList.remove("visible");
+    });
+  }
+}
+
+// ================= 世界核心操作函数 =================
+function publishWorldTask(goal) {
+  const world = getWorld();
+  if (!world) return;
+  setWorldTaskStatus(t("world.task.status.publishing", "正在发布..."), "info");
+  const createdAt = new Date().toISOString();
+  const task = {
+    id: uid("world-task"),
+    goal,
+    status: "created",
+    createdAt,
+    updatedAt: createdAt
+  };
+  world.tasks ||= [];
+  world.tasks.unshift(task);
+  world.chatMessages ||= [];
+  if (!(world.agents || []).length) {
+    addWorldChatMessage(world, {
+      type: "announcement",
+      roleId: "system",
+      taskId: task.id,
+      content: t("world.task.announcement", "公告栏发布新任务：{goal}", { goal }),
+      createdAt
+    });
+    addWorldChatMessage(world, {
+      type: "system",
+      roleId: "system",
+      taskId: task.id,
+      content: t("world.task.noAgent", "当前世界还没有角色，请先到地图中的「角色创建点」左键创建 Agent。"),
+      createdAt
+    });
+  } else {
+    createWorldTaskConversation(world, task, createdAt);
+  }
+  closeModal();
+  saveState();
+  render();
+  showWorldChatModal(task.id);
+  if ((world.agents || []).length) {
+    runWorldTaskConversation(world.id, task.id).catch((error) => {
+      const failedWorld = getWorldById(world.id);
+      const failedTask = failedWorld?.tasks?.find((item) => item.id === task.id);
+      if (!failedWorld || !failedTask) return;
+      const failedAt = new Date().toISOString();
+      failedTask.status = "failed";
+      failedTask.updatedAt = failedAt;
+      addWorldChatMessage(failedWorld, {
+        type: "system",
+        roleId: "system",
+        taskId: task.id,
+        content: t("world.task.runFailed", "世界 Agent 运行失败：{error}", { error: error.message }),
+        createdAt: failedAt
+      });
+      refreshWorldUiAfterStateChange(task.id);
+    });
+  }
+}
+
+function createWorldAgent(roleId, x, y) {
+  const world = getWorld();
+  const role = ROLE_TEMPLATES.find((item) => item.id === roleId);
+  if (!world || !role || (world.agents || []).some((agent) => agent.roleId === roleId)) return;
+  const index = (world.agents || []).length;
+  const position = WORLD_AGENT_POSITIONS[index % WORLD_AGENT_POSITIONS.length];
+  const agent = {
+    id: uid("world-agent"),
+    roleId: role.id,
+    name: role.name,
+    status: "idle",
+    animation: "idle",
+    x: position.x,
+    y: position.y,
+    createdAt: new Date().toISOString()
+  };
+  world.agents ||= [];
+  world.agents.push(agent);
+  closeModal();
+  saveState();
+  render();
+}
+
+function ensureWorldShape(world) {
+  if (!world || typeof world !== "object") return null;
+  world.id = String(world.id || uid("world"));
+  world.name = String(world.name || t("world.create.name.default", "新世界")).trim() || t("world.create.name.default", "新世界");
+  world.path = String(world.path || "").trim();
+  world.createdAt = world.createdAt || new Date().toISOString();
+  world.lastOpenedAt = world.lastOpenedAt || world.createdAt;
+  world.terrain = world.terrain || "pixel-meadow";
+  world.agents = Array.isArray(world.agents) ? world.agents : [];
+  world.chatMessages = Array.isArray(world.chatMessages) ? world.chatMessages : [];
+  world.tasks = Array.isArray(world.tasks) ? world.tasks : [];
+  world.agents = world.agents.filter((agent) => ROLE_TEMPLATES.some((role) => role.id === agent.roleId)).map((existing, index) => {
+    const position = WORLD_AGENT_POSITIONS[index % WORLD_AGENT_POSITIONS.length];
+    return {
+      ...existing,
+      x: existing.x || position.x,
+      y: existing.y || position.y
+    };
+  });
+  return world;
+}
+
+function getAvailableWorldRoles(world = getWorld()) {
+  const usedRoleIds = new Set((world?.agents || []).map((agent) => agent.roleId));
+  return ROLE_TEMPLATES.filter((role) => !usedRoleIds.has(role.id));
+}
+
+function showWorldList() {
+  state.activeSidebarSection = "worlds";
+  if (!state.activeWorldId && state.worlds?.[0]) {
+    state.activeWorldId = state.worlds[0].id;
+  }
+  saveState();
+  render();
+}
+
+function showDeleteWorldModal(worldId) {
+  const world = state.worlds.find((item) => item.id === worldId);
+  if (!world) return;
+  renderModal(`
+    <div class="modal">
+      <h2>${escapeHtml(t("world.delete.title", "删除世界"))}</h2>
+      <p>${escapeHtml(t("world.delete.desc", "这会从世界列表中移除该世界，世界文件夹不会被删除。"))}</p>
+      <div class="message-empty">
+        <strong>${escapeHtml(world.name)}</strong>
+        <p>${escapeHtml(world.path || "")}</p>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="secondary-button danger" data-action="confirm-delete-world" data-world-id="${escapeHtml(world.id)}">${escapeHtml(t("world.delete.confirm", "删除世界"))}</button>
+      </div>
+    </div>
+  `);
+}
+
+function deleteWorld(worldId) {
+  const world = state.worlds.find((item) => item.id === worldId);
+  if (!world) return;
+  state.worlds = state.worlds.filter((item) => item.id !== worldId);
+  if (state.activeWorldId === worldId) {
+    state.activeWorldId = state.worlds?.[0]?.id || "";
+  }
+  closeModal();
+  saveState();
+  render();
+}
+
+function showCreateWorldModal() {
+  closeMenus();
+  const defaultPath = getWorld()?.path || "";
+  renderModal(`
+    <div class="modal">
+      <h2>${escapeHtml(t("world.create.title", "新建世界"))}</h2>
+      <p>${escapeHtml(t("world.create.desc", "世界是从 0 开始的 Agent 场景空间。创建后可在地图中左键创建角色与房子，通过公告栏发布任务，并在群聊中查看角色交流记录。"))}</p>
+      <div class="field">
+        <label for="worldName">${escapeHtml(t("world.create.name.label", "世界名称"))}</label>
+        <input id="worldName" value="${escapeHtml(t("world.create.name.default", "新世界"))}" />
+      </div>
+      <div class="field">
+        <label for="worldPath">${escapeHtml(t("world.create.path.label", "保存文件夹"))}</label>
+        <div class="path-picker-row">
+          <input id="worldPath" value="${escapeHtml(defaultPath)}" placeholder="${escapeHtml(t("world.create.path.placeholder", "请选择世界保存文件夹"))}" />
+          <button class="secondary-button" data-action="choose-world-directory">${escapeHtml(t("project.create.chooseFolder", "选择文件夹"))}</button>
+        </div>
+        <div id="worldPathStatus" class="form-status muted">${escapeHtml(t("world.create.path.placeholder", "请选择世界保存文件夹"))}</div>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="primary-button" data-action="create-world">${escapeHtml(t("world.create.submit", "创建并打开"))}</button>
+      </div>
+    </div>
+  `);
+}
+
+function createWorldFromModal() {
+  const nameInput = document.getElementById("worldName");
+  const pathInput = document.getElementById("worldPath");
+  const name = nameInput?.value?.trim();
+  const path = pathInput?.value?.trim();
+  if (!name) {
+    setWorldModalStatus(t("world.create.validation.nameRequired", "请填写世界名称。"));
+    return;
+  }
+  if (!path) {
+    setWorldModalStatus(t("world.create.validation.pathRequired", "请先指定世界保存文件夹。"));
+    return;
+  }
+  const world = ensureWorldShape({
+    name,
+    path,
+    terrain: "pixel-meadow",
+    agents: [],
+    chatMessages: [],
+    tasks: []
+  });
+  state.worlds = state.worlds || [];
+  state.worlds.push(world);
+  state.activeWorldId = world.id;
+  state.activeSidebarSection = "worlds";
+  closeModal();
+  saveState();
+  render();
+}
+
+function selectWorld(worldId) {
+  state.activeWorldId = worldId;
+  state.activeSidebarSection = "worlds";
+  const world = getWorldById(worldId);
+  if (world) world.lastOpenedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function chooseWorldDirectoryFromModal() {
+  const currentPath = document.getElementById("worldPath")?.value || "";
+  if (window.cossAPI?.selectProjectDirectory) {
+    window.cossAPI.selectProjectDirectory(currentPath).then((result) => {
+      const pathInput = document.getElementById("worldPath");
+      const pathStatus = document.getElementById("worldPathStatus");
+      if (pathInput && result?.path) {
+        pathInput.value = result.path;
+      }
+      if (pathStatus) {
+        pathStatus.textContent = t("world.create.status.pathSelected", "已选择世界保存文件夹。");
+        pathStatus.className = "form-status ready";
+      }
+    }).catch(() => {});
+  }
+}
+
+function setWorldModalStatus(message, type = "error") {
+  const status = document.getElementById("worldPathStatus");
+  if (status) {
+    status.textContent = message;
+    status.className = "form-status " + type;
+  }
+}
+
+// ================= 世界弹窗函数 =================
+function showWorldTaskPublisherModal() {
+  closeMenus();
+  renderModal(`
+    <div class="modal world-task-modal">
+      <h2>${escapeHtml(t("world.task.publisherTitle", "公告栏发布任务"))}</h2>
+      <p>${escapeHtml(t("world.task.publisherDesc", "发布后，世界系统只做中转：角色 Agent 会自行发起群聊交流，确认各自模块后开始执行；每个角色绑定独立世界 CLI 内核并使用完全访问权限。"))}</p>
+      <div class="field">
+        <label for="worldTaskGoal">${escapeHtml(t("world.task.goal", "任务内容"))}</label>
+        <textarea id="worldTaskGoal" placeholder="${escapeHtml(t("world.task.placeholder", "例如：制作登录页面并完成验收测试"))}"></textarea>
+      </div>
+      <div id="worldTaskStatus" class="form-status muted"></div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="primary-button" data-action="publish-world-task">${escapeHtml(t("world.task.publish", "发布任务"))}</button>
+      </div>
+    </div>
+  `);
+}
+
+function setWorldTaskStatus(message, type = "error") {
+  const status = document.getElementById("worldTaskStatus");
+  if (!status) return;
+  status.textContent = message;
+  status.className = "form-status " + type;
+}
+
+function showCreateWorldAgentModal(x, y) {
+  const world = getWorld();
+  const availableRoles = getAvailableWorldRoles(world);
+  const roleButtons = availableRoles.length ? availableRoles.map((role) => `
+    <button class="world-role-choice" data-action="create-world-agent" data-role-id="${escapeHtml(role.id)}" data-x="${escapeHtml(x || 0)}" data-y="${escapeHtml(y || 0)}">
+      <strong>${escapeHtml(role.name)}</strong>
+      <span>${escapeHtml(role.description)}</span>
+    </button>
+  `).join("") : `
+    <div class="message-empty">
+      <strong>${escapeHtml(t("world.agentCreate.allCreated", "角色已全部创建"))}</strong>
+      <p>${escapeHtml(t("world.agentCreate.allCreatedDesc", "当前世界已经拥有所有内置角色 Agent。"))}</p>
+    </div>
+  `;
+  renderModal(`
+    <div class="modal world-agent-create-modal">
+      <h2>${escapeHtml(t("world.agentCreate.title", "创建角色 Agent"))}</h2>
+      <p>${escapeHtml(t("world.agentCreate.desc", "选择一个角色，系统会在点击位置生成占位角色精灵和对应的小房子。"))}</p>
+      <div class="world-role-grid">${roleButtons}</div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+      </div>
+    </div>
+  `);
+}
+
+function showWorldAgentActionModal(roleId) {
+  const world = getWorld();
+  const role = getRole(roleId);
+  const agent = (world?.agents || []).find((item) => item.roleId === role.id);
+  const kernel = agent ? ensureWorldAgentKernel(agent, world || {}) : null;
+  const runs = (kernel?.runs || []).slice().reverse();
+  const latestRun = runs[0] || null;
+  const runRows = runs.length ? runs.slice(0, 6).map((run) => `
+    <div class="world-agent-run-row ${escapeHtml(run.status)}">
+      <div class="world-agent-run-head">
+        <strong>${escapeHtml(getWorldAgentRunLabel(run))}</strong>
+        <span>${escapeHtml(run.completedAt ? formatDateTime(run.completedAt) : run.status)}</span>
+      </div>
+      <label>${escapeHtml(t("world.agentRun.input", "CodeBuddy CLI 输入"))}</label>
+      <pre>${escapeHtml(run.input || t("world.agentRun.emptyInput", "暂无输入。"))}</pre>
+      <label>${escapeHtml(t("world.agentRun.output", "最终聊天输出"))}</label>
+      <pre>${escapeHtml(run.output || run.error || t("world.agentRun.emptyOutput", "暂无最终输出。"))}</pre>
+    </div>
+  `).join("") : `
+    <div class="message-empty">
+      <strong>${escapeHtml(t("world.agentRun.empty.title", "暂无 CodeBuddy 运行记录"))}</strong>
+      <p>${escapeHtml(t("world.agentRun.empty.desc", "点击公告栏发布任务后，这里会显示该角色收到的 CLI 输入和最终群聊输出。"))}</p>
+    </div>
+  `;
+  renderModal(`
+    <div class="modal world-agent-run-modal">
+      <h2>${escapeHtml(trRoleName(role))}</h2>
+      <p>${escapeHtml(trRoleDescription(role))}</p>
+      <div class="world-agent-kernel-summary">
+        <span>${escapeHtml(kernel ? getWorldAgentKernelLine(agent, world) : t("world.agentRun.noAgent", "该角色尚未入住世界。"))}</span>
+        ${latestRun ? `<span>${escapeHtml(t("world.agentRun.latest", "最近运行：{label}", { label: getWorldAgentRunLabel(latestRun) }))}</span>` : ""}
+      </div>
+      <div class="world-agent-run-list">${runRows}</div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="show-world-chat">${escapeHtml(t("world.chat.title", "世界群聊"))}</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button>
+      </div>
+    </div>
+  `);
+}
+
+function handleWorldObjectAction(object) {
+  if (object.action === "publish-world-task") {
+    showWorldTaskPublisherModal();
+    return;
+  }
+  if (object.action === "open-world-chat") {
+    showWorldChatModal();
+    return;
+  }
+  if (object.action === "create-world-agent") {
+    showCreateWorldAgentModal(Number(object.x) + 2, Number(object.y) + 4);
+    return;
+  }
+  if (object.action === "open-agent-house" && object.roleId) {
+    showWorldAgentActionModal(object.roleId);
+  }
 }
