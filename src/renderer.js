@@ -13309,7 +13309,7 @@ function buildWorldAgentPrompt(world, task, agent, phase, round) {
     "重要规则：",
     "1. 你只负责思考并输出群聊消息，不要自己执行任务（不要创建/修改文件、不要运行命令）。",
     "2. 世界系统会解析你消息中的 @ 提及，并自动调用 codebuddy -p 让对应角色执行任务。",
-    "3. 【关键】当你需要自己执行任务时，在消息中写：@${role.id}, 我要执行[具体任务描述]。世界系统看到 @${role.id} 就知道是指你自己。",
+    `3. 【关键】当你需要自己执行任务时，在消息中写：@${role.id}, 我要执行[具体任务描述]。世界系统看到 @${role.id} 就知道是指你自己。`,
     "4. 当你需要其他角色执行任务时，在消息中写：@角色ID, 请执行[具体任务描述]。",
     "5. @自己 的各种写法都会被识别：@自己、@self、@我自己 都表示你自己。",
     "6. 消息要短、具体、可被其他角色继续接力。",
@@ -13428,11 +13428,10 @@ function buildWorldAgentExecutionPrompt(world, task, agent, queueItem) {
     otherAgentsInfo,
     "",
     "执行要求：",
-    "1. 你必须实际使用 codebuddy -p 环境执行上述任务（创建/修改文件、运行命令等）。",
-    "2. 执行完成后，必须输出一条【总结消息】，格式如下：",
+    "1. 执行完成后，必须输出一条【总结消息】，格式如下：",
     "   总结：[你完成了什么具体工作]。@角色ID, [给该角色的具体信息/请求]。@角色ID, [信息]。",
-    "3. 总结中必须 @ 下一个需要接续处理的角色。如果不需要其他人继续，写：总结：[完成情况]，无需 @ 任何人。",
-    "4. 如果没有后续工作，在总结中说明「任务已完成，无需继续处理」。",
+    "2. 总结中必须 @ 下一个需要接续处理的角色。如果不需要其他人继续，写：总结：[完成情况]，无需 @ 任何人。",
+    "3. 如果没有后续工作，在总结中说明「任务已完成，无需继续处理」。",
     "",
     "总结消息格式示例：",
     "  总结：已完成登录页面 UI 实现（含表单验证）。@backend-engineer, 请提供登录 API 接口（/api/login POST）。@qa-engineer, 请准备登录功能测试用例。",
@@ -13499,6 +13498,22 @@ async function executeWorldAgentTask(worldId, taskId, queueItem) {
   const runId = uid("world-run");
   const role = getRole(targetAgent.roleId);
 
+  // 创建 run 记录
+  targetAgent.kernel = targetAgent.kernel || {};
+  targetAgent.kernel.runs = targetAgent.kernel.runs || [];
+  const run = {
+    id: runId,
+    taskId,
+    phase: "execution",
+    round: (targetAgent.kernel.runs.filter((r) => r.taskId === taskId).length || 0) + 1,
+    status: "running",
+    input: executionPrompt,
+    startedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  targetAgent.kernel.runs.push(run);
+
+  targetAgent.taskId = taskId;
   targetAgent.status = "working";
   targetAgent.animation = "working";
   refreshWorldUiAfterStateChange(taskId);
@@ -13526,6 +13541,16 @@ async function executeWorldAgentTask(worldId, taskId, queueItem) {
   }
 
   const completedAt = new Date().toISOString();
+
+  // 更新 run 记录
+  const existingRun = (targetAgent.kernel?.runs || []).find((r) => r.id === runId);
+  if (existingRun) {
+    existingRun.output = String(result?.output || result?.error || "").trim();
+    existingRun.completedAt = completedAt;
+    existingRun.status = result?.ok ? "done" : "failed";
+    existingRun.error = result?.error || "";
+  }
+
   if (result?.ok && result.output) {
     addWorldChatMessage(world, {
       type: "role-message",
@@ -13552,9 +13577,10 @@ function finalizeWorldTask(worldId, taskId) {
 
   const completedAt = new Date().toISOString();
   (world.agents || []).forEach((agent) => {
-    if (agent.taskId === taskId && agent.status !== "failed") {
+    if (agent.taskId === taskId) {
       agent.status = "done";
       agent.animation = "idle";
+      agent.taskId = "";
     }
   });
   task.status = "done";
@@ -13674,6 +13700,7 @@ async function runWorldAgentTurn(worldId, taskId, agentId, phase, round) {
   const role = getRole(agent.roleId);
   const runId = uid("world-run");
   const input = buildWorldAgentPrompt(world, task, agent, phase, round);
+  agent.taskId = taskId;
   agent.status = phase === "module-claim" ? "planning" : "running";
   agent.animation = phase === "module-claim" ? "talking" : "working";
   const run = {
@@ -13716,6 +13743,17 @@ async function runWorldAgentTurn(worldId, taskId, agentId, phase, round) {
   }
 
   const output = String(result?.output || "").trim();
+  const completedAt = new Date().toISOString();
+
+  // 更新 run 对象的输出和状态
+  const existingRun = (agent.kernel?.runs || []).find((r) => r.id === runId);
+  if (existingRun) {
+    existingRun.output = output;
+    existingRun.completedAt = completedAt;
+    existingRun.status = result?.ok ? "done" : "failed";
+    existingRun.error = result?.error || "";
+  }
+
   if (result?.ok && output) {
     addWorldChatMessage(world, {
       type: "role-message",
