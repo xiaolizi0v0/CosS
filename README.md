@@ -56,8 +56,8 @@ Release Assets 使用 electron-builder 生成安装包，包含：
 - `checksums.txt` — SHA-256 校验和
 
 ```powershell
-git tag v0.10.0
-git push origin v0.10.0
+git tag v0.11.0
+git push origin v0.11.0
 ```
 
 ## 系统架构

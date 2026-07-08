@@ -195,17 +195,17 @@ function formatExpectedProjectCreatedTime(value) {
   }).format(date);
 }
 
-test("v0.10.0 boots into the Kernel workspace shell", async () => {
+test("v0.11.0 boots into the Kernel workspace shell", async () => {
   const { app, page } = await launchApp();
 
   try {
     await expect(page.locator(".brand")).toContainText("CosS");
-    await expect(page.locator(".brand-version")).toHaveText("v0.10.0");
+    await expect(page.locator(".brand-version")).toHaveText("v0.11.0");
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".workspace-title")).toHaveText("E2E Project");
 
     await page.locator('.workspace-actions [data-action="show-message-center"]').click();
-    await expect(page.locator(".message-center-modal")).toContainText("v0.10 Kernel");
+    await expect(page.locator(".message-center-modal")).toContainText("任务协作时间线");
     await expect(page.locator(`[data-action="${["send", "role", "message"].join("-")}"]`)).toHaveCount(0);
     await expect(page.locator(`[data-action="${["show", "subtask", "instruction"].join("-")}"]`)).toHaveCount(0);
   } finally {
@@ -213,7 +213,62 @@ test("v0.10.0 boots into the Kernel workspace shell", async () => {
   }
 });
 
-test("v0.10.0 project list shows project creation time", async () => {
+test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page, userDataDir } = await launchApp({}, {}, {
+    activeSidebarSection: "worlds",
+    activeWorldId: "world-e2e",
+    worlds: [
+      {
+        id: "world-e2e",
+        name: "E2E World",
+        path: process.cwd(),
+        createdAt,
+        lastOpenedAt: createdAt,
+        terrain: "pixel-meadow",
+        camera: { x: 0, y: 0, zoom: 1 },
+        map: { key: "default-meadow", width: 64, height: 64, tileSize: 32 },
+        agents: [
+          { id: "world-agent-product-manager", roleId: "product-manager", x: 16, y: 30, status: "idle" }
+        ],
+        objects: [],
+        tasks: [],
+        chatMessages: []
+      }
+    ]
+  });
+
+  try {
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator(".workspace-title")).toHaveText("E2E World");
+    await expect(page.locator("[data-world-canvas] canvas")).toBeVisible();
+
+    await page.locator('[data-action="show-world-task-publisher"]').click();
+    await page.locator("#worldTaskGoal").fill("Build the world task loop.");
+    await page.locator('[data-action="publish-world-task"]').click();
+
+    await expect(page.locator(".world-chat-modal")).toContainText("Build the world task loop.");
+    await expect(page.locator(".world-chat-modal")).toContainText("我会负责");
+
+    await expect.poll(() => {
+      const currentState = JSON.parse(fs.readFileSync(path.join(userDataDir, stateFileName), "utf8"));
+      const world = currentState.worlds.find((item) => item.id === "world-e2e");
+      return world?.agents?.[0]?.kernel?.runs?.length || 0;
+    }).toBeGreaterThan(0);
+
+    const savedState = JSON.parse(fs.readFileSync(path.join(userDataDir, stateFileName), "utf8"));
+    const world = savedState.worlds.find((item) => item.id === "world-e2e");
+    const run = world.agents[0].kernel.runs[0];
+    expect(world.tasks).toHaveLength(1);
+    expect(world.chatMessages.some((message) => message.type === "role-message")).toBe(true);
+    expect(run.input).toContain("不要使用 CosS 项目主页");
+    expect(run.output).toContain("独立世界 CodeBuddy CLI");
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.11.0 project list shows project creation time", async () => {
   const createdAt = "2026-02-03T04:05:00.000Z";
   const { app, page } = await launchApp({
     id: "project-created-time",
@@ -232,7 +287,7 @@ test("v0.10.0 project list shows project creation time", async () => {
   }
 });
 
-test("v0.10.0 project memory summarizes existing project work from settings", async () => {
+test("v0.11.0 project memory summarizes existing project work from settings", async () => {
   const createdAt = "2026-01-01T02:10:00.000Z";
   const { app, page, userDataDir } = await launchApp({
     tasks: [
@@ -315,7 +370,7 @@ test("v0.10.0 project memory summarizes existing project work from settings", as
   }
 });
 
-test("v0.10.0 deleted projects stay deleted after restart", async () => {
+test("v0.11.0 deleted projects stay deleted after restart", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-delete-project-"));
   const projectDirA = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-project-a-"));
   const projectDirB = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-project-b-"));
@@ -367,7 +422,7 @@ test("v0.10.0 deleted projects stay deleted after restart", async () => {
   }
 });
 
-test("v0.10.0 renderer task actions write Kernel phases and events", async () => {
+test("v0.11.0 renderer task actions write Kernel phases and events", async () => {
   const createdAt = "2026-01-01T01:00:00.000Z";
   const { app, page, userDataDir } = await launchApp({
     windows: [
@@ -454,7 +509,7 @@ test("v0.10.0 renderer task actions write Kernel phases and events", async () =>
   }
 });
 
-test("v0.10.0 Kernel Planner keeps the complete linear workflow from the model", async () => {
+test("v0.11.0 Kernel Planner keeps the complete linear workflow from the model", async () => {
   const mockPlan = {
     summary: "Plan a complete login workflow.",
     neededAgentRoleIds: ["product-manager", "tech-lead", "frontend-engineer"],
@@ -516,7 +571,7 @@ test("v0.10.0 Kernel Planner keeps the complete linear workflow from the model",
   }
 });
 
-test("v0.10.0 confirming a Kernel plan auto-starts Agent injection", async () => {
+test("v0.11.0 confirming a Kernel plan auto-starts Agent injection", async () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-auto-inject-project-"));
   const mockPlan = {
     summary: "Build a small game web collection.",
@@ -592,7 +647,7 @@ test("v0.10.0 confirming a Kernel plan auto-starts Agent injection", async () =>
   }
 });
 
-test("v0.10.0 task list only shows execute button for the current Kernel step", async () => {
+test("v0.11.0 task list only shows execute button for the current Kernel step", async () => {
   const createdAt = "2026-01-01T02:10:00.000Z";
   const subtasks = [
     ["subtask-current-1", "product-manager", "Define requirements", "done", [], true],
@@ -633,10 +688,10 @@ test("v0.10.0 task list only shows execute button for the current Kernel step", 
         },
         subtasks,
         orchestrator: {
-          version: "0.10.0",
+          version: "0.11.0",
           mode: "central-orchestrator",
           owner: "CosS Kernel",
-          kernel: { version: "0.10.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
+          kernel: { version: "0.11.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
           sharedState: { currentStep: "step-3", artifacts: [], decisions: [], constraints: [] },
           locks: [],
           approvals: [],
@@ -692,7 +747,7 @@ test("v0.10.0 task list only shows execute button for the current Kernel step", 
   }
 });
 
-test("v0.10.0 project MCP config exposes Kernel tools", async () => {
+test("v0.11.0 project MCP config exposes Kernel tools", async () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-mcp-config-"));
   const { app, page } = await launchApp({ path: projectDir });
 
@@ -704,7 +759,7 @@ test("v0.10.0 project MCP config exposes Kernel tools", async () => {
 
     expect(result.ok).toBe(true);
     const cossConfig = JSON.parse(fs.readFileSync(path.join(projectDir, ".coss", "mcp", "coss-mcp.json"), "utf8"));
-    expect(cossConfig.appVersion).toBe("0.10.0");
+    expect(cossConfig.appVersion).toBe("0.11.0");
     expect(cossConfig.tools).toEqual([
       "coss_get_context",
       "coss_list_roles",
@@ -736,7 +791,7 @@ test("v0.10.0 project MCP config exposes Kernel tools", async () => {
   }
 });
 
-test("v0.10.0 MCP server exposes Kernel workflow tools", async () => {
+test("v0.11.0 MCP server exposes Kernel workflow tools", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-tools-"));
   writeState(userDataDir, createInitialState(process.cwd()));
 
@@ -760,7 +815,7 @@ test("v0.10.0 MCP server exposes Kernel workflow tools", async () => {
   }
 });
 
-test("v0.10.0 MCP submit result refreshes project memory context", async () => {
+test("v0.11.0 MCP submit result refreshes project memory context", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-memory-mcp-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-memory-mcp-project-"));
   const createdAt = "2026-01-01T02:10:00.000Z";
@@ -839,7 +894,7 @@ test("v0.10.0 MCP submit result refreshes project memory context", async () => {
   expect(savedState.projects[0].memory.summary).toContain("docs/memory-prd.md");
 });
 
-test("v0.10.0 Kernel keeps stable step ids for legacy subtasks without ids", async () => {
+test("v0.11.0 Kernel keeps stable step ids for legacy subtasks without ids", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-stable-steps-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-stable-steps-project-"));
   const createdAt = "2026-01-01T02:10:00.000Z";
@@ -909,7 +964,7 @@ test("v0.10.0 Kernel keeps stable step ids for legacy subtasks without ids", asy
   expect(savedTask.orchestrator.steps[0].id).toBe(firstClaim.stepId);
 });
 
-test("v0.10.0 Kernel dispatches preplanned dependent steps after prerequisites complete", async () => {
+test("v0.11.0 Kernel dispatches preplanned dependent steps after prerequisites complete", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-preplanned-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-preplanned-project-"));
   const createdAt = "2026-01-01T02:00:00.000Z";
@@ -1023,7 +1078,7 @@ test("v0.10.0 Kernel dispatches preplanned dependent steps after prerequisites c
   ))).toBe(true);
 });
 
-test("v0.10.0 renderer auto-injects the next Kernel step after MCP completion", async () => {
+test("v0.11.0 renderer auto-injects the next Kernel step after MCP completion", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-sequence-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-sequence-project-"));
   const createdAt = "2026-01-01T02:20:00.000Z";
@@ -1180,7 +1235,7 @@ test("v0.10.0 renderer auto-injects the next Kernel step after MCP completion", 
   }
 });
 
-test("v0.10.0 renderer does not replay completed Kernel dispatches after relaunch", async () => {
+test("v0.11.0 renderer does not replay completed Kernel dispatches after relaunch", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-completed-relaunch-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-completed-relaunch-project-"));
   const createdAt = "2026-01-01T02:40:00.000Z";
@@ -1240,10 +1295,10 @@ test("v0.10.0 renderer does not replay completed Kernel dispatches after relaunc
           }
         ],
         orchestrator: {
-          version: "0.10.0",
+          version: "0.11.0",
           mode: "central-orchestrator",
           owner: "CosS Kernel",
-          kernel: { version: "0.10.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
+          kernel: { version: "0.11.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
           policy: { directAgentMessaging: false, durableWorkflow: true, stepLeases: true },
           sharedState: { currentStep: "step-completed-pm", artifacts: [], decisions: [], constraints: [] },
           locks: [],
@@ -1331,7 +1386,7 @@ test("v0.10.0 renderer does not replay completed Kernel dispatches after relaunc
   }
 });
 
-test("v0.10.0 renderer stale saves preserve MCP-dispatched downstream steps", async () => {
+test("v0.11.0 renderer stale saves preserve MCP-dispatched downstream steps", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-merge-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-merge-project-"));
   const createdAt = "2026-01-01T02:00:00.000Z";
@@ -1454,7 +1509,7 @@ test("v0.10.0 renderer stale saves preserve MCP-dispatched downstream steps", as
   await app.close();
 });
 
-test("v0.10.0 renderer repairs ready idle steps that lost dispatch messages", async () => {
+test("v0.11.0 renderer repairs ready idle steps that lost dispatch messages", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-repair-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-repair-project-"));
   const createdAt = "2026-01-01T02:30:00.000Z";
@@ -1505,10 +1560,10 @@ test("v0.10.0 renderer repairs ready idle steps that lost dispatch messages", as
           }
         ],
         orchestrator: {
-          version: "0.10.0",
+          version: "0.11.0",
           mode: "central-orchestrator",
           owner: "CosS Kernel",
-          kernel: { version: "0.10.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
+          kernel: { version: "0.11.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
           policy: { directAgentMessaging: false, durableWorkflow: true, stepLeases: true },
           sharedState: { currentStep: "step-repair-pm", artifacts: [], decisions: [], constraints: [] },
           locks: [],
@@ -1608,7 +1663,7 @@ test("v0.10.0 renderer repairs ready idle steps that lost dispatch messages", as
   await app.close();
 });
 
-test("v0.10.0 Kernel owns leases, dispatch, capability sandbox, structured results, and locks", async () => {
+test("v0.11.0 Kernel owns leases, dispatch, capability sandbox, structured results, and locks", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-orchestrator-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-project-"));
   const createdAt = "2026-01-01T03:00:00.000Z";
@@ -1685,7 +1740,7 @@ test("v0.10.0 Kernel owns leases, dispatch, capability sandbox, structured resul
   });
   expect(board.ok).toBe(true);
   expect(board.orchestrator.mode).toBe("central-orchestrator");
-  expect(board.orchestrator.version).toBe("0.10.0");
+  expect(board.orchestrator.version).toBe("0.11.0");
   expect(board.orchestrator.kernel.architecture).toBe("durable-workflow-kernel");
   expect(board.orchestrator.policy.eventSourcing).toBe(true);
   expect(board.orchestrator.policy.stepLeases).toBe(true);

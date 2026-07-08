@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag, for example v0.10.0. Leave empty to only build artifacts."
+        description: "Optional release tag, for example v0.11.0. Leave empty to only build artifacts."
         required: false
         type: string
 
@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           tag="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ] && [[ ! "${{ github.event.inputs.tag }}" =~ ^v ]]; then
-            echo "Release tags must start with v, for example v0.10.0." >&2
+            echo "Release tags must start with v, for example v0.11.0." >&2
             exit 1
           fi
           echo "release_tag=${tag}" >> "$GITHUB_STEP_SUMMARY"

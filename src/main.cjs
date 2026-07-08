@@ -27,7 +27,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.10.0";
+    return "0.11.0";
   }
 })();
 const terminalSessions = new Map();
@@ -58,6 +58,11 @@ const agentPermissionPolicies = {
     id: "sessionInstall",
     label: "本会话允许编辑与安装依赖",
     instruction: "当前 CosS Agent 权限模式：本会话允许编辑与安装依赖。可以在当前项目目录内创建/修改文件并安装必要依赖；删除文件、部署、格式化磁盘、清理大范围目录、访问敏感信息或其他破坏性操作仍必须先等待用户确认。"
+  },
+  worldFullAccess: {
+    id: "worldFullAccess",
+    label: "世界 Agent 完全访问",
+    instruction: "当前 CosS 世界 Agent 权限模式：完全访问。你运行在从 0 开始的隔离世界 CLI 内核中，不复用任何项目终端会话；可直接使用终端完成角色任务。涉及真实外部发布、删除用户数据、付款、发送消息给外部人员等不可逆动作时仍需遵守系统与用户授权边界。"
   }
 };
 const terminalPermissionRiskRules = [
@@ -227,6 +232,7 @@ function summarizePlanRequest(request = {}) {
     projectName: sanitizeLogText(request.projectName, 100),
     goal: sanitizeLogText(request.goal, 240),
     roleCount: Array.isArray(request.roles) ? request.roles.length : 0,
+    imageCount: Array.isArray(request.attachments) ? request.attachments.filter((item) => item?.type === "image").length : 0,
     timeoutMs: getLlmRequestTimeoutMs(),
     model: summarizeModelConfig(request.model || {})
   };
@@ -265,7 +271,20 @@ async function readState() {
   let db = null;
 
   try {
-    db = await openSqliteDatabase();
+    try {
+      db = await Promise.race([
+        openSqliteDatabase(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("sqlite open timeout")), 5000))
+      ]);
+    } catch (sqliteError) {
+      appendLogEvent("storage.sqlite.timeout", { error: sqliteError.message }, "warn");
+      const jsonState = readStateFile(filePath);
+      if (jsonState.ok) {
+        appendLogEvent("storage.state.loaded", { mode: "json-timeout-fallback", filePath }, "warn");
+        return jsonState.state;
+      }
+      throw sqliteError;
+    }
     const sqliteState = readWorkspaceStateFromDb(db);
     if (sqliteState) {
       const jsonState = readStateFile(filePath);
@@ -426,6 +445,18 @@ async function writeState(state) {
 
 function sanitizeLlmText(value, maxLength = 220) {
   return sanitizeLogText(value, maxLength);
+}
+
+function safeResolvePath(rawPath) {
+  const value = String(rawPath || "").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    return path.resolve(value);
+  } catch (error) {
+    return "";
+  }
 }
 
 function extractJsonObjectLegacy(text) {
@@ -599,11 +630,63 @@ function buildLlmHeaders(model = {}) {
   return headers;
 }
 
+const PLANNER_IMAGE_LIMIT = 5;
+const PLANNER_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const PLANNER_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
 function sanitizePromptText(value, limit = 1200) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, limit);
+}
+
+function normalizePlannerAttachments(attachments = []) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  const images = list
+    .filter((item) => item?.type === "image")
+    .slice(0, PLANNER_IMAGE_LIMIT)
+    .map((item, index) => {
+      const mimeType = String(item.mimeType || "").trim().toLowerCase();
+      const data = String(item.data || "").trim().replace(/^data:[^,]+,/, "");
+      const size = Number(item.size) || Math.ceil((data.length * 3) / 4);
+      if (!PLANNER_IMAGE_MIME_TYPES.has(mimeType)) {
+        throw new Error(`不支持的任务图片类型：${mimeType || "unknown"}。仅支持 PNG、JPEG、WebP。`);
+      }
+      if (!data) {
+        throw new Error("任务图片内容为空，请重新选择图片。");
+      }
+      if (size > PLANNER_IMAGE_MAX_BYTES) {
+        throw new Error(`任务图片过大：单张不能超过 ${Math.round(PLANNER_IMAGE_MAX_BYTES / 1024 / 1024)} MB。`);
+      }
+      return {
+        type: "image",
+        id: sanitizeLlmText(item.id || `image-${index + 1}`, 80),
+        name: sanitizeLlmText(item.name || `image-${index + 1}`, 160),
+        mimeType,
+        size,
+        data
+      };
+    });
+  const files = list
+    .filter((item) => item?.type === "file" && item?.absolutePath)
+    .slice(0, 20)
+    .map((item, index) => {
+      const rawPath = String(item.absolutePath || "").trim();
+      const resolved = safeResolvePath(rawPath);
+      if (!resolved) {
+        return null;
+      }
+      return {
+        type: "file",
+        id: sanitizeLlmText(item.id || `file-${index + 1}`, 80),
+        name: sanitizeLlmText(item.name || `file-${index + 1}`, 200),
+        size: Number(item.size) || 0,
+        absolutePath: sanitizeLlmText(resolved, 1024)
+      };
+    })
+    .filter(Boolean);
+  return [...images, ...files];
 }
 
 function formatPlannerProjectMemory(projectMemory = {}) {
@@ -646,11 +729,38 @@ function formatPlannerProjectMemory(projectMemory = {}) {
   return lines.join("\n").trim().slice(0, 14000) || "Project memory is empty.";
 }
 
-function buildPlannerMessages({ goal, projectName, roles, projectMemory }) {
+function buildPlannerMessages({ goal, projectName, roles, projectMemory, attachments = [] }) {
   const roleText = roles
     .map((role) => `- ${role.id}: ${role.name}, ${role.description}`)
     .join("\n");
   const memoryText = formatPlannerProjectMemory(projectMemory);
+  const imageAttachments = attachments.filter((item) => item?.type === "image");
+  const fileAttachments = attachments.filter((item) => item?.type === "file");
+  const hasImages = imageAttachments.length > 0;
+  const hasFiles = fileAttachments.length > 0;
+  const fileListBlock = hasFiles
+    ? `Reference files (absolute paths; do not modify. Reference them in subtask descriptions so downstream Agents can read with their tools):\n${fileAttachments.map((item) => `- ${item.absolutePath}`).join("\n")}\n\n`
+    : "";
+  const userText =
+    `Project: ${projectName || "Untitled project"}\n` +
+    `Task goal: ${goal}\n\n` +
+    (hasImages ? `Reference images: ${imageAttachments.length} image(s) are attached. Use them as supporting evidence for visible UI, error, OCR, layout, or workflow clues. Do not invent details that are not visible; if uncertain, make the first step clarify the uncertainty.\n\n` : "") +
+    fileListBlock +
+    `Project memory:\n${memoryText}\n\n` +
+    `Available roles:\n${roleText}\n\n` +
+    "Create a complete linear workflow. Do not create parallel entry steps. Later steps must depend on the previous step only. Return JSON in this shape: " +
+    "{\"summary\":\"one sentence task summary\",\"neededAgentRoleIds\":[\"product-manager\",\"tech-lead\",\"frontend-engineer\",\"backend-engineer\",\"test-engineer\"],\"firstRoundRoleIds\":[\"product-manager\"],\"subtasks\":[{\"id\":\"step-1\",\"roleId\":\"product-manager\",\"title\":\"Define requirements and acceptance criteria\",\"description\":\"Write PRD, acceptance criteria, and boundaries.\",\"dependsOn\":[],\"riskLevel\":\"low\"},{\"id\":\"step-2\",\"roleId\":\"tech-lead\",\"title\":\"Design technical approach\",\"description\":\"Use step-1 output to define architecture and interface constraints.\",\"dependsOn\":[\"step-1\"],\"riskLevel\":\"low\"}],\"messages\":[]}.";
+  const userContent = hasImages
+    ? [
+      { type: "text", text: userText },
+      ...imageAttachments.map((item) => ({
+        type: "image_url",
+        image_url: {
+          url: `data:${item.mimeType};base64,${item.data}`
+        }
+      }))
+    ]
+    : userText;
 
   return [
     {
@@ -662,17 +772,12 @@ function buildPlannerMessages({ goal, projectName, roles, projectMemory }) {
         "subtasks must contain the complete sequential workflow, 1 to 12 steps. Every step must include id, roleId, title, description, dependsOn, and riskLevel. Step 1 uses dependsOn: []; every later step depends only on the immediately previous step. " +
         "The Kernel will dispatch one step at a time. The next Agent starts only after the previous Agent reports done. Agent states are only idle, running, and done. " +
         "Use project memory as the existing project context. Prefer incremental steps that continue current architecture, artifacts, conventions, and completed work. Do not plan bootstrap, scaffolding, or rediscovery steps unless the user goal explicitly asks for them. " +
+        "If reference images are provided, inspect them and use visible evidence to improve the plan, but do not make unsupported claims. " +
         "Return exactly these fields: summary, neededAgentRoleIds, firstRoundRoleIds, subtasks, messages. messages must be an empty array."
     },
     {
       role: "user",
-      content:
-        `Project: ${projectName || "Untitled project"}\n` +
-        `Task goal: ${goal}\n\n` +
-        `Project memory:\n${memoryText}\n\n` +
-        `Available roles:\n${roleText}\n\n` +
-        "Create a complete linear workflow. Do not create parallel entry steps. Later steps must depend on the previous step only. Return JSON in this shape: " +
-        "{\"summary\":\"one sentence task summary\",\"neededAgentRoleIds\":[\"product-manager\",\"tech-lead\",\"frontend-engineer\",\"backend-engineer\",\"test-engineer\"],\"firstRoundRoleIds\":[\"product-manager\"],\"subtasks\":[{\"id\":\"step-1\",\"roleId\":\"product-manager\",\"title\":\"Define requirements and acceptance criteria\",\"description\":\"Write PRD, acceptance criteria, and boundaries.\",\"dependsOn\":[],\"riskLevel\":\"low\"},{\"id\":\"step-2\",\"roleId\":\"tech-lead\",\"title\":\"Design technical approach\",\"description\":\"Use step-1 output to define architecture and interface constraints.\",\"dependsOn\":[\"step-1\"],\"riskLevel\":\"low\"}],\"messages\":[]}."
+      content: userContent
     }
   ];
 }
@@ -729,6 +834,7 @@ async function planTaskWithLlm(request = {}) {
   const model = request.model || {};
   const url = buildChatCompletionsUrl(model.baseUrl);
   const headers = buildLlmHeaders(model);
+  const attachments = normalizePlannerAttachments(request.attachments || []);
 
   const payload = {
     model: model.modelName,
@@ -736,7 +842,8 @@ async function planTaskWithLlm(request = {}) {
       goal: request.goal,
       projectName: request.projectName,
       roles,
-      projectMemory: request.projectMemory || null
+      projectMemory: request.projectMemory || null,
+      attachments
     }),
     temperature: 0.2,
     stream: false
@@ -1102,14 +1209,25 @@ function cleanupStaleAtomicTempFiles(filePath, maxAgeMs = 60 * 60 * 1000) {
 
 async function getSqlJsRuntime() {
   if (!initSqlJs) {
+    appendLogEvent("storage.sqljs.unavailable", {}, "warn");
     throw new Error("sql.js 依赖不可用。");
   }
 
   if (!sqlJsRuntimePromise) {
+    appendLogEvent("storage.sqljs.loading", {}, "info");
     const distDir = path.dirname(require.resolve("sql.js/dist/sql-wasm.js"));
-    sqlJsRuntimePromise = initSqlJs({
-      locateFile: (fileName) => path.join(distDir, fileName)
-    });
+    sqlJsRuntimePromise = Promise.race([
+      initSqlJs({
+        locateFile: (fileName) => path.join(distDir, fileName)
+      }).then((SQL) => {
+        appendLogEvent("storage.sqljs.loaded", {}, "info");
+        return SQL;
+      }),
+      new Promise((_, reject) => setTimeout(() => {
+        appendLogEvent("storage.sqljs.timeout", {}, "error");
+        reject(new Error("sql.js WASM 加载超时"));
+      }, 8000))
+    ]);
   }
 
   return sqlJsRuntimePromise;
@@ -2749,6 +2867,302 @@ function getCodeBuddyLaunchCommandInfo(env = getWindowsShellEnv()) {
   };
 }
 
+function getWorldAgentTimeoutMs() {
+  const value = Number.parseInt(process.env.COSS_WORLD_AGENT_TIMEOUT_MS || "", 10);
+  if (Number.isFinite(value) && value >= 5000) {
+    return value;
+  }
+  return 120000;
+}
+
+function getWorldAgentIdleMs() {
+  const value = Number.parseInt(process.env.COSS_WORLD_AGENT_IDLE_MS || "", 10);
+  if (Number.isFinite(value) && value >= 1200) {
+    return value;
+  }
+  return 6500;
+}
+
+function shouldMockWorldAgentRun() {
+  return process.env.COSS_WORLD_AGENT_MOCK === "1" || process.env.COSS_DISABLE_TERMINAL_BACKEND === "1";
+}
+
+function buildWorldCodeBuddyLaunch(cwd, prompt = "", env = getWindowsShellEnv()) {
+  const info = getCodeBuddyLaunchCommandInfo(env);
+  const scriptPath = resolveCodeBuddyBinScript(info.command, info.lookupPaths);
+  const effectiveCwd = normalizeCwd(cwd || process.env.COSS_WORLD_CWD || info.cwd || process.cwd());
+  const settingsDir = path.join(effectiveCwd, ".codebuddy");
+  const settingsPath = path.join(settingsDir, "settings.json");
+  try {
+    if (!fs.existsSync(settingsDir)) {
+      fs.mkdirSync(settingsDir, { recursive: true });
+    }
+    let settings = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      } catch {
+        settings = {};
+      }
+    }
+    if (!settings.trustAll) {
+      settings.trustAll = true;
+      writeJsonAtomic(settingsPath, settings);
+      appendLogEvent("codebuddy.trustAll.enabled", { settingsPath });
+    }
+  } catch (error) {
+    appendLogEvent("codebuddy.trustAll.failed", { settingsPath, error: serializeError(error) }, "warn");
+  }
+  const args = [];
+  if (prompt) {
+    args.push("-p", prompt);
+    args.push("--permission-mode", "auto");
+  }
+  const directLaunch = buildNodeAgentLaunch(scriptPath, args, env, "world-node-codebuddy-bin");
+  if (directLaunch) {
+    return { ...directLaunch, command: info.command, lookupPaths: info.lookupPaths, cwd: effectiveCwd };
+  }
+
+  if (process.platform === "win32" && isWindowsBatchCommand(info.command)) {
+    return {
+      file: "cmd.exe",
+      args: ["/d", "/c", buildCmdInvocation(info.command, args)],
+      cwd: effectiveCwd,
+      launchMethod: "world-cmd-codebuddy",
+      command: info.command,
+      lookupPaths: info.lookupPaths
+    };
+  }
+
+  return {
+    file: info.command,
+    args,
+    cwd: effectiveCwd,
+    launchMethod: "world-codebuddy",
+    command: info.command,
+    lookupPaths: info.lookupPaths
+  };
+}
+
+function extractWorldAgentFinalMessage(output) {
+  let text = stripAnsi(output)
+    .replace(/\r/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    // 删除常见的终端动画字符（spinner、进度条等）
+    .replace(/[\u2800-\u28FF\u2580-\u259F\u25A0-\u25FF]+/g, "")
+    .trim();
+
+  if (!text) {
+    return "";
+  }
+
+  // 查找「世界群聊最终消息：」标记，取标记后所有内容
+  const idx = text.search(/(?:世界群聊最终消息|FINAL_CHAT_MESSAGE)\s*[:：]/i);
+  if (idx >= 0) {
+    const after = text.slice(idx).replace(/(?:世界群聊最终消息|FINAL_CHAT_MESSAGE)\s*[:：]\s*/i, "").trim();
+    // 取标记后所有行作为最终消息
+    return after.slice(0, 10000);
+  }
+
+  // 没有标记时，取最后一段非空行
+  const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const candidate = lines.slice(-20).join("\n");
+  return candidate.slice(0, 10000);
+}
+
+async function handleWorldAgentRun(_event, request = {}) {
+  const startedAt = Date.now();
+  const worldId = sanitizeLogText(request.worldId, 80);
+  const taskId = sanitizeLogText(request.taskId, 80);
+  const roleId = sanitizeLogText(request.roleId, 80);
+  const roleName = sanitizeLogText(request.roleName || roleId || "世界角色", 80);
+  const taskGoal = sanitizeLogText(request.taskGoal || "", 240);
+  const prompt = String(request.prompt || "").trim();
+  const cwd = normalizeCwd(request.worldPath || request.cwd || process.cwd());
+  const runId = sanitizeLogText(request.runId || randomUUID(), 80);
+
+  if (!prompt) {
+    return {
+      ok: false,
+      runId,
+      error: "world-agent prompt is empty",
+      output: "",
+      rawOutput: "",
+      latencyMs: Date.now() - startedAt
+    };
+  }
+
+  if (shouldMockWorldAgentRun()) {
+    const output = `${roleName}：我会负责${sanitizeLogText(request.moduleSummary || "当前角色模块", 120)}。收到公告栏任务「${taskGoal || "未命名任务"}」，这是独立世界 CodeBuddy CLI 内核的占位最终聊天信息。`;
+    appendLogEvent("world-agent.run.mocked", { worldId, taskId, roleId, runId, cwd, latencyMs: Date.now() - startedAt });
+    return {
+      ok: true,
+      mocked: true,
+      runId,
+      output,
+      rawOutput: output,
+      command: "mock-codebuddy",
+      launchMethod: "mock",
+      latencyMs: Date.now() - startedAt
+    };
+  }
+
+  const apiKey = String(request.codeBuddyApiKey || "").trim();
+  const env = getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {});
+  if (!getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY")) {
+    const error = "未配置 CodeBuddy API Key。请在设置中填写 CodeBuddy API Key，或通过环境变量 CODEBUDDY_API_KEY 提供。";
+    appendLogEvent("world-agent.run.missing-key", { worldId, taskId, roleId, runId, cwd }, "warn");
+    return {
+      ok: false,
+      runId,
+      error,
+      output: "",
+      rawOutput: "",
+      latencyMs: Date.now() - startedAt
+    };
+  }
+
+  const launch = buildWorldCodeBuddyLaunch(cwd, prompt, env);
+  appendLogEvent("world-agent.run.started", {
+    worldId,
+    taskId,
+    roleId,
+    runId,
+    cwd,
+    command: launch.command || launch.file,
+    launchMethod: launch.launchMethod,
+    lookupPathCount: launch.lookupPaths?.length || 0
+  });
+
+  return new Promise((resolve) => {
+    let child = null;
+    let settled = false;
+    let rawOutput = "";
+    let idleTimer = null;
+    let hardTimer = null;
+    const isNonInteractive = launch.args?.includes("-p");
+
+    const appendOutput = (data) => {
+      rawOutput = `${rawOutput}${data}`.slice(-60000);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      if (rawOutput.trim()) {
+        idleTimer = setTimeout(() => finish(true, "idle"), getWorldAgentIdleMs());
+        if (typeof idleTimer.unref === "function") {
+          idleTimer.unref();
+        }
+      }
+    };
+
+    const cleanup = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+      if (hardTimer) {
+        clearTimeout(hardTimer);
+        hardTimer = null;
+      }
+    };
+
+    const finish = (ok, reason, error = "") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (child?.pid && reason === "idle") {
+        try {
+          child.kill();
+          killProcessTree(child.pid);
+        } catch {
+          // The process may already have exited.
+        }
+      }
+      const output = extractWorldAgentFinalMessage(rawOutput);
+      appendLogEvent(ok ? "world-agent.run.finished" : "world-agent.run.failed", {
+        worldId,
+        taskId,
+        roleId,
+        runId,
+        cwd,
+        reason,
+        command: launch.command || launch.file,
+        launchMethod: launch.launchMethod,
+        outputLength: output.length,
+        rawLength: rawOutput.length,
+        latencyMs: Date.now() - startedAt,
+        error: sanitizeLogText(error, 300)
+      }, ok ? "info" : "warn");
+      resolve({
+        ok,
+        runId,
+        reason,
+        error,
+        output,
+        rawOutput: stripAnsi(rawOutput).trim().slice(-12000),
+        command: launch.command || launch.file,
+        launchMethod: launch.launchMethod,
+        latencyMs: Date.now() - startedAt
+      });
+    };
+
+    hardTimer = setTimeout(() => {
+      if (child?.pid) {
+        try {
+          child.kill();
+          killProcessTree(child.pid);
+        } catch {
+          // Best effort timeout cleanup.
+        }
+      }
+      finish(Boolean(rawOutput.trim()), "timeout", rawOutput.trim() ? "" : "CodeBuddy CLI timed out before producing output.");
+    }, getWorldAgentTimeoutMs());
+    if (typeof hardTimer.unref === "function") {
+      hardTimer.unref();
+    }
+
+    try {
+      if (nodePty && process.env.COSS_WORLD_AGENT_PIPE !== "1") {
+        child = nodePty.spawn(launch.file, launch.args, {
+          cwd,
+          env,
+          name: "xterm-256color",
+          cols: 120,
+          rows: 32
+        });
+        child.onData((data) => appendOutput(data));
+        child.onExit(({ exitCode }) => {
+          const ok = exitCode === 0 || Boolean(rawOutput.trim());
+          finish(ok, `exit-${exitCode ?? "unknown"}`, ok ? "" : `CodeBuddy CLI exited with ${exitCode ?? "unknown"}.`);
+        });
+        if (!isNonInteractive) {
+          child.write(`${prompt}\r`);
+        }
+      } else {
+        child = childProcess.spawn(launch.file, launch.args, {
+          cwd,
+          env,
+          windowsHide: true
+        });
+        child.stdout?.on("data", (chunk) => appendOutput(chunk.toString()));
+        child.stderr?.on("data", (chunk) => appendOutput(chunk.toString()));
+        child.on("error", (error) => finish(false, "spawn-error", error.message));
+        child.on("exit", (code) => {
+          const ok = code === 0 || Boolean(rawOutput.trim());
+          finish(ok, `exit-${code ?? "unknown"}`, ok ? "" : `CodeBuddy CLI exited with ${code ?? "unknown"}.`);
+        });
+        if (!isNonInteractive) {
+          child.stdin?.write(`${prompt}\n`);
+        }
+      }
+    } catch (error) {
+      finish(false, "spawn-or-write-error", error.message);
+    }
+  });
+}
+
 function getNpmCommand() {
   return process.env.COSS_NPM_COMMAND || (process.platform === "win32" ? "npm.cmd" : "npm");
 }
@@ -3367,7 +3781,16 @@ function buildStaticLogLaunch({ env, label, rolePrompt, warning }) {
 }
 
 function stripAnsi(input) {
-  return String(input || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+  return String(input || "")
+    // CSI 序列：ESC [ ...
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    // OSC 序列：ESC ] ... BEL 或 ESC ] ... ST
+    .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
+    // 剩余的 ESC 开头的序列
+    .replace(/\x1B(?:[@-_][^\x40-\x7E]*)?/g, "")
+    // 删除非打印字符（保留正常文本、换行、中文）
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .trim();
 }
 
 function normalizeAgentStatus(value) {
@@ -3573,6 +3996,7 @@ function getDefaultAgentPromptTemplate() {
     "当前任务：{{taskTitle}}",
     "子任务：{{subtaskTitle}}",
     "子任务说明：{{subtaskDescription}}",
+    "参考文件路径（如有，请用 Read 等工具自行读取，不要凭路径猜测内容）：{{taskFilePaths}}",
     "",
     "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。",
     "CosS 使用任务调度器按步骤推进协作。你不能直接给其他角色分配任务，不能发明不存在的角色，也不能绕过共享任务板。",
@@ -3607,6 +4031,14 @@ function formatTaskContextProjectMemory(taskContext = {}) {
   ].join("\n");
 }
 
+function formatTaskFilePaths(paths = []) {
+  const list = Array.isArray(paths) ? paths.filter((p) => String(p || "").trim()) : [];
+  if (list.length < 1) {
+    return "（无）";
+  }
+  return list.map((p) => `\n - ${String(p).trim()}`).join("");
+}
+
 function buildRolePrompt(options) {
   const taskContext = options.taskContext || {};
   const agentSession = options.agentSession || {};
@@ -3632,7 +4064,8 @@ function buildRolePrompt(options) {
     subtaskDescription: taskContext.subtaskDescription || "",
     subtaskStatus: taskContext.subtaskStatus || "",
     projectMemorySummary: taskContext.projectMemorySummary || "",
-    projectMemoryUpdatedAt: taskContext.projectMemoryUpdatedAt || ""
+    projectMemoryUpdatedAt: taskContext.projectMemoryUpdatedAt || "",
+    taskFilePaths: formatTaskFilePaths(taskContext.taskFilePaths || [])
   });
   const memoryBlock = formatTaskContextProjectMemory(taskContext);
   if (!memoryBlock || prompt.includes("Project memory:")) {
@@ -3679,7 +4112,7 @@ function assessTerminalCommandRisk(command) {
 
 function shouldBlockTerminalCommand(permissionMode, assessment) {
   const mode = normalizeAgentPermissionMode(permissionMode);
-  if (!assessment?.requiresApproval) {
+  if (!assessment?.requiresApproval || mode === "worldFullAccess") {
     return false;
   }
   if (mode === "readonly") {
@@ -5861,6 +6294,7 @@ app.whenReady().then(() => {
     }, status.runnable ? "info" : "warn");
     return status;
   });
+  ipcMain.handle("world-agent:run", handleWorldAgentRun);
   ipcMain.handle("codebuddy:status", (_event, request = {}) => {
     const apiKey = typeof request === "object" && request !== null ? String(request.apiKey || "").trim() : "";
     const status = getCodeBuddyCommandStatus(getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {}));

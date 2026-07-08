@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld("cossAPI", {
   getCodexStatus: () => ipcRenderer.invoke("codex:status"),
   getCodeBuddyStatus: (request) => ipcRenderer.invoke("codebuddy:status", request),
   testAgentLogin: (request) => ipcRenderer.invoke("agent:login-test", request),
+  runWorldAgent: (request) => ipcRenderer.invoke("world-agent:run", request),
   createTerminal: (options) => ipcRenderer.invoke("terminal:create", options),
   sendTerminalInput: (id, data, options) => ipcRenderer.invoke("terminal:input", id, data, options),
   resizeTerminal: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", id, cols, rows),
