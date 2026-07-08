@@ -14022,9 +14022,11 @@ function ensureWorldShape(world) {
   world.createdAt = world.createdAt || new Date().toISOString();
   world.lastOpenedAt = world.lastOpenedAt || world.createdAt;
   world.terrain = world.terrain || "pixel-meadow";
+  world.objects = Array.isArray(world.objects) ? world.objects : WORLD_DEFAULT_OBJECTS;
   world.agents = Array.isArray(world.agents) ? world.agents : [];
   world.chatMessages = Array.isArray(world.chatMessages) ? world.chatMessages : [];
   world.tasks = Array.isArray(world.tasks) ? world.tasks : [];
+  world.map = world.map || { key: "default-meadow", width: 64, height: 64, tileSize: 32 };
   world.agents = world.agents.filter((agent) => ROLE_TEMPLATES.some((role) => role.id === agent.roleId)).map((existing, index) => {
     const position = WORLD_AGENT_POSITIONS[index % WORLD_AGENT_POSITIONS.length];
     return {
