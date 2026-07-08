@@ -277,7 +277,7 @@ const defaultState = {
   }
 };
 
-const APP_VERSION = "v0.10.0";
+const APP_VERSION = "v0.11.0";
 const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 let state = structuredClone(defaultState);
@@ -2717,7 +2717,7 @@ function ensureAgentSessionShape(win, project = getProject()) {
     taskId: taskContext.taskId,
     subtaskId: taskContext.subtaskId,
     sessionName: win.agentSession?.sessionName || `CosS-${project?.name || "Project"}-${role.name}-${provider}`,
-    promptTemplateVersion: "v0.10.0",
+    promptTemplateVersion: "v0.11.0",
     createdAt,
     lastStartedAt: win.agentSession?.lastStartedAt || "",
     resumeCount: Number.isFinite(Number(win.agentSession?.resumeCount)) ? Number(win.agentSession.resumeCount) : 0,
@@ -13779,7 +13779,7 @@ function ensureWorldAgentKernel(agent, world) {
 function getWorldAgentKernelLine(agent, world) {
   const kernel = agent.kernel;
   if (!kernel) return t("world.agentRun.noAgent", "该角色尚未入住世界。");
-  return t("world.agentRun.kernelLine", "CLI={provider} / {terminalId}", {
+  return t("world.agentRun.kernelLine", "CLI={{provider}} / {{terminalId}}", {
     provider: kernel.providerLabel || "codebuddy",
     terminalId: kernel.terminalId || ""
   });
@@ -13826,7 +13826,7 @@ function createWorldTaskConversation(world, task, createdAt) {
     type: "announcement",
     roleId: "system",
     taskId: task.id,
-    content: t("world.task.announcement", "公告栏发布新任务：{goal}", { goal: task.goal }),
+    content: t("world.task.announcement", "公告栏发布新任务：{{goal}}", { goal: task.goal }),
     createdAt
   });
   addWorldChatMessage(world, {
@@ -13880,7 +13880,7 @@ function updateWorldChatModal(taskId = "") {
       const newCount = messages.length - (chatList.dataset.renderedCount || 0);
       const btn = indicator.querySelector(".new-msg-btn");
       if (btn) {
-        btn.textContent = t("world.chat.newMessages", "{count} 条新消息", { count: newCount > 0 ? newCount : 1 });
+        btn.textContent = t("world.chat.newMessages", "{{count}} 条新消息", { count: newCount > 0 ? newCount : 1 });
       }
       indicator.classList.add("visible");
     }
@@ -13916,7 +13916,7 @@ function showWorldChatModal(taskId = "") {
       </div>
       <div class="world-chat-list">${content}</div>
       <div class="world-chat-new-msg">
-        <button class="new-msg-btn" data-action="scroll-to-bottom">${escapeHtml(t("world.chat.newMessages", "{count} 条新消息", { count: 0 }))}</button>
+        <button class="new-msg-btn" data-action="scroll-to-bottom">${escapeHtml(t("world.chat.newMessages", "{{count}} 条新消息", { count: 0 }))}</button>
       </div>
     </div>
   `);
@@ -13954,7 +13954,7 @@ function publishWorldTask(goal) {
       type: "announcement",
       roleId: "system",
       taskId: task.id,
-      content: t("world.task.announcement", "公告栏发布新任务：{goal}", { goal }),
+      content: t("world.task.announcement", "公告栏发布新任务：{{goal}}", { goal }),
       createdAt
     });
     addWorldChatMessage(world, {
@@ -13983,7 +13983,7 @@ function publishWorldTask(goal) {
         type: "system",
         roleId: "system",
         taskId: task.id,
-        content: t("world.task.runFailed", "世界 Agent 运行失败：{error}", { error: error.message }),
+        content: t("world.task.runFailed", "世界 Agent 运行失败：{{error}}", { error: error.message }),
         createdAt: failedAt
       });
       refreshWorldUiAfterStateChange(task.id);
@@ -14257,7 +14257,7 @@ function showWorldAgentActionModal(roleId) {
       <p>${escapeHtml(trRoleDescription(role))}</p>
       <div class="world-agent-kernel-summary">
         <span>${escapeHtml(kernel ? getWorldAgentKernelLine(agent, world) : t("world.agentRun.noAgent", "该角色尚未入住世界。"))}</span>
-        ${latestRun ? `<span>${escapeHtml(t("world.agentRun.latest", "最近运行：{label}", { label: getWorldAgentRunLabel(latestRun) }))}</span>` : ""}
+        ${latestRun ? `<span>${escapeHtml(t("world.agentRun.latest", "最近运行：{{label}}", { label: getWorldAgentRunLabel(latestRun) }))}</span>` : ""}
       </div>
       <div class="world-agent-run-list">${runRows}</div>
       <div class="modal-actions">
