@@ -2700,7 +2700,13 @@ function buildPowerShellInvocation(command, args = []) {
 }
 
 function cmdQuote(value) {
-  return `"${String(value).replace(/(["^&|<>%])/g, "^$1")}"`;
+  const str = String(value);
+  // 处理换行符：cmd.exe 无法在引号内保留换行，替换为空格以保持命令完整性
+  const escaped = str
+    .replace(/\r\n/g, "\n")
+    .replace(/\n/g, " ")
+    .replace(/(["^&|<>%])/g, "^$1");
+  return `"${escaped}"`;
 }
 
 function isWindowsBatchCommand(command) {
@@ -2950,22 +2956,56 @@ function extractWorldAgentFinalMessage(output) {
     .replace(/\n{3,}/g, "\n\n")
     // 删除常见的终端动画字符（spinner、进度条等）
     .replace(/[\u2800-\u28FF\u2580-\u259F\u25A0-\u25FF]+/g, "")
+    // 删除常见的终端进度/状态行
+    .replace(/^[─━═].*$/gm, "")
     .trim();
 
   if (!text) {
     return "";
   }
 
-  // 查找「世界群聊最终消息：」标记，取标记后所有内容
+  // 查找「世界群聊最终消息：」标记
   const idx = text.search(/(?:世界群聊最终消息|FINAL_CHAT_MESSAGE)\s*[:：]/i);
   if (idx >= 0) {
     const after = text.slice(idx).replace(/(?:世界群聊最终消息|FINAL_CHAT_MESSAGE)\s*[:：]\s*/i, "").trim();
-    // 取标记后所有行作为最终消息
-    return after.slice(0, 10000);
+    const before = text.slice(0, idx).trim();
+
+    // 情况A：标记后有内容 → 取标记后的内容
+    if (after.length > 0) {
+      return after.slice(0, 10000);
+    }
+
+    // 情况B：标记后无内容 → Agent 把标记写在了消息末尾作为结束符，取标记前的内容
+    if (before.length > 0) {
+      return before.slice(0, 10000);
+    }
+
+    // 标记前后都为空 → 返回空
+    return "";
   }
 
-  // 没有标记时，取最后一段非空行
+  // 没有标记时，按优先级尝试多种回退策略
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return "";
+
+  // 策略1：查找「总结：」标记（agent 可能只在消息中用了「总结：」但没有用完整前缀）
+  const summaryIdx = lines.findIndex((l) => /^总结\s*[:：]/.test(l));
+  if (summaryIdx >= 0) {
+    const summaryLines = lines.slice(summaryIdx);
+    // 如果总结行之后还有内容，取从总结开始的部分
+    return summaryLines.join("\n").slice(0, 10000);
+  }
+
+  // 策略2：过滤掉常见的技术噪音行，取剩余的靠后内容
+  const noisePattern = /^(?:[│├└┌─│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓⌈⌊⌉⌋]|done|ok|✔|✓|x\s|npm\s|yarn\s|pnpm\s|node\s|cd\s|Warning:|Error:|\[INFO\]|\[WARN\]|\[ERROR\]|❯\s|→\s)/i;
+  const contentLines = lines.filter((l) => !noisePattern.test(l) && l.length > 5);
+  if (contentLines.length >= 3) {
+    // 取有意义内容的最后部分（最多20行）
+    const candidate = contentLines.slice(-20).join("\n");
+    return candidate.slice(0, 10000);
+  }
+
+  // 策略3：取最后一段非空行（原始兜底）
   const candidate = lines.slice(-20).join("\n");
   return candidate.slice(0, 10000);
 }
@@ -3047,7 +3087,8 @@ async function handleWorldAgentRun(_event, request = {}) {
       if (idleTimer) {
         clearTimeout(idleTimer);
       }
-      if (rawOutput.trim()) {
+      // 只要有数据就启动空闲定时器（包括ANSI码），防止进程无定时器而卡住
+      if (rawOutput.length > 0) {
         idleTimer = setTimeout(() => finish(true, "idle"), getWorldAgentIdleMs());
         if (typeof idleTimer.unref === "function") {
           idleTimer.unref();
@@ -3080,6 +3121,7 @@ async function handleWorldAgentRun(_event, request = {}) {
           // The process may already have exited.
         }
       }
+      const cleanedRaw = stripAnsi(rawOutput).trim();
       const output = extractWorldAgentFinalMessage(rawOutput);
       appendLogEvent(ok ? "world-agent.run.finished" : "world-agent.run.failed", {
         worldId,
@@ -3092,6 +3134,7 @@ async function handleWorldAgentRun(_event, request = {}) {
         launchMethod: launch.launchMethod,
         outputLength: output.length,
         rawLength: rawOutput.length,
+        cleanedRawLength: cleanedRaw.length,
         latencyMs: Date.now() - startedAt,
         error: sanitizeLogText(error, 300)
       }, ok ? "info" : "warn");
@@ -3101,30 +3144,21 @@ async function handleWorldAgentRun(_event, request = {}) {
         reason,
         error,
         output,
-        rawOutput: stripAnsi(rawOutput).trim().slice(-12000),
+        // 返回清洗后的 rawOutput：去掉 ANSI 码，保留最近 12000 字符
+        // 如果清洗后为空但原始数据非空，说明全是 ANSI 码，保留原始数据的最后部分以便调试
+        rawOutput: cleanedRaw.slice(-12000) || (rawOutput.trim() ? `[终端输出均为ANSI码，原始长度:${rawOutput.length}] ${rawOutput.slice(-500)}` : ""),
         command: launch.command || launch.file,
         launchMethod: launch.launchMethod,
         latencyMs: Date.now() - startedAt
       });
     };
 
-    hardTimer = setTimeout(() => {
-      if (child?.pid) {
-        try {
-          child.kill();
-          killProcessTree(child.pid);
-        } catch {
-          // Best effort timeout cleanup.
-        }
-      }
-      finish(Boolean(rawOutput.trim()), "timeout", rawOutput.trim() ? "" : "CodeBuddy CLI timed out before producing output.");
-    }, getWorldAgentTimeoutMs());
-    if (typeof hardTimer.unref === "function") {
-      hardTimer.unref();
-    }
+    // 硬超时已关闭，只依赖空闲超时（appendOutput 中设置）。
 
     try {
-      if (nodePty && process.env.COSS_WORLD_AGENT_PIPE !== "1") {
+      // Windows 上 child_process.spawn 更可靠（明确捕获 stdout/stderr），
+      // node-pty 在 Windows 上捕获批处理文件输出可能不完整
+      if (nodePty && process.env.COSS_WORLD_AGENT_PIPE !== "1" && process.platform !== "win32") {
         child = nodePty.spawn(launch.file, launch.args, {
           cwd,
           env,

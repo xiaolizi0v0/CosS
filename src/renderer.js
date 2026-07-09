@@ -13286,41 +13286,29 @@ function buildWorldAgentPrompt(world, task, agent, phase, round) {
   }).join("\n") : "暂无其他角色";
   
   const phaseInstruction = phase === "module-claim"
-    ? "根据公告栏任务，思考并生成一条群聊消息，认领你要负责的模块。消息中可以 @其他角色 并说明需要他们做什么。"
-    : "根据当前群聊上下文，思考并生成一条群聊消息，汇报你的想法、进度、或需要其他角色配合的内容。";
+    ? "请认领你要负责的模块，并 @其他角色 说明需要他们做什么。"
+    : "请回复当前群聊，汇报进度或需要其他角色配合的内容。";
   
-  const transcript = getWorldChatTranscript(world, task.id) || "暂无聊天记录。";
+  const transcript = getWorldChatTranscript(world, task.id, true) || "暂无聊天记录。";
   
   return [
-    `你是 CosS 2D 世界中的 NPC Agent：${trRoleName(role)}。`,
-    `角色 ID：${role.id}`,
-    `你的 Agent ID：${agent.id}`,
-    `角色职责：${trRoleDescription(role)}`,
+    `你是 CosS 2D 世界中的 NPC Agent：${trRoleName(role)}（${role.id}）。`,
+    `公告栏任务：${task.goal}`,
     "",
-    "世界中的其他角色（你可以用 @角色ID 提及其他角色）：",
+    "其他角色：",
     otherAgentsInfo,
     "",
-    `世界：${world.name}`,
-    `世界工作目录：${world.path || "未指定"}`,
-    `任务 ID：${task.id}`,
-    `公告栏任务：${task.goal}`,
-    `当前阶段：${getWorldAgentRunLabel({ phase, round })}`,
-    "",
-    "重要规则：",
-    "1. 你只负责思考并输出群聊消息，不要自己执行任务（不要创建/修改文件、不要运行命令）。",
-    "2. 世界系统会解析你消息中的 @ 提及，并自动调用 codebuddy -p 让对应角色执行任务。",
-    `3. 【关键】当你需要自己执行任务时，在消息中写：@${role.id}, 我要执行[具体任务描述]。世界系统看到 @${role.id} 就知道是指你自己。`,
-    "4. 当你需要其他角色执行任务时，在消息中写：@角色ID, 请执行[具体任务描述]。",
-    "5. @自己 的各种写法都会被识别：@自己、@self、@我自己 都表示你自己。",
-    "6. 消息要短、具体、可被其他角色继续接力。",
-    "7. 不要输出 COSS_AGENT_STATUS、COSS_AGENT_EVENT、JSON 工具事件。",
+    "规则：",
+    "- 只输出群聊消息，不要执行命令或改文件。",
+    "- 用纯文本回复，不要用 Markdown（**加粗**、`代码块`、```等）、JSON 或任何标记语言。",
+    "- 用自然语言，保持简洁。",
+    `- @${role.id} 指你自己；@其他角色ID 指对方。若要自己执行写：@${role.id}, 我要执行[任务]。`,
+    "- 以「世界群聊最终消息：」开头输出你的群聊消息（仅一行）。",
     "",
     "当前群聊上下文：",
     transcript,
     "",
     phaseInstruction,
-    "",
-    "最后只输出一条群聊消息（可以包含多个 @ 提及），并使用这个前缀：世界群聊最终消息："
   ].join("\n");
 }
 
@@ -13407,42 +13395,30 @@ function findAgentIdByRoleId(world, roleId) {
 // ===== 第 4 段：buildWorldAgentExecutionPrompt（执行提示词）=====
 function buildWorldAgentExecutionPrompt(world, task, agent, queueItem) {
   const role = getRole(agent.roleId);
-  const transcript = getWorldChatTranscript(world, task.id) || "暂无聊天记录。";
-  const otherAgents = (world.agents || []).filter((a) => a.roleId !== agent.roleId);
-  const otherAgentsInfo = otherAgents.length ? otherAgents.map((a) => {
-    const r = getRole(a.roleId);
-    return `@${r.id}（${trRoleName(r)}）`;
-  }).join("、") : "无其他角色";
+  const transcript = getWorldChatTranscript(world, task.id, true) || "暂无聊天记录。";
+  const otherAgentNames = (world.agents || [])
+    .filter((a) => a.roleId !== agent.roleId)
+    .map((a) => { const r = getRole(a.roleId); return `@${r.id}（${trRoleName(r)}）`; })
+    .join("、");
 
   return [
     `你是 CosS 2D 世界中的 NPC Agent：${trRoleName(role)}。`,
-    `角色 ID：${role.id}`,
-    `角色职责：${trRoleDescription(role)}`,
+    `角色 ID：${role.id}，职责：${trRoleDescription(role)}`,
     "",
-    "重要：你被选中执行具体任务！",
+    `任务内容（来自 @${queueItem.fromRoleId}）：`,
+    queueItem.content,
     "",
-    `任务内容：${queueItem.content}`,
-    `任务来源：@${queueItem.fromRoleId}`,
+    `世界其他角色：${otherAgentNames || "暂无"}`,
     "",
-    "世界中的其他角色：",
-    otherAgentsInfo,
-    "",
-    "执行要求：",
-    "1. 执行完成后，必须输出一条【总结消息】，格式如下：",
-    "   总结：[你完成了什么具体工作]。@角色ID, [给该角色的具体信息/请求]。@角色ID, [信息]。",
-    "2. 总结中必须 @ 下一个需要接续处理的角色。如果不需要其他人继续，写：总结：[完成情况]，无需 @ 任何人。",
-    "3. 如果没有后续工作，在总结中说明「任务已完成，无需继续处理」。",
-    "",
-    "总结消息格式示例：",
-    "  总结：已完成登录页面 UI 实现（含表单验证）。@backend-engineer, 请提供登录 API 接口（/api/login POST）。@qa-engineer, 请准备登录功能测试用例。",
-    "  总结：后端 API 已完成。@qa-engineer, 请开始测试登录接口。",
-    "  总结：所有测试通过，任务已完成。",
-    "",
-    "聊天格式：总结：[内容]。@角色ID, [信息]。",
-    "最后只输出一条群聊消息，并使用这个前缀：世界群聊最终消息：",
+    "要求：执行上述任务。完成后用 @角色ID 接续下一位处理者（若无则说明已完成）。",
+    "注意：只用纯文本，不要 Markdown 或代码块。",
     "",
     "当前群聊上下文：",
-    transcript
+    transcript,
+    "",
+    "---",
+    "世界群聊最终消息：总结：[完成内容]。@角色ID, [下一位需处理的事项]。",
+    "---",
   ].join("\n");
 }
 
@@ -13464,7 +13440,7 @@ async function processWorldAgentOutput(worldId, taskId, agentId, output) {
         type: "system",
         roleId: "system",
         taskId,
-        content: `错误：角色 ${mention.targetRoleId} 不存在，无法转发消息。`,
+        content: `[系统] 角色 @${mention.targetRoleId} 当前世界不存在，消息无法转发。请在「角色创建点」创建该角色。`,
         createdAt: new Date().toISOString()
       });
       continue;
@@ -13546,6 +13522,7 @@ async function executeWorldAgentTask(worldId, taskId, queueItem) {
   const existingRun = (targetAgent.kernel?.runs || []).find((r) => r.id === runId);
   if (existingRun) {
     existingRun.output = String(result?.output || result?.error || "").trim();
+    existingRun.rawOutput = String(result?.rawOutput || "").trim();
     existingRun.completedAt = completedAt;
     existingRun.status = result?.ok ? "done" : "failed";
     existingRun.error = result?.error || "";
@@ -13559,6 +13536,18 @@ async function executeWorldAgentTask(worldId, taskId, queueItem) {
       content: result.output,
       createdAt: completedAt,
       displayName: trRoleName(role),
+      round: "execution",
+      runId
+    });
+  } else {
+    const briefErr = result?.error || "CodeBuddy CLI 没有返回可展示输出。";
+    const errorMsg = trRoleName(role) + " 执行出错：" + briefErr;
+    addWorldChatMessage(world, {
+      type: "system",
+      roleId: "system",
+      taskId,
+      content: errorMsg,
+      createdAt: completedAt,
       round: "execution",
       runId
     });
@@ -13749,6 +13738,7 @@ async function runWorldAgentTurn(worldId, taskId, agentId, phase, round) {
   const existingRun = (agent.kernel?.runs || []).find((r) => r.id === runId);
   if (existingRun) {
     existingRun.output = output;
+    existingRun.rawOutput = String(result?.rawOutput || "").trim();
     existingRun.completedAt = completedAt;
     existingRun.status = result?.ok ? "done" : "failed";
     existingRun.error = result?.error || "";
@@ -13768,11 +13758,14 @@ async function runWorldAgentTurn(worldId, taskId, agentId, phase, round) {
     });
     agent.status = phase === "module-claim" ? "planning" : "running";
   } else {
+    const briefErr = result?.error || "CodeBuddy CLI 没有返回可展示输出。";
+    const errorMsg = trRoleName(role) + " 执行出错：" + briefErr;
     addWorldChatMessage(world, {
       type: "system",
       roleId: "system",
       taskId,
-      content: trRoleName(role) + " 的 CodeBuddy CLI 本轮没有可展示输出。",
+      content: errorMsg,
+      content: errorMsg,
       createdAt: new Date().toISOString(),
       round: phase,
       runId
@@ -13851,8 +13844,12 @@ function addWorldChatMessage(world, message) {
   });
 }
 
-function getWorldChatTranscript(world, taskId = "") {
-  const messages = (world?.chatMessages || []).filter((m) => !taskId || m.taskId === taskId);
+function getWorldChatTranscript(world, taskId = "", excludeSystem = false) {
+  const messages = (world?.chatMessages || []).filter((m) => {
+    if (taskId && m.taskId !== taskId) return false;
+    if (excludeSystem && m.roleId === "system") return false;
+    return true;
+  });
   return messages.map((m) => {
     const role = getRole(m.roleId);
     return `${trRoleName(role)}（${formatDateTime(m.createdAt) || ""}）：${m.content || ""}`;
@@ -14282,6 +14279,7 @@ function showWorldAgentActionModal(roleId) {
       <pre>${escapeHtml(run.input || t("world.agentRun.emptyInput", "暂无输入。"))}</pre>
       <label>${escapeHtml(t("world.agentRun.output", "最终聊天输出"))}</label>
       <pre>${escapeHtml(run.output || run.error || t("world.agentRun.emptyOutput", "暂无最终输出。"))}</pre>
+      ${run.rawOutput ? `<label>${escapeHtml(t("world.agentRun.rawOutput", "终端原始输出"))}</label><pre class="raw-output">${escapeHtml(run.rawOutput)}</pre>` : ""}
     </div>
   `).join("") : `
     <div class="message-empty">
