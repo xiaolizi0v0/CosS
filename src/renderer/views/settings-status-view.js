@@ -17,7 +17,10 @@
     normalizeModelProvider,
     getModelConnectivityStatuses,
     modelProviderPresets,
-    getModelEditorProvider
+    getModelEditorProvider,
+    getActiveModelConfig,
+    getModelEndpointDisplay,
+    getModelCredentialDisplay
   } = {}) {
     const t = translate || ((_key, fallback) => fallback || "");
 
@@ -113,7 +116,19 @@
       return `<div class="model-connectivity-status missing" data-model-connectivity-status="${escapeHtml(id)}"><strong>${escapeHtml(t("model.connectivity.failed", "连通性失败"))}</strong><span>${escapeHtml(status.error || t("model.connectivity.unavailable", "模型接口不可用。"))}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span></div>`;
     }
 
-    return { renderAgentAuthLines, renderClaudeStatus, renderCodexStatus, renderCodeBuddyStatus, renderAgentLoginTestStatus, renderLogRows, renderAgentProviderOption, renderAgentPermissionOption, renderModelProviderOption, renderModelConnectivityStatus };
+    function renderModelSettingsSection() {
+      const state = getState?.() || {};
+      const activeModel = getActiveModelConfig();
+      const editingModel = getModelConfig(getModelEditorProvider?.());
+      const canActivateEditingModel = canUseModelProvider(editingModel.id);
+      const modelConfigMissingReason = !String(editingModel.baseUrl || "").trim() || !String(editingModel.modelName || "").trim() ? t("model.config.needBaseUrl", "该模型需要先填写 Base URL 和模型名称，才允许切换为当前模型。") : t("model.config.needApiKey", "该模型需要先填写 API key，才允许切换为当前模型。");
+      const modelFieldReadonly = editingModel.locked ? "readonly" : "";
+      const apiKeyPlaceholder = editingModel.apiKeyRequired ? t("model.apiKey.placeholder.required", "填写后才可以切换到该模型") : t("model.apiKey.placeholder.optional", "可选，按模型服务要求填写");
+      const apiKeyField = editingModel.locked ? `<div class="field"><label>API Key</label><input value="${escapeHtml(t("model.apiKey.noKey", "该模型无需 API key"))}" readonly /></div>` : `<div class="field"><label for="modelApiKey">API Key</label><input id="modelApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(apiKeyPlaceholder)}" value="${escapeHtml(editingModel.apiKey)}" data-model-provider="${editingModel.id}" data-model-field="apiKey" /></div>`;
+      return `<div class="settings-section-title"><strong>${escapeHtml(t("model.config.title", "模型配置"))}</strong><span>${escapeHtml(t("model.config.desc", "可填写用户自定义模型服务，也可以切换到下方预设模型。"))}</span></div><div class="settings-row"><div><strong>${escapeHtml(t("model.current.title", "当前模型"))}</strong><span>${escapeHtml(activeModel.label)} · ${escapeHtml(getModelEndpointDisplay(activeModel))} · ${escapeHtml(getModelDisplayName(activeModel))} · ${escapeHtml(getModelCredentialDisplay(activeModel))}</span></div><span class="settings-value">${escapeHtml(getModelDisplayName(activeModel))}</span></div><div class="model-provider-grid">${Object.keys(modelProviderPresets || {}).map(renderModelProviderOption).join("")}</div><div class="model-config-panel"><div class="model-config-heading"><div><strong>${escapeHtml(editingModel.label)}</strong><span>${escapeHtml(editingModel.description)}</span></div><div class="model-config-actions"><button class="secondary-button" data-action="test-model-connectivity" data-provider="${editingModel.id}">${escapeHtml(t("model.action.test", "测试连通性"))}</button><button class="primary-button" data-action="set-model-provider" data-provider="${editingModel.id}">${escapeHtml(state.settings?.modelProvider === editingModel.id ? t("model.current.title", "当前模型") : t("model.action.set", "设为当前模型"))}</button></div></div><div class="model-config-grid"><div class="field"><label for="modelBaseUrl">Base URL</label><input id="modelBaseUrl" value="${escapeHtml(getModelEndpointDisplay(editingModel))}" ${modelFieldReadonly} data-model-provider="${editingModel.id}" data-model-field="baseUrl" /></div><div class="field"><label for="modelName">${escapeHtml(t("model.field.modelName", "模型名称"))}</label><input id="modelName" value="${escapeHtml(getModelDisplayName(editingModel))}" ${modelFieldReadonly} data-model-provider="${editingModel.id}" data-model-field="modelName" /></div>${apiKeyField}</div><div class="model-config-note ${canActivateEditingModel ? "ready" : "missing"}">${canActivateEditingModel ? escapeHtml(t("model.config.canActivate", "该模型配置可以切换使用。")) : escapeHtml(modelConfigMissingReason)}</div>${renderModelConnectivityStatus(editingModel.id)}</div>`;
+    }
+
+    return { renderAgentAuthLines, renderClaudeStatus, renderCodexStatus, renderCodeBuddyStatus, renderAgentLoginTestStatus, renderLogRows, renderAgentProviderOption, renderAgentPermissionOption, renderModelProviderOption, renderModelConnectivityStatus, renderModelSettingsSection };
   }
   global.COSS_SETTINGS_STATUS_VIEW = Object.freeze({ createSettingsStatusRenderer });
 })(window);
