@@ -1041,6 +1041,52 @@ body.sidebar-resizing {
   background: #c42b1c;
 }
 
+.world-chat-filter-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.world-chat-filter-select {
+  padding: 4px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #24292f;
+  font-size: 12px;
+  max-width: 160px;
+  cursor: pointer;
+}
+
+.world-chat-filter-btn {
+  padding: 4px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #57606a;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.world-chat-filter-btn.active {
+  background: #07c160;
+  color: #fff;
+  border-color: #07c160;
+}
+
+.world-chat-filter-btn:hover:not(.active) {
+  background: #f3f4f6;
+}
+
+.world-chat-filter-extras {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .world-chat-list {
   display: grid;
   gap: 12px;

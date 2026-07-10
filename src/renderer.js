@@ -12751,6 +12751,34 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  // 群聊筛选 action
+  if (action === "filter-task" || action === "filter-role") {
+    const modal = document.querySelector(".world-chat-modal");
+    if (!modal) return;
+    const key = action === "filter-task" ? "filterTask" : "filterRole";
+    modal.dataset[key] = target.value;
+    updateWorldChatModal(modal.dataset.worldChatTaskId || "");
+    return;
+  }
+
+  if (action === "filter-mode") {
+    const modal = document.querySelector(".world-chat-modal");
+    if (!modal) return;
+    const mode = target.dataset.mode;
+    modal.dataset.filterMode = mode;
+    // 更新按钮 active 状态
+    modal.querySelectorAll(".world-chat-filter-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+    // 历史记录才显示筛选下拉
+    const filterExtras = modal.querySelector(".world-chat-filter-extras");
+    if (filterExtras) {
+      filterExtras.style.display = mode === "history" ? "" : "none";
+    }
+    updateWorldChatModal(modal.dataset.worldChatTaskId || "");
+    return;
+  }
+
   if (action === "show-world-task-publisher") {
     showWorldTaskPublisherModal();
     return;
@@ -13073,6 +13101,22 @@ document.addEventListener("keyup", (event) => {
   const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
   if (fileEditor) {
     syncFileEditorChrome(fileEditor.dataset.fileEditor);
+  }
+});
+
+// select 元素用 change 事件触发 data-action
+document.addEventListener("change", (event) => {
+  const target = event.target instanceof Element ? event.target.closest("select[data-action]") : null;
+  if (!target) return;
+  const action = target.dataset.action;
+
+  // 处理筛选下拉
+  if (action === "filter-task" || action === "filter-role") {
+    const modal = document.querySelector(".world-chat-modal");
+    if (!modal) return;
+    const key = action === "filter-task" ? "filterTask" : "filterRole";
+    modal.dataset[key] = target.value;
+    updateWorldChatModal(modal.dataset.worldChatTaskId || "");
   }
 });
 
@@ -13890,8 +13934,24 @@ function updateWorldChatModal(taskId = "") {
     showWorldChatModal(taskId);
     return;
   }
-  const messages = (world.chatMessages || []).filter((message) => !taskId || message.taskId === taskId);
-  const content = messages.length ? messages.map((message) => {
+  const modal = document.querySelector(".world-chat-modal");
+  const filterTask = modal?.dataset?.filterTask || "";
+  const filterRole = modal?.dataset?.filterRole || "";
+  const filterMode = modal?.dataset?.filterMode || "recent";
+
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const filtered = (world.chatMessages || []).filter((message) => {
+    if (taskId && message.taskId !== taskId) return false;
+    if (filterTask && message.taskId !== filterTask) return false;
+    if (filterRole && message.roleId !== filterRole) return false;
+    if (filterMode === "recent") {
+      const msgTime = new Date(message.createdAt).getTime();
+      if (msgTime < threeDaysAgo) return false;
+    }
+    return true;
+  });
+
+  const content = filtered.length ? filtered.map((message) => {
     const role = getRole(message.roleId);
     const isSystem = message.roleId === "system";
     return `
@@ -13912,7 +13972,7 @@ function updateWorldChatModal(taskId = "") {
     if (isAtBottom) {
       indicator.classList.remove("visible");
     } else {
-      const newCount = messages.length - (chatList.dataset.renderedCount || 0);
+      const newCount = filtered.length - (chatList.dataset.renderedCount || 0);
       const btn = indicator.querySelector(".new-msg-btn");
       if (btn) {
         btn.textContent = t("world.chat.newMessages", "{{count}} 条新消息", { count: newCount > 0 ? newCount : 1 });
@@ -13920,14 +13980,26 @@ function updateWorldChatModal(taskId = "") {
       indicator.classList.add("visible");
     }
   }
-  chatList.dataset.renderedCount = messages.length;
+  chatList.dataset.renderedCount = filtered.length;
 }
 
 function showWorldChatModal(taskId = "") {
   const world = getWorld();
   if (!world) return;
-  const messages = (world.chatMessages || []).filter((message) => !taskId || message.taskId === taskId);
-  const content = messages.length ? messages.map((message) => {
+
+  // 提取所有 task 和 role 用于筛选下拉
+  const tasks = (world.tasks || []).slice(0, 20);
+  const agents = (world.agents || []);
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+
+  const messages = (world.chatMessages || []).filter((message) => {
+    if (taskId && message.taskId !== taskId) return false;
+    const msgTime = new Date(message.createdAt).getTime();
+    if (msgTime < threeDaysAgo) return false;
+    return true;
+  });
+
+  const renderMessage = (message) => {
     const role = getRole(message.roleId);
     const isSystem = message.roleId === "system";
     return `
@@ -13939,15 +14011,35 @@ function showWorldChatModal(taskId = "") {
         </div>
       </div>
     `;
-  }).join("") : `<div class="message-empty"><strong>${escapeHtml(t("world.chat.empty.title", "暂无聊天记录"))}</strong><p>${escapeHtml(t("world.chat.empty.desc", "点击公告栏发布任务后，角色会在这里进行一轮交流。"))}</p></div>`;
+  };
+
+  const content = messages.length ? messages.map(renderMessage).join("") : `<div class="message-empty"><strong>${escapeHtml(t("world.chat.empty.title", "暂无聊天记录"))}</strong><p>${escapeHtml(t("world.chat.empty.desc", "点击公告栏发布任务后，角色会在这里进行一轮交流。"))}</p></div>`;
+
+  const taskOptions = `<option value="">${escapeHtml(t("world.chat.filterAllTasks", "全部任务"))}</option>` +
+    tasks.map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.goal?.slice(0, 30))}</option>`).join("");
+  const roleOptions = `<option value="">${escapeHtml(t("world.chat.filterAllRoles", "全部角色"))}</option>` +
+    agents.map((a) => `<option value="${escapeHtml(a.roleId)}">${escapeHtml(trRoleName(getRole(a.roleId)))}</option>`).join("");
+
   renderModal(`
-    <div class="modal world-chat-modal" data-world-chat-task-id="${escapeHtml(taskId || "")}">
+    <div class="modal world-chat-modal" data-world-chat-task-id="${escapeHtml(taskId || "")}" data-filter-task="" data-filter-role="" data-filter-mode="recent">
       <div class="world-chat-titlebar">
         <div class="world-chat-titlebar-title">
           <h2>${escapeHtml(t("world.chat.title", "世界群聊"))}</h2>
           <p>${escapeHtml(t("world.chat.desc", "这里以微信群聊样式展示角色 Agent 交流记录。"))}</p>
         </div>
         <button class="world-chat-close-button" type="button" data-action="close-modal" aria-label="${escapeHtml(t("common.close", "关闭"))}">×</button>
+      </div>
+      <div class="world-chat-filter-bar">
+        <button class="world-chat-filter-btn active" data-action="filter-mode" data-mode="recent">${escapeHtml(t("world.chat.filterRecent", "近3天"))}</button>
+        <button class="world-chat-filter-btn" data-action="filter-mode" data-mode="history">${escapeHtml(t("world.chat.filterHistory", "历史记录"))}</button>
+        <div class="world-chat-filter-extras" style="display:none">
+          <select class="world-chat-filter-select" data-action="filter-task">
+            ${taskOptions}
+          </select>
+          <select class="world-chat-filter-select" data-action="filter-role">
+            ${roleOptions}
+          </select>
+        </div>
       </div>
       <div class="world-chat-list">${content}</div>
       <div class="world-chat-new-msg">
