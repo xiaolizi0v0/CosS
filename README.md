@@ -159,7 +159,16 @@ CosS/
 │   ├── renderer.js              # 渲染进程编排与交互入口
 │   ├── renderer/
 │   │   ├── config.js            # 角色、模型、权限和风险规则
-│   │   └── world.js             # 2D 世界 Agent 协作功能
+│   │   ├── world.js             # 2D 世界 Agent 协作功能
+│   │   ├── store/               # 默认状态、Store、归一化和持久化
+│   │   ├── task/                # 任务、Planner、Kernel 服务
+│   │   ├── agent/               # Agent、终端、投递和输出服务
+│   │   ├── windowing/           # 窗口和桌面管理
+│   │   └── views/               # 视图契约和工作区内容渲染
+│   ├── shared/                  # IPC 与状态契约
+│   ├── main/
+│   │   ├── services/            # 主进程系统服务
+│   │   └── ipc/                 # IPC 注册适配器
 │   ├── coss-mcp-server.cjs      # MCP 服务器
 │   ├── orchestrator/
 │   │   └── kernel.cjs           # Kernel 内核
@@ -180,11 +189,14 @@ CosS/
 
 ### 渲染层拆分约定
 
-渲染进程按职责逐步拆分为三类模块：
+渲染进程正在按职责拆分，当前分为以下边界：
 
 1. **配置模块**（`renderer/config.js`）只保存角色、模型、权限、风险和界面元数据，不直接读写应用状态。
 2. **领域模块**（`renderer/world.js`）负责 2D 世界的任务、聊天和 Agent 运行流程，通过现有渲染层服务完成持久化和刷新。
-3. **应用编排入口**（`renderer.js`）负责状态生命周期、窗口交互、IPC 调用和模块协调；后续任务、终端、浏览器等领域功能按同样边界继续迁移。
+3. **Store 与持久化**（`renderer/store/`）负责状态默认值、兼容归一化、保存队列和外部刷新。
+4. **任务与 Agent 服务**（`renderer/task/`、`renderer/agent/`）负责 Kernel 投影、规划、投递构造、终端适配和输出追踪。
+5. **视图与窗口**（`renderer/views/`、`renderer/windowing/`）负责工作区内容渲染和窗口/桌面边界。
+6. **应用编排入口**（`renderer.js`）暂时保留跨领域事件编排、消息中心、设置页和部分自动工作流；这些代码仍按 [重构计划](文档/refactor-plan.md) 继续迁移。
 
 模块通过 `index.html` 的显式加载顺序连接，保持当前 Electron 无打包器的运行方式和持久化格式不变。
 

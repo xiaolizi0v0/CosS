@@ -3,6 +3,12 @@ const { randomUUID } = require("crypto");
 const path = require("path");
 const fs = require("fs");
 const childProcess = require("child_process");
+const { IPC_CHANNELS, IPC_EVENTS } = require("./shared/ipc-contracts.cjs");
+const { STATE_SCHEMA_VERSION } = require("./shared/state-contracts.cjs");
+const { ARCHITECTURE_VERSION } = require("./shared/architecture.cjs");
+const { createStorageService } = require("./main/services/storage-service.cjs");
+const { createLlmService } = require("./main/services/llm-service.cjs");
+const { registerIpcHandlers } = require("./main/ipc/register-ipc.cjs");
 
 let nodePty = null;
 let initSqlJs = null;
@@ -110,6 +116,19 @@ const terminalPermissionRiskRules = [
   }
 ];
 const defaultLlmRequestTimeoutMs = 60000;
+const llmService = createLlmService({
+  sanitizeLogText,
+  getTimeout: () => getLlmRequestTimeoutMs(),
+  appendLogEvent,
+  summarizePlanRequest,
+  summarizeModelConfig,
+  serializeError
+});
+const {
+  findBalancedJsonObject,
+  handlePlanTask,
+  handleTestModelConnectivity
+} = llmService;
 const maxEditableFileBytes = 1024 * 1024 * 2;
 const fileListLimit = 240;
 let windowsEnvCache = null;
@@ -122,33 +141,39 @@ if (process.env.COSS_TEST_USER_DATA) {
   app.setPath("userData", process.env.COSS_TEST_USER_DATA);
 }
 
+const storageService = createStorageService({
+  app,
+  processEnv: process.env,
+  dataFileName,
+  sqliteFileName
+});
+
 function getDataFilePath() {
-  return path.join(app.getPath("userData"), dataFileName);
+  return storageService.getDataFilePath();
 }
 
 function getSqliteFilePath() {
-  return path.join(app.getPath("userData"), sqliteFileName);
+  return storageService.getSqliteFilePath();
 }
 
 function getStorageDirectory() {
-  return app.getPath("userData");
+  return storageService.getStorageDirectory();
 }
 
 function getStateBackupDirectory() {
-  return path.join(getStorageDirectory(), "backups");
+  return storageService.getBackupDirectory();
 }
 
 function getDiagnosticsDirectory() {
-  return path.join(getStorageDirectory(), "diagnostics");
+  return storageService.getDiagnosticsDirectory();
 }
 
 function getLogDirectory() {
-  return process.env.COSS_LOG_DIR || path.join(app.getPath("userData"), "logs");
+  return storageService.getLogDirectory();
 }
 
 function getLogFilePath(date = new Date()) {
-  const day = date.toISOString().slice(0, 10);
-  return path.join(getLogDirectory(), `coss-${day}.jsonl`);
+  return storageService.getLogFilePath(date);
 }
 
 function appendLogEvent(eventName, payload = {}, level = "info") {
@@ -258,7 +283,7 @@ function sendMenuAction(action, payload = {}) {
   }
 
   appendLogEvent("menu.action", { action });
-  win.webContents.send("app-menu:action", { action, payload });
+  win.webContents.send(IPC_EVENTS.APP_MENU_ACTION, { action, payload });
 }
 
 function getClaudeConfigPath() {
@@ -440,550 +465,6 @@ async function writeState(state) {
     };
   } finally {
     closeSqliteDatabase(db);
-  }
-}
-
-function sanitizeLlmText(value, maxLength = 220) {
-  return sanitizeLogText(value, maxLength);
-}
-
-function safeResolvePath(rawPath) {
-  const value = String(rawPath || "").trim();
-  if (!value) {
-    return "";
-  }
-  try {
-    return path.resolve(value);
-  } catch (error) {
-    return "";
-  }
-}
-
-function extractJsonObjectLegacy(text) {
-  const source = String(text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
-  const start = source.indexOf("{");
-  const end = source.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error("模型未返回可解析的 JSON 对象。");
-  }
-
-  return JSON.parse(source.slice(start, end + 1));
-}
-
-function stripJsonCodeFence(text) {
-  return String(text || "")
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-}
-
-function findBalancedJsonObject(source) {
-  const start = source.indexOf("{");
-  if (start === -1) {
-    return "";
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaping = false;
-
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    if (inString) {
-      if (escaping) {
-        escaping = false;
-      } else if (char === "\\") {
-        escaping = true;
-      } else if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-      continue;
-    }
-
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return source.slice(start, index + 1);
-      }
-    }
-  }
-
-  return "";
-}
-
-function extractJsonObject(text) {
-  const source = stripJsonCodeFence(text);
-  if (!source) {
-    throw new Error("模型未返回可解析的 JSON 对象。");
-  }
-
-  try {
-    return JSON.parse(source);
-  } catch {
-    // Many LLMs append notes after JSON; recover by reading the first complete object.
-  }
-
-  const candidate = findBalancedJsonObject(source);
-  if (!candidate) {
-    throw new Error(`模型未返回完整 JSON 对象。响应片段：${sanitizeLogText(source, 240)}`);
-  }
-
-  try {
-    return JSON.parse(candidate);
-  } catch (error) {
-    throw new Error(`模型 JSON 解析失败：${error.message}。响应片段：${sanitizeLogText(source, 240)}`);
-  }
-}
-
-function normalizePlannerResult(payload, roles = []) {
-  const allowedRoles = new Set(roles.map((role) => role.id));
-  const fallbackRole = roles[0]?.id || "product-manager";
-  const placeholderTexts = new Set(["一句话总结", "子任务标题", "子任务描述", "角色ID", "协作消息"]);
-  const isPlaceholder = (value) => placeholderTexts.has(String(value || "").trim());
-  const readRoleList = (...keys) => {
-    for (const key of keys) {
-      if (Array.isArray(payload?.[key])) {
-        const values = Array.from(new Set(payload[key].filter((roleId) => allowedRoles.has(roleId))));
-        if (values.length > 0) {
-          return values;
-        }
-      }
-    }
-    return [];
-  };
-  const rawSubtasks = (Array.isArray(payload?.subtasks) ? payload.subtasks : [])
-    .map((item, index) => {
-      const rawId = sanitizeLlmText(item?.id || item?.stepId || `step-${index + 1}`, 60)
-        .replace(/[^\w.-]/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "") || `step-${index + 1}`;
-      return {
-        id: rawId,
-        roleId: allowedRoles.has(item?.roleId) ? item.roleId : fallbackRole,
-        title: sanitizeLlmText(item?.title, 80),
-        description: sanitizeLlmText(item?.description, 500),
-        dependsOn: Array.isArray(item?.dependsOn)
-          ? item.dependsOn.map((value) => sanitizeLlmText(value, 60)).filter(Boolean)
-          : Array.isArray(item?.dependencies)
-            ? item.dependencies.map((value) => sanitizeLlmText(value, 60)).filter(Boolean)
-            : [],
-        riskLevel: ["low", "medium", "high"].includes(item?.riskLevel) ? item.riskLevel : "low"
-      };
-    })
-    .filter((item) => item.title && item.description && !isPlaceholder(item.title) && !isPlaceholder(item.description))
-    .slice(0, 12);
-  const neededAgentRoleIds = Array.from(new Set([
-    ...readRoleList("neededAgentRoleIds", "agentRoleIds", "terminalRoleIds", "involvedRoleIds"),
-    ...rawSubtasks.map((item) => item.roleId)
-  ])).slice(0, 9);
-  const subtasks = rawSubtasks.map((item, index) => {
-    return {
-      ...item,
-      id: `step-${index + 1}`,
-      dependsOn: index === 0 ? [] : [`step-${index}`],
-      isEntryStep: index === 0,
-      order: index + 1
-    };
-  });
-  const effectiveFirstRoundRoleIds = subtasks[0]?.roleId ? [subtasks[0].roleId] : [];
-  const effectiveNeededAgentRoleIds = Array.from(new Set([
-    ...neededAgentRoleIds,
-    ...subtasks.map((item) => item.roleId)
-  ])).slice(0, 9);
-
-  if (effectiveFirstRoundRoleIds.length < 1 || subtasks.length < 1) {
-    throw new Error(`模型未返回有效的任务步骤。有效首轮协作者数：${effectiveFirstRoundRoleIds.length}，有效步骤数：${subtasks.length}。`);
-  }
-
-  return {
-    summary: isPlaceholder(payload?.summary) ? "" : sanitizeLlmText(payload?.summary, 240),
-    neededAgentRoleIds: effectiveNeededAgentRoleIds,
-    firstRoundRoleIds: effectiveFirstRoundRoleIds,
-    subtasks,
-    messages: []
-  };
-}
-
-function buildChatCompletionsUrl(baseUrl) {
-  const normalized = String(baseUrl || "").trim().replace(/\/+$/, "");
-  if (!normalized) {
-    throw new Error("模型 Base URL 为空。");
-  }
-  return normalized.endsWith("/chat/completions") ? normalized : `${normalized}/chat/completions`;
-}
-
-function buildLlmHeaders(model = {}) {
-  const headers = {
-    "Content-Type": "application/json"
-  };
-  if (model.apiKey) {
-    headers.Authorization = `Bearer ${model.apiKey}`;
-  }
-  return headers;
-}
-
-const PLANNER_IMAGE_LIMIT = 5;
-const PLANNER_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
-const PLANNER_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-
-function sanitizePromptText(value, limit = 1200) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, limit);
-}
-
-function normalizePlannerAttachments(attachments = []) {
-  const list = Array.isArray(attachments) ? attachments : [];
-  const images = list
-    .filter((item) => item?.type === "image")
-    .slice(0, PLANNER_IMAGE_LIMIT)
-    .map((item, index) => {
-      const mimeType = String(item.mimeType || "").trim().toLowerCase();
-      const data = String(item.data || "").trim().replace(/^data:[^,]+,/, "");
-      const size = Number(item.size) || Math.ceil((data.length * 3) / 4);
-      if (!PLANNER_IMAGE_MIME_TYPES.has(mimeType)) {
-        throw new Error(`不支持的任务图片类型：${mimeType || "unknown"}。仅支持 PNG、JPEG、WebP。`);
-      }
-      if (!data) {
-        throw new Error("任务图片内容为空，请重新选择图片。");
-      }
-      if (size > PLANNER_IMAGE_MAX_BYTES) {
-        throw new Error(`任务图片过大：单张不能超过 ${Math.round(PLANNER_IMAGE_MAX_BYTES / 1024 / 1024)} MB。`);
-      }
-      return {
-        type: "image",
-        id: sanitizeLlmText(item.id || `image-${index + 1}`, 80),
-        name: sanitizeLlmText(item.name || `image-${index + 1}`, 160),
-        mimeType,
-        size,
-        data
-      };
-    });
-  const files = list
-    .filter((item) => item?.type === "file" && item?.absolutePath)
-    .slice(0, 20)
-    .map((item, index) => {
-      const rawPath = String(item.absolutePath || "").trim();
-      const resolved = safeResolvePath(rawPath);
-      if (!resolved) {
-        return null;
-      }
-      return {
-        type: "file",
-        id: sanitizeLlmText(item.id || `file-${index + 1}`, 80),
-        name: sanitizeLlmText(item.name || `file-${index + 1}`, 200),
-        size: Number(item.size) || 0,
-        absolutePath: sanitizeLlmText(resolved, 1024)
-      };
-    })
-    .filter(Boolean);
-  return [...images, ...files];
-}
-
-function formatPlannerProjectMemory(projectMemory = {}) {
-  if (!projectMemory || projectMemory.enabled === false) {
-    return "Project memory is disabled or empty.";
-  }
-  const lines = [];
-  if (projectMemory.manualNotes) {
-    lines.push("Manual project notes:");
-    lines.push(String(projectMemory.manualNotes).trim().slice(0, 4000));
-  }
-  if (projectMemory.summary) {
-    lines.push("Auto project memory:");
-    lines.push(String(projectMemory.summary).trim().slice(0, 8000));
-  }
-  const tasks = Array.isArray(projectMemory.taskHistory) ? projectMemory.taskHistory.slice(0, 6) : [];
-  if (tasks.length > 0) {
-    lines.push("Recent task state:");
-    tasks.forEach((task, index) => {
-      lines.push(`${index + 1}. [${sanitizePromptText(task.status, 40)}] ${sanitizePromptText(task.title || task.goal, 120)} (${Number(task.doneCount) || 0}/${Number(task.totalCount) || 0} done)`);
-      if (task.summary) {
-        lines.push(`   ${sanitizePromptText(task.summary, 220)}`);
-      }
-    });
-  }
-  const artifacts = Array.isArray(projectMemory.artifacts) ? projectMemory.artifacts.slice(0, 8) : [];
-  if (artifacts.length > 0) {
-    lines.push("Known artifacts:");
-    artifacts.forEach((artifact) => {
-      lines.push(`- ${sanitizePromptText(artifact.path || artifact.url, 220)}${artifact.description ? `: ${sanitizePromptText(artifact.description, 220)}` : ""}`);
-    });
-  }
-  const decisions = Array.isArray(projectMemory.decisions) ? projectMemory.decisions.slice(0, 8) : [];
-  if (decisions.length > 0) {
-    lines.push("Recent decisions:");
-    decisions.forEach((decision) => {
-      lines.push(`- ${sanitizePromptText(decision.roleName || decision.roleId, 80)}: ${sanitizePromptText(decision.summary, 360)}`);
-    });
-  }
-  return lines.join("\n").trim().slice(0, 14000) || "Project memory is empty.";
-}
-
-function buildPlannerMessages({ goal, projectName, roles, projectMemory, attachments = [] }) {
-  const roleText = roles
-    .map((role) => `- ${role.id}: ${role.name}, ${role.description}`)
-    .join("\n");
-  const memoryText = formatPlannerProjectMemory(projectMemory);
-  const imageAttachments = attachments.filter((item) => item?.type === "image");
-  const fileAttachments = attachments.filter((item) => item?.type === "file");
-  const hasImages = imageAttachments.length > 0;
-  const hasFiles = fileAttachments.length > 0;
-  const fileListBlock = hasFiles
-    ? `Reference files (absolute paths; do not modify. Reference them in subtask descriptions so downstream Agents can read with their tools):\n${fileAttachments.map((item) => `- ${item.absolutePath}`).join("\n")}\n\n`
-    : "";
-  const userText =
-    `Project: ${projectName || "Untitled project"}\n` +
-    `Task goal: ${goal}\n\n` +
-    (hasImages ? `Reference images: ${imageAttachments.length} image(s) are attached. Use them as supporting evidence for visible UI, error, OCR, layout, or workflow clues. Do not invent details that are not visible; if uncertain, make the first step clarify the uncertainty.\n\n` : "") +
-    fileListBlock +
-    `Project memory:\n${memoryText}\n\n` +
-    `Available roles:\n${roleText}\n\n` +
-    "Create a complete linear workflow. Do not create parallel entry steps. Later steps must depend on the previous step only. Return JSON in this shape: " +
-    "{\"summary\":\"one sentence task summary\",\"neededAgentRoleIds\":[\"product-manager\",\"tech-lead\",\"frontend-engineer\",\"backend-engineer\",\"test-engineer\"],\"firstRoundRoleIds\":[\"product-manager\"],\"subtasks\":[{\"id\":\"step-1\",\"roleId\":\"product-manager\",\"title\":\"Define requirements and acceptance criteria\",\"description\":\"Write PRD, acceptance criteria, and boundaries.\",\"dependsOn\":[],\"riskLevel\":\"low\"},{\"id\":\"step-2\",\"roleId\":\"tech-lead\",\"title\":\"Design technical approach\",\"description\":\"Use step-1 output to define architecture and interface constraints.\",\"dependsOn\":[\"step-1\"],\"riskLevel\":\"low\"}],\"messages\":[]}.";
-  const userContent = hasImages
-    ? [
-      { type: "text", text: userText },
-      ...imageAttachments.map((item) => ({
-        type: "image_url",
-        image_url: {
-          url: `data:${item.mimeType};base64,${item.data}`
-        }
-      }))
-    ]
-    : userText;
-
-  return [
-    {
-      role: "system",
-      content:
-        "You are the CosS v0.10 Kernel Planner. The Kernel is the only scheduler. Generate one simple linear workflow when the task is created. Return strict JSON only; no Markdown and no explanation. " +
-        "Hard rules: neededAgentRoleIds must list every Agent terminal that may be needed, using only role IDs from the provided role list. Do not invent roles such as designer or developer. " +
-        "firstRoundRoleIds must contain exactly the roleId of the first workflow step. The first step may be one Agent only. " +
-        "subtasks must contain the complete sequential workflow, 1 to 12 steps. Every step must include id, roleId, title, description, dependsOn, and riskLevel. Step 1 uses dependsOn: []; every later step depends only on the immediately previous step. " +
-        "The Kernel will dispatch one step at a time. The next Agent starts only after the previous Agent reports done. Agent states are only idle, running, and done. " +
-        "Use project memory as the existing project context. Prefer incremental steps that continue current architecture, artifacts, conventions, and completed work. Do not plan bootstrap, scaffolding, or rediscovery steps unless the user goal explicitly asks for them. " +
-        "If reference images are provided, inspect them and use visible evidence to improve the plan, but do not make unsupported claims. " +
-        "Return exactly these fields: summary, neededAgentRoleIds, firstRoundRoleIds, subtasks, messages. messages must be an empty array."
-    },
-    {
-      role: "user",
-      content: userContent
-    }
-  ];
-}
-
-async function requestJson(url, options) {
-  const controller = new AbortController();
-  const timeoutMs = getLlmRequestTimeoutMs();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    const bodyText = await response.text();
-    if (!response.ok) {
-      throw new Error(`模型接口返回 ${response.status}: ${bodyText.slice(0, 500)}`);
-    }
-    try {
-      return JSON.parse(bodyText);
-    } catch (error) {
-      throw new Error(`模型接口返回非 JSON 响应：${sanitizeLogText(bodyText, 500)} (${error.message})`);
-    }
-  } catch (error) {
-    if (timedOut || error?.name === "AbortError") {
-      throw new Error(`模型接口请求超时：${Math.round(timeoutMs / 1000)} 秒内没有返回。请稍后重试，或在设置中调整模型服务超时时间。`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function planTaskWithLlm(request = {}) {
-  if (process.env.COSS_LLM_FORCE_ERROR === "1") {
-    throw new Error("任务计划生成失败。请稍后重试或检查模型配置。");
-  }
-
-  const roles = Array.isArray(request.roles) ? request.roles : [];
-  if (process.env.COSS_LLM_MOCK_RESPONSE) {
-    return {
-      ...normalizePlannerResult(JSON.parse(process.env.COSS_LLM_MOCK_RESPONSE), roles),
-      source: "mock"
-    };
-  }
-
-  if (process.env.COSS_LLM_MOCK_CONTENT) {
-    return {
-      ...normalizePlannerResult(extractJsonObject(process.env.COSS_LLM_MOCK_CONTENT), roles),
-      source: "mock-content"
-    };
-  }
-
-  const model = request.model || {};
-  const url = buildChatCompletionsUrl(model.baseUrl);
-  const headers = buildLlmHeaders(model);
-  const attachments = normalizePlannerAttachments(request.attachments || []);
-
-  const payload = {
-    model: model.modelName,
-    messages: buildPlannerMessages({
-      goal: request.goal,
-      projectName: request.projectName,
-      roles,
-      projectMemory: request.projectMemory || null,
-      attachments
-    }),
-    temperature: 0.2,
-    stream: false
-  };
-
-  const response = await requestJson(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload)
-  });
-  const content = response?.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("模型响应中没有 choices[0].message.content。");
-  }
-
-  return {
-    ...normalizePlannerResult(extractJsonObject(content), roles),
-    source: "llm",
-    usage: response.usage || null
-  };
-}
-
-async function testModelConnectivityWithLlm(request = {}) {
-  if (process.env.COSS_LLM_FORCE_ERROR === "1") {
-    throw new Error("任务计划生成失败。请稍后重试或检查模型配置。");
-  }
-
-  const model = request.model || {};
-  const url = buildChatCompletionsUrl(model.baseUrl);
-  const modelName = String(model.modelName || "").trim();
-  if (!modelName) {
-    throw new Error("模型名称为空。");
-  }
-
-  if (process.env.COSS_LLM_MOCK_CONNECTIVITY === "1") {
-    return {
-      source: "mock",
-      modelName,
-      baseUrl: String(model.baseUrl || "").trim(),
-      content: "OK"
-    };
-  }
-
-  const response = await requestJson(url, {
-    method: "POST",
-    headers: buildLlmHeaders(model),
-    body: JSON.stringify({
-      model: modelName,
-      messages: [
-        {
-          role: "system",
-          content: "你是 CosS 的模型连通性检测器。请只用极短文本回复。"
-        },
-        {
-          role: "user",
-          content: "请回复 OK，用于确认模型接口可用。"
-        }
-      ],
-      temperature: 0,
-      max_tokens: 16,
-      stream: false
-    })
-  });
-  const content = response?.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("模型响应中没有 choices[0].message.content。");
-  }
-
-  return {
-    source: "llm",
-    modelName,
-    baseUrl: String(model.baseUrl || "").trim(),
-    content: String(content).slice(0, 120),
-    usage: response.usage || null
-  };
-}
-
-async function handlePlanTask(_event, request) {
-  const startedAt = Date.now();
-  appendLogEvent("llm.plan.requested", summarizePlanRequest(request));
-  try {
-    const result = await planTaskWithLlm(request);
-    appendLogEvent("llm.plan.succeeded", {
-      ...summarizePlanRequest(request),
-      source: result.source || "llm",
-      latencyMs: Date.now() - startedAt,
-      subtasks: Array.isArray(result.subtasks) ? result.subtasks.length : 0,
-      messages: Array.isArray(result.messages) ? result.messages.length : 0,
-      usage: result.usage || null
-    });
-    return {
-      ok: true,
-      plannedAt: new Date().toISOString(),
-      ...result
-    };
-  } catch (error) {
-    appendLogEvent("llm.plan.failed", {
-      ...summarizePlanRequest(request),
-      latencyMs: Date.now() - startedAt,
-      error: serializeError(error)
-    }, "error");
-    return {
-      ok: false,
-      plannedAt: new Date().toISOString(),
-      error: error.message
-    };
-  }
-}
-
-async function handleTestModelConnectivity(_event, request) {
-  const startedAt = Date.now();
-  try {
-    const result = await testModelConnectivityWithLlm(request);
-    appendLogEvent("llm.connectivity.succeeded", {
-      model: summarizeModelConfig(request?.model || {}),
-      timeoutMs: getLlmRequestTimeoutMs(),
-      latencyMs: Date.now() - startedAt,
-      source: result.source || "llm",
-      content: sanitizeLogText(result.content, 120),
-      usage: result.usage || null
-    });
-    return {
-      ok: true,
-      checkedAt: new Date().toISOString(),
-      latencyMs: Date.now() - startedAt,
-      ...result
-    };
-  } catch (error) {
-    appendLogEvent("llm.connectivity.failed", {
-      model: summarizeModelConfig(request?.model || {}),
-      timeoutMs: getLlmRequestTimeoutMs(),
-      latencyMs: Date.now() - startedAt,
-      error: serializeError(error)
-    }, "error");
-    return {
-      ok: false,
-      checkedAt: new Date().toISOString(),
-      latencyMs: Date.now() - startedAt,
-      error: error.message
-    };
   }
 }
 
@@ -4011,7 +3492,7 @@ function emitAgentOutputEvents(webContents, id, data, launch = {}) {
       message: payload.message
     });
     if (!webContents.isDestroyed()) {
-      webContents.send("terminal:agent-event", payload);
+      webContents.send(IPC_EVENTS.TERMINAL_AGENT_EVENT, payload);
     }
   });
 }
@@ -6170,7 +5651,7 @@ function createMainWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedEmbeddedBrowserUrl(url)) {
       appendLogEvent("browser.window-open.redirected", { url });
-      win.webContents.send("browser:open-url", { url });
+      win.webContents.send(IPC_EVENTS.BROWSER_OPEN_URL, { url });
       return { action: "deny" };
     }
     appendLogEvent("browser.window-open.blocked", { url, reason: "protocol" }, "warn");
@@ -6180,7 +5661,7 @@ function createMainWindow() {
     const url = details.url || "";
     appendLogEvent("browser.created-window.closed", { url });
     if (isAllowedEmbeddedBrowserUrl(url)) {
-      win.webContents.send("browser:open-url", { url });
+      win.webContents.send(IPC_EVENTS.BROWSER_OPEN_URL, { url });
     }
     if (childWindow && !childWindow.isDestroyed()) {
       childWindow.destroy();
@@ -6189,8 +5670,8 @@ function createMainWindow() {
 
   win.setAutoHideMenuBar(true);
   win.setMenuBarVisibility(false);
-  win.on("maximize", () => win.webContents.send("window:maximized", true));
-  win.on("unmaximize", () => win.webContents.send("window:maximized", false));
+  win.on("maximize", () => win.webContents.send(IPC_EVENTS.WINDOW_MAXIMIZED, true));
+  win.on("unmaximize", () => win.webContents.send(IPC_EVENTS.WINDOW_MAXIMIZED, false));
   win.loadFile(path.join(__dirname, "index.html"));
 }
 
@@ -6233,9 +5714,14 @@ app.whenReady().then(() => {
     }
   });
   createAppMenu();
-  appendLogEvent("app.ready", { userData: app.getPath("userData"), logDirectory: getLogDirectory() });
-  ipcMain.handle("state:load", () => readState());
-  ipcMain.handle("state:save", async (_event, state) => {
+  appendLogEvent("app.ready", {
+    userData: app.getPath("userData"),
+    logDirectory: getLogDirectory(),
+    architectureVersion: ARCHITECTURE_VERSION,
+    stateSchemaVersion: STATE_SCHEMA_VERSION
+  });
+  ipcMain.handle(IPC_CHANNELS.STATE_LOAD, () => readState());
+  ipcMain.handle(IPC_CHANNELS.STATE_SAVE, async (_event, state) => {
     try {
       const durableState = await readState();
       const mergedState = mergeStateForRendererSave(state, durableState);
@@ -6253,8 +5739,8 @@ app.whenReady().then(() => {
       throw error;
     }
   });
-  ipcMain.handle("llm:plan-task", handlePlanTask);
-  ipcMain.handle("llm:test-model", handleTestModelConnectivity);
+  ipcMain.handle(IPC_CHANNELS.LLM_PLAN_TASK, handlePlanTask);
+  ipcMain.handle(IPC_CHANNELS.LLM_TEST_MODEL, handleTestModelConnectivity);
   ipcMain.handle("app:info", () => ({
     version: appVersion,
     logDirectory: getLogDirectory(),
@@ -6272,13 +5758,15 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("app:log-event", (_event, eventName, payload = {}, level = "info") => appendLogEvent(eventName, payload, level));
   ipcMain.handle("logs:open-directory", () => openLogDirectory());
-  ipcMain.handle("state:meta", () => getStateMeta());
+  registerIpcHandlers(ipcMain, {
+    [IPC_CHANNELS.STATE_META]: () => getStateMeta()
+  });
   ipcMain.handle("mcp:info", (_event, context = {}) => getMcpServerInfo(context));
   ipcMain.handle("mcp:check-project-config", checkProjectMcpConfig);
   ipcMain.handle("mcp:write-project-config", writeProjectMcpConfig);
   ipcMain.handle("mcp:audit-events", readMcpAuditEvents);
-  ipcMain.handle("storage:info", () => getStorageInfo());
-  ipcMain.handle("storage:backup", () => createManualStateBackup());
+  ipcMain.handle(IPC_CHANNELS.STORAGE_INFO, () => getStorageInfo());
+  ipcMain.handle(IPC_CHANNELS.STORAGE_BACKUP, () => createManualStateBackup());
   ipcMain.handle("storage:export", exportStorageState);
   ipcMain.handle("storage:import", importStorageState);
   ipcMain.handle("storage:diagnostics", exportDiagnosticsPackage);
@@ -6328,7 +5816,7 @@ app.whenReady().then(() => {
     }, status.runnable ? "info" : "warn");
     return status;
   });
-  ipcMain.handle("world-agent:run", handleWorldAgentRun);
+  ipcMain.handle(IPC_CHANNELS.WORLD_AGENT_RUN, handleWorldAgentRun);
   ipcMain.handle("codebuddy:status", (_event, request = {}) => {
     const apiKey = typeof request === "object" && request !== null ? String(request.apiKey || "").trim() : "";
     const status = getCodeBuddyCommandStatus(getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {}));
@@ -6403,7 +5891,7 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle("agent:login-test", testAgentRemoteLogin);
-  ipcMain.handle("terminal:create", createTerminalSession);
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_CREATE, createTerminalSession);
   ipcMain.handle("terminal:input", (event, id, data, options = {}) => {
     const session = terminalSessions.get(id);
     if (session && typeof data === "string") {
@@ -6434,7 +5922,7 @@ app.whenReady().then(() => {
     }
     return false;
   });
-  ipcMain.handle("terminal:dispose", (_event, id) => disposeTerminalSession(id));
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_DISPOSE, (_event, id) => disposeTerminalSession(id));
 
   createMainWindow();
 

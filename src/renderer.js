@@ -23,50 +23,289 @@ const {
   COMMAND_RISK_RULES
 } = window.COSS_CONFIG;
 
-const defaultState = {
-  activeProjectId: null,
-  projects: [],
-  activeWorldId: "",
-  activeSidebarSection: "projects",
-  worlds: [],
-  deletedProjectIds: [],
-  settings: {
-    agentProvider: "claude",
-    agentFallbackToShell: true,
-    agentPermissionMode: "confirm",
-    agentAutoWorkflowEnabled: true,
-    agentAutoWorkflowPaused: false,
-    agentMcpAutoConfigEnabled: false,
-    codeBuddyApiKey: "",
-    language: "zh-CN",
-    userProfile: {
-      displayName: "本地用户",
-      avatarDataUrl: ""
-    },
-    agentPromptTemplate:
-      "你是 CosS 工作区中的{{roleName}}。\n" +
-      "角色 ID：{{roleId}}\n" +
-      "角色职责：{{roleDescription}}\n" +
-      "项目：{{projectName}}\n" +
-      "工作目录：{{workspace}}\n" +
-      "Agent 权限模式：{{agentPermissionLabel}}\n" +
-      "{{agentPermissionInstructions}}\n" +
-      "当前任务：{{taskTitle}}\n" +
-      "子任务：{{subtaskTitle}}\n" +
-      "子任务说明：{{subtaskDescription}}\n\n" +
-      "请只在当前项目范围内工作。执行高风险命令、删除文件、修改依赖或访问敏感信息前，先说明风险并等待用户确认。\n" +
-      "CosS 使用任务调度器按步骤推进协作。你不能直接给其他角色分配任务，不能发明不存在的角色，也不能绕过共享任务板。\n" +
-      "开始工作前优先读取任务板并领取当前步骤；长任务中保持进度更新；完成后必须提交结果。\n" +
-      "只完成当前步骤。当前步骤完成后，系统会启动预先规划好的下一位协作者。",
-    modelProvider: "system",
-    modelConfigs: createDefaultModelConfigs()
-  }
-};
+const defaultState = window.COSS_DEFAULT_STATE.createDefaultState(createDefaultModelConfigs);
+const DEFAULT_BROWSER_URL = "about:blank";
 
 const APP_VERSION = "v0.11.0";
 const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-let state = structuredClone(defaultState);
+const appStore = window.COSS_STORE.createAppStore(structuredClone(defaultState), {
+  onListenerError: (error) => console.warn("CosS store listener failed", error)
+});
+let state = appStore.getState();
+
+function replaceAppState(nextState, reason = "replace") {
+  state = appStore.replace(nextState, reason);
+  return state;
+}
+
+const stateNormalizer = window.COSS_STATE_NORMALIZER.createStateNormalizer({
+  ensureWorldShape,
+  ensureProjectShape,
+  ensureAgentPrompt: (template) => ensureAgentPromptMcpInstructions(ensureAgentPromptPermissionPlaceholders(template)),
+  ensureModelSettings,
+  normalizeAgentProvider,
+  normalizeAgentPermissionMode,
+  languageOptions: LANGUAGE_OPTIONS,
+  defaultLanguage: defaultState.settings.language,
+  defaultState
+});
+
+function ensureStateShape(nextState) {
+  return stateNormalizer.normalize(nextState);
+}
+
+const persistenceController = window.COSS_PERSISTENCE.createPersistenceController({
+  api: window.cossAPI,
+  getState: () => state,
+  setState: replaceAppState,
+  normalizeStoredState: (nextState) => {
+    ensureStateShape(nextState);
+    normalizeStoredWindowStacks(nextState);
+    return nextState;
+  },
+  createProjectState,
+  createWindowState,
+  createMessage,
+  getDefaultState: () => defaultState,
+  reconcileExternalState: reconcileAgentWorkflowAfterStateRefresh,
+  repairReadyState: repairAllReadyKernelDispatches,
+  render,
+  resumePending: resumePendingKernelAutoWorkflowMessages,
+  recordLog: recordAppLog
+});
+const stateSaveQueue = persistenceController.queue;
+const {
+  saveState,
+  loadState,
+  refreshStamp: refreshStateStorageStamp,
+  refreshExternal: refreshStateFromExternalStorage,
+  startExternalRefresh: startExternalStateRefresh
+} = persistenceController;
+
+const rendererServices = Object.freeze({
+  task: window.COSS_TASK_SERVICE.createTaskService({
+    getState: () => state,
+    saveState: () => saveState(),
+    render: () => render(),
+    createId: uid,
+    normalizeTask: (task) => task
+  }),
+  planner: window.COSS_PLANNER_SERVICE.createPlannerService({
+    api: window.cossAPI,
+    getModel: (provider) => getModelConfig(provider),
+    getProjectMemory: (project) => project?.memory || null
+  }),
+  windowManager: window.COSS_WINDOW_MANAGER.createWindowManager({
+    getProject: () => getProject(),
+    saveState: () => saveState(),
+    render: () => render()
+  }),
+  desktopManager: window.COSS_DESKTOP_MANAGER.createDesktopManager({
+    getProject: () => getProject(),
+    saveState: () => saveState(),
+    render: () => render()
+  }),
+  terminalAdapter: window.COSS_TERMINAL_ADAPTER.createTerminalAdapter(),
+  outputTracker: window.COSS_OUTPUT_TRACKER.createOutputTracker()
+});
+
+const kernelModel = window.COSS_KERNEL_PROJECTION.createKernelModel({
+  getRole,
+  translate: t,
+  protocolVersion: ORCHESTRATOR_PROTOCOL_VERSION,
+  normalizePhase: normalizeKernelPhase,
+  normalizeStatus: normalizeSubtaskStatus,
+  phaseToStatus: kernelPhaseToStatus,
+  isLeaseExpired,
+  getStableSubtaskId,
+  uniqueRoleIds,
+  phaseDefinitions: KERNEL_PHASE_DEFS
+});
+const { getTaskKernelSteps, getTaskKernelProjection } = kernelModel;
+
+const agentDeliveryService = window.COSS_AGENT_DELIVERY_SERVICE.createAgentDeliveryService({
+  api: window.cossAPI,
+  getState: () => state,
+  translate: t,
+  uid,
+  getProject: () => getProject(),
+  getRole,
+  getTaskContextForWindow,
+  getMessageTaskLabel,
+  getAgentPoolMessagePath,
+  getAgentPermissionPolicy,
+  normalizeAgentProvider,
+  getAgentProviderLabel
+});
+const {
+  stripTerminalControlChars,
+  buildTerminalInstructionPayload,
+  getAgentDeliveryAdapter,
+  sanitizeDeliveryFileName,
+  writeAgentDeliveryInstructionFile,
+  sendPastedTerminalInstruction,
+  sendTerminalInputChunks,
+  chunkTerminalText,
+  sendAgentDeliveryInstruction,
+  isPasteOnlyTerminalFeedback,
+  isDeliveryInstructionEcho,
+  isDeliverySystemFeedback,
+  isAgentApprovalPromptOutput,
+  wait
+} = agentDeliveryService;
+
+const workspaceViewRenderer = window.COSS_WORKSPACE_VIEW_RENDERER.createWorkspaceViewRenderer({
+  getState: () => state,
+  getProject: () => getProject(),
+  getRole,
+  getWindowState,
+  ensureBrowserWindowShape,
+  getActiveBrowserTab,
+  normalizeBrowserUrl,
+  normalizeTerminalMode,
+  normalizeAgentProvider,
+  getAgentProviderLabel,
+  t,
+  escapeHtml,
+  icon,
+  uniqueStrings,
+  defaultBrowserUrl: DEFAULT_BROWSER_URL
+});
+const {
+  renderTerminalContent,
+  renderBrowserContent,
+  getFileEditorMetrics,
+  renderFileLineNumbers,
+  renderFileEditorFooter,
+  syncFileEditorChrome,
+  renderFileContent
+} = workspaceViewRenderer;
+
+const taskViewRenderer = window.COSS_TASK_VIEW.createTaskViewRenderer({
+  escapeHtml,
+  translate: t,
+  normalizeSubtaskStatus,
+  normalizeKernelPhase,
+  subtaskStatusDefs: SUBTASK_STATUS_DEFS,
+  kernelPhaseDefs: KERNEL_PHASE_DEFS,
+  normalizeAgentEventStatus,
+  getRoleName,
+  formatDateTime,
+  getProject: () => getProject(),
+  getConversationTasks,
+  getActiveDesktop,
+  uniqueRoleIds,
+  getTaskModelName,
+  getTaskRoleIds,
+  getTaskStatusValue,
+  getFilteredConversationTasks,
+  getTaskMessages,
+  getTaskDeliveries,
+  getTaskOutputRefs,
+  getTaskKernelProjection,
+  getSubtaskKernelProjection,
+  getDeliveryStatusLabel,
+  getTaskRoleFilter: () => taskRoleFilter,
+  setTaskRoleFilter: (value) => { taskRoleFilter = value; },
+  getTaskListFilters: () => taskListFilters,
+  getSelectedTaskListTaskId: () => selectedTaskListTaskId,
+  setSelectedTaskListTaskId: (value) => { selectedTaskListTaskId = value; },
+  subtaskStatusDefs: SUBTASK_STATUS_DEFS,
+  canManuallyExecuteKernelSubtask,
+  extractFirstUrl
+});
+const {
+  renderRecentAgentEvents,
+  renderSubtaskStatusChip,
+  renderKernelPhaseChip,
+  renderSubtaskActions,
+  renderTaskContent,
+  renderTaskListFilters,
+  renderTaskListDetail,
+  renderTaskListContent
+} = taskViewRenderer;
+
+const messageViewRenderer = window.COSS_MESSAGE_VIEW.createMessageViewRenderer({
+  escapeHtml,
+  translate: t,
+  getRole,
+  getRoleName,
+  getMessageTaskLabel,
+  normalizeAgentEventStatus,
+  formatDateTime,
+  getProjectTimelineEvents,
+  getOutputRefsForMessage,
+  renderRelayStageChips,
+  renderAgentFlowGraph,
+  normalizeAgentFlowSelection,
+  getSelectedTimelineItemId: () => selectedTimelineItemId,
+  setSelectedTimelineItemId: (value) => { selectedTimelineItemId = value; }
+});
+const {
+  getTimelineItemKey,
+  renderTimelineNode,
+  renderTimelineDetail,
+  renderMessageRows
+} = messageViewRenderer;
+
+const settingsStatusView = window.COSS_SETTINGS_STATUS_VIEW.createSettingsStatusRenderer({
+  translate: t,
+  escapeHtml,
+  formatDateTime,
+  normalizeAgentProvider,
+  getAgentProviderLabel,
+  getAgentLoginTestStatuses: () => agentLoginTestStatuses,
+  getProjectCommandLogs,
+  renderCommandStatus,
+  getState: () => state,
+  normalizeAgentPermissionMode,
+  getModelConfig,
+  getModelDisplayName,
+  renderMaskedSecret,
+  canUseModelProvider,
+  normalizeModelProvider,
+  getModelConnectivityStatuses: () => modelConnectivityStatuses,
+  modelProviderPresets: MODEL_PROVIDER_PRESETS,
+  getModelEditorProvider: () => modelEditorProvider
+});
+const {
+  renderAgentAuthLines,
+  renderClaudeStatus,
+  renderCodexStatus,
+  renderCodeBuddyStatus,
+  renderAgentLoginTestStatus,
+  renderLogRows,
+  renderAgentProviderOption,
+  renderAgentPermissionOption,
+  renderModelProviderOption,
+  renderModelConnectivityStatus
+} = settingsStatusView;
+
+const windowShellRenderer = window.COSS_WINDOW_SHELL_RENDERER.createWindowShellRenderer({
+  escapeHtml,
+  translate: t,
+  getWindowStatus,
+  getCollaboratorsForWindow,
+  getVisibleWindows,
+  getAgentRelayStageForWindow,
+  getStatusLabel,
+  getRelayStageClass,
+  getRelayStageSymbol,
+  statusSymbol,
+  normalizeTerminalMode,
+  renderCollabPopover,
+  renderProgramWindowStyle,
+  renderResizeHandles,
+  getFocusedWindowId: () => focusedWindowId,
+  getActivePopoverWindowId: () => activePopoverWindowId,
+  renderTerminalContent,
+  renderBrowserContent,
+  renderFileContent,
+  renderTaskContent,
+  renderTaskListContent
+});
+const { renderProgramWindow, renderCollabOverlay } = windowShellRenderer;
 
 function getAppLanguage() {
   const language = state?.settings?.language || defaultState.settings.language;
@@ -109,12 +348,10 @@ function getDefaultAgentPromptTemplate() {
   return t("agent.prompt.default.template", I18N_RESOURCES[defaultState.settings.language]?.translation?.["agent.prompt.default.template"] || "");
 }
 
-let saveStateInFlight = false;
-let saveStateDirty = false;
-let saveStatePromise = Promise.resolve();
-let stateStorageStamp = "";
-let externalStateRefreshTimer = null;
-let pendingExternalStateRefreshReason = "";
+function recordAppLog(eventName, payload = {}, level = "info") {
+  window.cossAPI?.logEvent?.(eventName, payload, level).catch(() => {});
+}
+
 let pendingKernelAutoWorkflowTimer = null;
 let bootingProjectId = null;
 let contextMenu = null;
@@ -126,7 +363,6 @@ let dragState = null;
 let zSeed = 20;
 const WINDOW_Z_BASE = 20;
 const WINDOW_Z_MAX = 9990;
-const DEFAULT_BROWSER_URL = "about:blank";
 const PRODUCT_HELP_URL = "https://github.com/xiaolizi0v0/CosS";
 const PRODUCT_DOCS_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/help.md";
 const PRODUCT_PRIVACY_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/privacy.md";
@@ -555,39 +791,19 @@ function getVisibleWindows(project = getProject()) {
 }
 
 function normalizeSubtaskStatus(value) {
-  return SUBTASK_STATUS_DEFS[value] ? value : "idle";
+  return window.COSS_TASK_MODEL.normalizeSubtaskStatus(value, SUBTASK_STATUS_DEFS);
 }
 
 function deriveTaskStatus(subtasks = []) {
-  if (subtasks.length === 0) {
-    return "planned";
-  }
-  if (subtasks.every((subtask) => normalizeSubtaskStatus(subtask.status) === "done")) {
-    return "done";
-  }
-  if (subtasks.some((subtask) => normalizeSubtaskStatus(subtask.status) === "running")) {
-    return "running";
-  }
-  return "planned";
+  return window.COSS_TASK_MODEL.deriveTaskStatus(subtasks, SUBTASK_STATUS_DEFS);
 }
 
 function normalizeKernelPhase(value, fallbackStatus = "idle") {
-  const phase = String(value || "").trim();
-  if (KERNEL_PHASE_DEFS[phase]) {
-    return phase;
-  }
-  const status = normalizeSubtaskStatus(fallbackStatus);
-  if (status === "done") {
-    return "done";
-  }
-  if (status === "running") {
-    return "running";
-  }
-  return "idle";
+  return window.COSS_TASK_MODEL.normalizeKernelPhase(value, fallbackStatus, KERNEL_PHASE_DEFS);
 }
 
 function kernelPhaseToStatus(phase) {
-  return KERNEL_PHASE_DEFS[normalizeKernelPhase(phase)]?.status || "idle";
+  return window.COSS_TASK_MODEL.kernelPhaseToStatus(phase, KERNEL_PHASE_DEFS);
 }
 
 function isLeaseExpired(lease) {
@@ -596,13 +812,7 @@ function isLeaseExpired(lease) {
 }
 
 function stableKernelIdPart(value, fallback = "item") {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return normalized || fallback;
+  return window.COSS_TASK_MODEL.stableKernelIdPart(value, fallback);
 }
 
 function getSubtaskFallbackKey(subtask, index) {
@@ -624,88 +834,7 @@ function getStepFallbackKey(step, index) {
 }
 
 function getStableSubtaskId(task, subtask, index, current = {}) {
-  const existingId = String(subtask?.id || current.subtaskId || "").trim();
-  if (existingId) {
-    return existingId;
-  }
-  const taskPart = stableKernelIdPart(task?.id || task?.title, "task");
-  const rolePart = stableKernelIdPart(subtask?.roleId || current.roleId, "role");
-  const titlePart = stableKernelIdPart(subtask?.title || current.title, "step");
-  return `subtask-${taskPart}-${String(index + 1).padStart(2, "0")}-${rolePart}-${titlePart}`;
-}
-
-function getTaskKernelSteps(task) {
-  const subtasks = Array.isArray(task?.subtasks) ? task.subtasks : [];
-  subtasks.forEach((subtask, index) => {
-    subtask.id = getStableSubtaskId(task, subtask, index);
-  });
-  const subtaskById = new Map(subtasks.map((subtask) => [subtask.id, subtask]));
-  const rawSteps = Array.isArray(task?.orchestrator?.steps) && task.orchestrator.steps.length > 0
-    ? task.orchestrator.steps
-    : subtasks.map((subtask, index) => ({
-      id: `step-${subtask.id}`,
-      subtaskId: subtask.id,
-      roleId: subtask.roleId,
-      title: subtask.title,
-      description: subtask.description,
-      status: subtask.status,
-      phase: normalizeKernelPhase("", subtask.status),
-      isEntryStep: Boolean(subtask.isEntryStep) || index === 0,
-      updatedAt: subtask.updatedAt,
-      createdAt: subtask.createdAt
-    }));
-
-  return rawSteps.map((step, index) => {
-    const subtask = subtaskById.get(step.subtaskId) || subtasks[index] || {};
-    const status = normalizeSubtaskStatus(step.status || subtask.status);
-    const phase = normalizeKernelPhase(step.phase, status);
-    const expiredLease = isLeaseExpired(step.lease);
-    return {
-      ...step,
-      subtask,
-      roleId: getRole(step.roleId || subtask.roleId).id,
-      title: step.title || subtask.title || t("common.step", "步骤 {{index}}", { index: index + 1 }),
-      description: step.description || subtask.description || "",
-      phase: expiredLease && phase === "running" ? "idle" : phase,
-      status: expiredLease ? "idle" : kernelPhaseToStatus(phase),
-      leaseExpired: expiredLease
-    };
-  });
-}
-
-function getTaskKernelProjection(task) {
-  const steps = getTaskKernelSteps(task);
-  const counts = Object.fromEntries(Object.keys(KERNEL_PHASE_DEFS).map((phase) => [phase, 0]));
-  steps.forEach((step) => {
-    counts[step.phase] = (counts[step.phase] || 0) + 1;
-  });
-  const total = steps.length;
-  const activeCount = counts.running || 0;
-  const activeLocks = (task?.orchestrator?.locks || []).filter((lock) => lock.status === "locked");
-  const pendingApprovals = (task?.orchestrator?.approvals || []).filter((approval) => approval.status === "pending");
-  const events = Array.isArray(task?.orchestrator?.events) ? task.orchestrator.events : [];
-  const status = total === 0
-    ? "planned"
-    : counts.done === total
-        ? "done"
-        : activeCount > 0
-          ? "running"
-          : "planned";
-  return {
-    version: task?.orchestrator?.version || ORCHESTRATOR_PROTOCOL_VERSION,
-    architecture: task?.orchestrator?.kernel?.architecture || "durable-workflow-kernel",
-    status,
-    total,
-    doneCount: counts.done,
-    activeCount,
-    counts,
-    steps,
-    roleIds: uniqueRoleIds(steps.map((step) => step.roleId)),
-    activeLocks,
-    pendingApprovals,
-    events,
-    staleLeases: steps.filter((step) => step.leaseExpired)
-  };
+  return window.COSS_TASK_MODEL.getStableSubtaskId(task, subtask, index, current);
 }
 
 function getSubtaskKernelProjection(task, subtask) {
@@ -1755,34 +1884,6 @@ function ensureProjectShape(project) {
   return project;
 }
 
-function ensureStateShape(nextState) {
-  nextState.worlds = (Array.isArray(nextState.worlds) ? nextState.worlds : []).map(ensureWorldShape);
-  nextState.activeWorldId = typeof nextState.activeWorldId === "string" ? nextState.activeWorldId : "";
-  nextState.activeSidebarSection = (nextState.activeSidebarSection === "worlds" || nextState.activeSidebarSection === "projects") ? nextState.activeSidebarSection : "projects";
-  nextState.deletedProjectIds = uniqueStrings(nextState.deletedProjectIds || []);
-  nextState.settings ||= {};
-  nextState.settings.agentProvider = normalizeAgentProvider(nextState.settings.agentProvider);
-  nextState.settings.agentFallbackToShell = nextState.settings.agentFallbackToShell !== false;
-  nextState.settings.agentPermissionMode = normalizeAgentPermissionMode(nextState.settings.agentPermissionMode);
-  nextState.settings.agentAutoWorkflowEnabled = nextState.settings.agentAutoWorkflowEnabled !== false;
-  nextState.settings.agentAutoWorkflowPaused = nextState.settings.agentAutoWorkflowPaused === true;
-  nextState.settings.agentMcpAutoConfigEnabled = nextState.settings.agentMcpAutoConfigEnabled === true;
-  if (!nextState.settings.agentAutoWorkflowEnabled) {
-    nextState.settings.agentAutoWorkflowPaused = false;
-  }
-  nextState.settings.codeBuddyApiKey ||= "";
-  nextState.settings.language = LANGUAGE_OPTIONS.some((item) => item.id === nextState.settings.language) ? nextState.settings.language : "zh-CN";
-  nextState.settings.userProfile = {
-    displayName: String(nextState.settings.userProfile?.displayName || t("account.defaultName", "本地用户")).trim().slice(0, 32) || t("account.defaultName", "本地用户"),
-    avatarDataUrl: String(nextState.settings.userProfile?.avatarDataUrl || "")
-  };
-  nextState.settings.agentPromptTemplate = ensureAgentPromptMcpInstructions(
-    ensureAgentPromptPermissionPlaceholders(nextState.settings.agentPromptTemplate || getDefaultAgentPromptTemplate())
-  );
-  ensureModelSettings(nextState.settings);
-  (nextState.projects || []).forEach(ensureProjectShape);
-  return nextState;
-}
 
 function getProjectCommandLogs(project = getProject()) {
   if (!project) {
@@ -2107,150 +2208,6 @@ function reconcileAgentWorkflowAfterStateRefresh(previousState, nextState, reaso
   }
 }
 
-async function refreshStateStorageStamp() {
-  if (!window.cossAPI?.getStateMeta) {
-    return "";
-  }
-  try {
-    const meta = await window.cossAPI.getStateMeta();
-    stateStorageStamp = meta?.stamp || "";
-    return stateStorageStamp;
-  } catch {
-    return stateStorageStamp;
-  }
-}
-
-async function refreshStateFromExternalStorage(reason = "external") {
-  if (!window.cossAPI?.loadState || saveStateInFlight || saveStateDirty) {
-    return false;
-  }
-  const previousState = state;
-  const loaded = await window.cossAPI.loadState();
-  if (!loaded?.projects?.length) {
-    return false;
-  }
-  normalizeStoredWindowStacks(loaded);
-  state = loaded;
-  await refreshStateStorageStamp();
-  reconcileAgentWorkflowAfterStateRefresh(previousState, state, reason);
-  await repairAllReadyKernelDispatches(`external:${reason}`);
-  recordAppLog("state.external-refreshed", {
-    reason,
-    projects: Array.isArray(state.projects) ? state.projects.length : 0
-  });
-  render();
-  setTimeout(() => resumePendingKernelAutoWorkflowMessages(`external:${reason}`), 350);
-  return true;
-}
-
-function startExternalStateRefresh() {
-  if (externalStateRefreshTimer || !window.cossAPI?.getStateMeta || !window.cossAPI?.loadState) {
-    return;
-  }
-  externalStateRefreshTimer = setInterval(async () => {
-    try {
-      const meta = await window.cossAPI.getStateMeta();
-      const nextStamp = meta?.stamp || "";
-      if (nextStamp && stateStorageStamp && nextStamp !== stateStorageStamp) {
-        if (saveStateInFlight || saveStateDirty) {
-          pendingExternalStateRefreshReason ||= "storage-stamp-changed-during-save";
-          return;
-        }
-        await refreshStateFromExternalStorage("storage-stamp-changed");
-      } else if (nextStamp && !stateStorageStamp) {
-        stateStorageStamp = nextStamp;
-        if (!saveStateInFlight && !saveStateDirty) {
-          await refreshStateFromExternalStorage("storage-stamp-initialized");
-        }
-      }
-    } catch {
-      // External refresh is best-effort. Normal UI interaction should continue.
-    }
-  }, 1500);
-}
-
-async function saveState() {
-  saveStateDirty = true;
-  if (saveStateInFlight) {
-    return saveStatePromise;
-  }
-
-  saveStateInFlight = true;
-  saveStatePromise = (async () => {
-    while (saveStateDirty) {
-      saveStateDirty = false;
-      const snapshot = structuredClone(state);
-      if (window.cossAPI?.saveState) {
-        await window.cossAPI.saveState(snapshot);
-        await refreshStateStorageStamp();
-      } else {
-        localStorage.setItem("coss-state", JSON.stringify(snapshot));
-      }
-    }
-  })()
-    .catch((error) => {
-      console.warn("Failed to save CosS state", error);
-    })
-    .finally(() => {
-      saveStateInFlight = false;
-      if (saveStateDirty) {
-        saveState();
-      } else if (pendingExternalStateRefreshReason) {
-        const reason = pendingExternalStateRefreshReason;
-        pendingExternalStateRefreshReason = "";
-        setTimeout(() => {
-          refreshStateFromExternalStorage(reason).catch((error) => {
-            recordAppLog("state.external-refresh-after-save.error", {
-              reason,
-              error: error.message
-            }, "error");
-          });
-        }, 0);
-      }
-    });
-
-  return saveStatePromise;
-}
-
-function recordAppLog(eventName, payload = {}, level = "info") {
-  window.cossAPI?.logEvent?.(eventName, payload, level).catch(() => {});
-}
-
-async function loadState() {
-  const stored = window.cossAPI?.loadState
-    ? await window.cossAPI.loadState()
-    : JSON.parse(localStorage.getItem("coss-state") || "null");
-
-    if (stored?.projects?.length) {
-      normalizeStoredWindowStacks(stored);
-      stored.worlds = Array.isArray(stored.worlds) ? stored.worlds : [];
-      state = stored;
-      refreshStateStorageStamp().catch((error) => {
-        recordAppLog("state.storage-stamp.refresh.error", { error: error.message }, "warn");
-      });
-      return;
-  }
-
-  const demo = createProjectState("AI 协作工作台", "D:\\CosS");
-  demo.windows = [
-    createWindowState("terminal", "frontend-engineer", 310, 96, { terminalMode: "shell" }),
-    createWindowState("browser", "qa-engineer", 795, 126)
-  ];
-  demo.messages = [
-    createMessage("frontend-engineer", ["backend-engineer", "qa-engineer"], "前端页面等待接口字段确认。")
-  ];
-  state = {
-    activeProjectId: demo.id,
-    projects: [demo],
-    activeWorldId: "",
-    activeSidebarSection: "projects",
-    worlds: [],
-    deletedProjectIds: [],
-    settings: { ...defaultState.settings }
-  };
-  await saveState();
-  await refreshStateStorageStamp();
-}
 
 function createProjectState(name, projectPath) {
   const id = uid("project");
@@ -2982,7 +2939,7 @@ function selectTaskListTask(taskId) {
 
 function setTaskArchived(taskId, archived) {
   const project = getProject();
-  const task = project?.tasks.find((item) => item.id === taskId);
+  const task = project ? rendererServices.task.find(project.id, taskId) : null;
   if (!project || !task) {
     return false;
   }
@@ -3329,9 +3286,7 @@ async function requestTaskPlan(goal, project, activeModel, projectMemory = null)
     return { ok: false, error: t("task.plan.error.modelConfigRequired", "请先在模型设置中填写用户自定义模型的 Base URL 和模型名称。") };
   }
 
-  return window.cossAPI.planTask({
-    goal,
-    projectName: project.name,
+  return rendererServices.planner.plan(goal, project, {
     model: {
       provider: activeModel.id,
       baseUrl: activeModel.baseUrl,
@@ -4963,7 +4918,7 @@ function startPendingKernelAutoWorkflowPump() {
     return;
   }
   pendingKernelAutoWorkflowTimer = setInterval(() => {
-    if (!isAgentAutoWorkflowActive() || saveStateInFlight || saveStateDirty) {
+    if (!isAgentAutoWorkflowActive() || stateSaveQueue.isInFlight || stateSaveQueue.isDirty) {
       return;
     }
     try {
@@ -5128,6 +5083,13 @@ function scheduleAgentAutoWorkflow(messageId, sourceEventId = "") {
   }
   setTimeout(() => {
     autoDispatchAgentMessage(messageId, sourceEventId).catch((error) => {
+      const project = getProject();
+      const message = project?.messages?.find((item) => item.id === messageId);
+      if (message) {
+        message.autoWorkflowStatus = `error:${error.message || "unknown"}`;
+        message.autoWorkflowStoppedAt = new Date().toISOString();
+        saveState();
+      }
       recordAppLog("agent.workflow.auto-dispatch.error", {
         projectId: state.activeProjectId || "",
         messageId,
@@ -5219,232 +5181,8 @@ function resumeAutoWorkflowMessagesForWindow(win, reason = "terminal-ready") {
   scheduleAgentDeliveryQueueDrain(win.id, 350);
 }
 
-function stripTerminalControlChars(value) {
-  return String(value || "")
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
-    .trim();
-}
-
-function buildTerminalInstructionPayload(message, targetWindow) {
-  const project = getProject();
-  const fromRole = getRole(message.fromRoleId);
-  const toRole = getRole(targetWindow.roleId);
-  const taskContext = getTaskContextForWindow(targetWindow, project);
-  const projectMemoryLines = taskContext.projectMemorySummary
-    ? ["Project memory:", taskContext.projectMemorySummary, ""]
-    : [];
-  const taskLabel = message.taskId ? getMessageTaskLabel(message.taskId) : t("taskList.privateChat", "私聊");
-  const agentProvider = normalizeAgentProvider(targetWindow.agentProvider || state.settings.agentProvider);
-  const provider = getAgentProviderLabel(agentProvider);
-  const permissionPolicy = getAgentPermissionPolicy();
-  const poolPath = message.agentPoolPaths?.[targetWindow.roleId] || getAgentPoolMessagePath(targetWindow.roleId, message.id);
-  const mcpRetryLines = agentProvider === "codebuddy"
-    ? [
-        t("delivery.prompt.mcpRetryCodebuddy1", "CodeBuddy Code 后端如果显示 `mcp__coss: Still connecting` 或 `/mcp` 中 coss 为 Disconnected，请等待 5-10 秒后用 ToolSearch queries: coss、mcp、inbox 重试；不要搜索或调用当前后端不存在的等待工具。"),
-        t("delivery.prompt.mcpRetryCodebuddy2", "如果 coss 工具仍未暴露，请继续完成当前角色工作并输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"MCP disconnected; 当前进度说明\",\"toRoleIds\":[]} 作为降级留痕。")
-      ]
-    : [
-        t("delivery.prompt.mcpRetryOther1", "如果系统提示 `mcp__coss: Still connecting`，请等待几秒后重新搜索或调用 coss 工具；只有当前后端明确提供等待工具时才调用该工具。"),
-        t("delivery.prompt.mcpRetryOther2", "不要因为 ToolSearch 暂时没有找到 coss 工具就停止；请至少等待并重试 3 次。")
-      ];
-  const autoWorkflowLines = message.autoWorkflow || message.source === "agent-event"
-    ? [
-        t("delivery.prompt.autoWorkflow1", "这是 CosS Kernel 分配的上游任务上下文。"),
-        t("delivery.prompt.autoWorkflow2", "请先阅读消息中提到的交接文档、产物路径或注意事项，再继续你的角色工作。"),
-        t("delivery.prompt.autoWorkflow3", "完成自己的部分后，请通过 coss_submit_result({ status: \"done\" }) 提交结果，由 Kernel 启动下一步。")
-      ]
-    : [];
-  return stripTerminalControlChars([
-    t("delivery.prompt.title", "请处理来自 CosS 协作时间线的指令。"),
-    t("delivery.prompt.targetRole", "目标角色：{{name}}", { name: toRole.name }),
-    t("delivery.prompt.fromRole", "发送角色：{{name}}", { name: fromRole.name }),
-    t("delivery.prompt.agentProvider", "Agent 后端：{{provider}}", { provider }),
-    t("delivery.prompt.permissionMode", "Agent 权限模式：{{label}}", { label: permissionPolicy.label }),
-    t("delivery.prompt.channel", "频道：{{label}}", { label: taskLabel }),
-    t("delivery.prompt.messageId", "消息ID：{{id}}", { id: message.id }),
-    t("delivery.prompt.poolPath", "角色消息池：{{path}}", { path: poolPath }),
-    t("delivery.prompt.messageSource", "消息来源：{{source}}", { source: message.source || "manual" }),
-    "",
-    permissionPolicy.instruction,
-    "",
-    ...autoWorkflowLines,
-    ...(autoWorkflowLines.length ? [""] : []),
-    "CosS v0.10 linear Kernel workflow:",
-    "0. Do not directly assign work to another Agent. CosS Kernel owns the workflow, role startup, resource locks, and downstream dispatch.",
-    `1. Call coss_pool_read({ roleId: "${targetWindow.roleId}", taskId: "${message.taskId || ""}" }) to read your own inbox.`,
-    `2. Call coss_pool_claim({ roleId: "${targetWindow.roleId}", messageId: "${message.id}" }) before processing this message.`,
-    "3. Call coss_claim_step before work; acquire locks with coss_acquire_lock before editing shared resources.",
-    "4. Submit structured results through coss_submit_result with status done when your own step is complete. The Kernel will schedule the next preplanned Agent after your step is done.",
-    "5. High-risk actions must use coss_request_approval and wait for user or orchestrator confirmation.",
-    "",
-    ...projectMemoryLines,
-    message.content,
-    "",
-    t("delivery.prompt.preferMcp", "必须优先使用 CosS MCP 工具调用 CosS，而不是只在终端自然语言回复。"),
-    t("delivery.prompt.requiredTools", "请按需调用：coss_get_context、coss_get_task_board、coss_list_roles、coss_pool_read、coss_pool_claim、coss_claim_step、coss_heartbeat_step、coss_release_step、coss_get_kernel_events、coss_submit_result、coss_acquire_lock、coss_release_lock、coss_request_approval。"),
-    ...mcpRetryLines,
-    t("delivery.prompt.recommendedOrder", "推荐开始顺序：先 coss_get_context，再 coss_get_task_board，再 coss_pool_read，处理本条消息前调用 coss_pool_claim，开始执行子任务时调用 coss_claim_step。"),
-    t("delivery.prompt.submitResult", "完成自己的 Step 时优先调用 coss_submit_result({ status: \"done\" })；不要直接发给其他角色，也不要创建未在任务板中的角色。"),
-    t("delivery.prompt.fallbackEvent", "如果当前 Agent 后端暂时无法使用 MCP，再输出 COSS_AGENT_EVENT:{\"status\":\"running\",\"message\":\"你的结构化进度或无法继续的原因\",\"toRoleIds\":[]}。"),
-    t("delivery.prompt.agentStates", "Agent 只能使用三种状态：COSS_AGENT_STATUS:running 或 COSS_AGENT_STATUS:done；默认未开始就是 idle。")
-  ].join("\n"));
-}
-
 function isCodeBuddyAgentWindow(win) {
   return normalizeAgentProvider(win?.agentProvider || state.settings.agentProvider) === "codebuddy";
-}
-
-function getAgentDeliveryAdapter(win) {
-  const provider = normalizeAgentProvider(win?.agentProvider || state.settings.agentProvider);
-  if (provider === "codebuddy") {
-    return {
-      provider,
-      method: "delivery-file-interactive",
-      detail: "Delivery file plus interactive CodeBuddy submit"
-    };
-  }
-  return {
-    provider,
-    method: "bracketed-paste",
-    detail: `${getAgentProviderLabel(provider)} bracketed paste`
-  };
-}
-
-function sanitizeDeliveryFileName(value) {
-  return String(value || uid("delivery"))
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || uid("delivery");
-}
-
-async function writeAgentDeliveryInstructionFile(project, delivery, content) {
-  if (!window.cossAPI?.writeProjectFile || !project?.path) {
-    return { ok: false, error: "file-api-unavailable" };
-  }
-
-  const filePath = `.coss/deliveries/${sanitizeDeliveryFileName(delivery.id)}.md`;
-  const result = await window.cossAPI.writeProjectFile({
-    projectPath: project.path,
-    filePath,
-    content: [
-      t("delivery.file.title", "# CosS Agent 投递指令"),
-      "",
-      t("delivery.file.intro", "请把本文档作为本次投递的唯一新增任务上下文。不要把终端输入框中的提示、示例或残留文字当成用户指令。"),
-      "",
-      content,
-      ""
-    ].join("\n")
-  });
-
-  if (result?.ok) {
-    delivery.deliveryFilePath = result.path || filePath;
-    delivery.deliveryFileAbsolutePath = result.absolutePath || "";
-  }
-  return result || { ok: false, error: "empty-result" };
-}
-
-async function sendPastedTerminalInstruction(windowId, content, adapter = null) {
-  const sanitized = stripTerminalControlChars(content);
-  if (!sanitized || !window.cossAPI?.sendTerminalInput) {
-    return { ok: false, error: "terminal-input-unavailable" };
-  }
-  const ok = await window.cossAPI.sendTerminalInput(windowId, `\x01\x0b\x1b[200~${sanitized}\x1b[201~\r`);
-  return {
-    ok,
-    provider: adapter?.provider || "",
-    method: adapter?.method || "bracketed-paste",
-    detail: adapter?.detail || "Bracketed paste",
-    error: ok ? "" : "terminal-write-failed"
-  };
-}
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function sendTerminalInputChunks(windowId, chunks, delayMs = 80) {
-  if (!window.cossAPI?.sendTerminalInput) {
-    return false;
-  }
-  for (const chunk of chunks) {
-    const isStep = chunk && typeof chunk === "object";
-    const data = isStep ? String(chunk.data || "") : String(chunk || "");
-    const delayAfter = isStep && Number.isFinite(Number(chunk.delayAfter))
-      ? Number(chunk.delayAfter)
-      : delayMs;
-    if (data) {
-      const ok = await window.cossAPI.sendTerminalInput(windowId, data);
-      if (!ok) {
-        return false;
-      }
-    }
-    if (delayAfter > 0) {
-      await wait(delayAfter);
-    }
-  }
-  return true;
-}
-
-function chunkTerminalText(value, size = 48) {
-  const text = String(value || "");
-  const chunks = [];
-  for (let index = 0; index < text.length; index += size) {
-    chunks.push(text.slice(index, index + size));
-  }
-  return chunks;
-}
-
-async function sendAgentDeliveryInstruction(project, delivery, targetWindow, content) {
-  const sanitized = stripTerminalControlChars(content);
-  if (!sanitized || !window.cossAPI?.sendTerminalInput) {
-    return { ok: false, error: "terminal-input-unavailable" };
-  }
-
-  const adapter = getAgentDeliveryAdapter(targetWindow);
-  delivery.submissionProvider = adapter.provider;
-  delivery.submissionMethod = adapter.method;
-  delivery.submissionDetail = adapter.detail;
-
-  if (adapter.provider !== "codebuddy") {
-    return sendPastedTerminalInstruction(targetWindow.id, sanitized, adapter);
-  }
-
-  const fileResult = await writeAgentDeliveryInstructionFile(project, delivery, sanitized);
-  if (!fileResult?.ok) {
-    delivery.lastError = fileResult?.error || "delivery-file-write-failed";
-    return {
-      ok: false,
-      provider: adapter.provider,
-      method: adapter.method,
-      detail: adapter.detail,
-      error: delivery.lastError
-    };
-  }
-
-  const fileRef = delivery.deliveryFileAbsolutePath || delivery.deliveryFilePath;
-  const instruction = stripTerminalControlChars(
-    `请读取并执行 CosS 投递文件：${fileRef}。以该文件为唯一新增指令，忽略输入框已有提示或示例；执行中只使用 COSS_AGENT_STATUS:running，完成时输出 COSS_AGENT_STATUS:done。`
-  );
-  const instructionChunks = chunkTerminalText(instruction).map((data) => ({ data, delayAfter: 45 }));
-  const ok = await sendTerminalInputChunks(targetWindow.id, [
-    { data: "\x05", delayAfter: 90 },
-    { data: "\x15", delayAfter: 90 },
-    { data: "\x0b", delayAfter: 160 },
-    ...instructionChunks,
-    { data: "", delayAfter: 800 },
-    { data: "\r", delayAfter: 220 },
-    { data: "\x1b[13u", delayAfter: 0 }
-  ]);
-  return {
-    ok,
-    provider: adapter.provider,
-    method: adapter.method,
-    detail: adapter.detail,
-    deliveryFilePath: delivery.deliveryFilePath,
-    deliveryFileAbsolutePath: delivery.deliveryFileAbsolutePath,
-    error: ok ? "" : "terminal-write-failed"
-  };
 }
 
 function getDeliveriesForMessage(project, messageId) {
@@ -5457,35 +5195,6 @@ function getOutputRefsForMessage(project, messageId) {
 
 function getOutputRefsForDelivery(project, deliveryId) {
   return (project?.terminalOutputRefs || []).filter((ref) => ref.deliveryId === deliveryId);
-}
-
-function isPasteOnlyTerminalFeedback(excerpt) {
-  return /^\s*\[Pasted text #\d+(?:(?:\s*\+\s*|\s*:\s*)\d+ lines)?\]\s*$/i.test(String(excerpt || "").trim());
-}
-
-function isDeliveryInstructionEcho(excerpt) {
-  const text = stripTerminalControlChars(excerpt);
-  return /璇疯鍙栧苟鎵ц CosS 鎶曢€掓枃浠|请读取并执行 CosS 投递文件/.test(text);
-}
-
-function isDeliverySystemFeedback(excerpt) {
-  const text = stripTerminalControlChars(excerpt);
-  if (!text) {
-    return true;
-  }
-  if (/CosS[\s\S]{0,120}terminal/i.test(text) && /(工作目录|请求模式|权限模式|会话|COSS_|宸ヤ綔|璇锋眰|鏉冮檺|浼氳瘽)/i.test(text)) {
-    return true;
-  }
-  if (/(CodeBuddy Code|Tips for getting started|Recent activity|for shortcuts|Press\s+(?:Esc|Ctrl|\/)|Open Web UI)/i.test(text)) {
-    return true;
-  }
-  if (/(shortcut|shortcuts)/i.test(text) || /^\s*[>?]\s*$/.test(text) || /^\s*[>?]\s*for\s+\w+/i.test(text)) {
-    return true;
-  }
-  if (isPasteOnlyTerminalFeedback(text) || isDeliveryInstructionEcho(text)) {
-    return true;
-  }
-  return /CosS/i.test(text) && /(投递|delivery|确认|等待|submitted|confirmed|waiting|鎶曢|纭|绛夊緟)/i.test(text);
 }
 
 function hasRealDeliveryOutput(project, delivery) {
@@ -5538,15 +5247,6 @@ function markDeliveryIfStuck(deliveryId) {
     scheduleAgentDeliveryQueueDrain(delivery.windowId, 300);
   }
   return true;
-}
-
-function isAgentApprovalPromptOutput(excerpt) {
-  const text = stripTerminalControlChars(excerpt);
-  return [
-    /do you want to (?:create|edit|modify|overwrite|update|write|delete|run|execute)\b[\s\S]{0,600}\?/i,
-    /(?:yes,\s*)?allow (?:all )?(?:edits|changes|commands)/i,
-    /(?:需要|是否).{0,80}(?:确认|批准|允许|授权)/
-  ].some((pattern) => pattern.test(text));
 }
 
 function getDeliveryStatusLabel(status) {
@@ -5870,6 +5570,7 @@ function recordTerminalOutputReference(windowId, data) {
   if (!excerpt || excerpt.length < 2) {
     return;
   }
+  rendererServices.outputTracker.record(windowId, excerpt);
   const delivery = project.agentDeliveries?.find((item) => item.id === win.lastAgentDeliveryId);
   if (!delivery || !["sent", "submitted", "responded", "waiting"].includes(delivery.status)) {
     return;
@@ -6006,132 +5707,6 @@ function getProjectTimelineEvents(project) {
     .slice(0, 120);
 }
 
-function getTimelineItemKey(item) {
-  return `${item.kind}:${item.id}`;
-}
-
-function getTimelineItemDate(item) {
-  return new Date(item.time || 0);
-}
-
-function getTimelineItemLabel(item) {
-  if (item.kind === "agent-event") {
-    const event = item.event;
-    const toolSuffix = event.toolName ? ` · ${event.toolName}` : "";
-    return {
-      title: `Agent · ${getRoleName(event.roleId)}`,
-      subtitle: `${event.status || event.type || "event"}${toolSuffix}`,
-      summary: event.message || event.sessionId || t("delivery.event.default", "Agent 输出了状态事件。")
-    };
-  }
-
-  const message = item.message;
-  return {
-    title: getRoleName(message.fromRoleId),
-    subtitle: message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、"),
-    summary: message.content
-  };
-}
-
-function renderTimelineNode(item, isSelected, index, total) {
-  const key = getTimelineItemKey(item);
-  const labels = getTimelineItemLabel(item);
-  const statusClass = item.kind === "agent-event"
-    ? normalizeAgentEventStatus(item.event.status) || item.event.status || "running"
-    : "message";
-  const nodeClasses = [
-    "message-timeline-node",
-    item.kind,
-    item.kind === "agent-event" ? "agent-timeline-row" : "",
-    statusClass,
-    isSelected ? "active" : "",
-    item.kind === "message" && item.message.toRoleIds.length > 1 ? "branching" : ""
-  ].filter(Boolean).join(" ");
-  const timeLabel = formatDateTime(item.time);
-  const branchTargets = item.kind === "message" && item.message.toRoleIds.length > 1
-    ? `
-      <div class="message-branch-targets" aria-label="${escapeHtml(t("nav.branchTargets", "分叉接收角色"))}">
-        ${item.message.toRoleIds.map((roleId) => `<span>${escapeHtml(getRoleName(roleId))}</span>`).join("")}
-      </div>
-    `
-    : "";
-  const singleTarget = item.kind === "message" && item.message.toRoleIds.length === 1
-    ? `<div class="message-node-target">${escapeHtml(labels.subtitle)}</div>`
-    : "";
-
-  return `
-    <button class="${escapeHtml(nodeClasses)}"
-      data-action="select-message-timeline-node"
-      data-timeline-item-id="${escapeHtml(key)}"
-      style="--node-index:${index}; --node-count:${total};"
-      aria-pressed="${isSelected ? "true" : "false"}">
-      <span class="message-node-time">${escapeHtml(timeLabel)}</span>
-      <span class="message-node-dot"></span>
-      <span class="message-node-title">${escapeHtml(labels.title)}</span>
-      <span class="message-node-summary">${escapeHtml(labels.summary)}</span>
-      ${singleTarget}
-      ${branchTargets}
-    </button>
-  `;
-}
-
-function renderTimelineDetail(project, item) {
-  if (!item) {
-    return `<div class="message-empty">${escapeHtml(t("nav.selectTimelineNode", "请选择时间轴节点查看详情。"))}</div>`;
-  }
-
-  if (item.kind === "agent-event") {
-    const event = item.event;
-    const toNames = event.toRoleIds.length > 0
-      ? ` → ${event.toRoleIds.map((roleId) => getRoleName(roleId)).join("、")}`
-      : "";
-    return `
-      <div class="message-row timeline-row agent-timeline-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}" data-agent-event-id="${escapeHtml(event.id)}">
-        <div class="message-row-head">
-          <strong>${escapeHtml(t("timeline.agentEvent", "Agent 事件"))} · ${escapeHtml(getRoleName(event.roleId))}${escapeHtml(toNames)}</strong>
-          <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
-        </div>
-        <div class="message-meta">
-          <span>${escapeHtml(event.taskId ? getMessageTaskLabel(event.taskId) : t("taskList.sessionEvent", "会话事件"))}</span>
-          <span>${escapeHtml(event.status || "event")}</span>
-          <span>${escapeHtml(event.structured ? "structured-event" : event.type || "status")}</span>
-          ${event.toolName ? `<span>${escapeHtml(event.toolName)}</span>` : ""}
-        </div>
-        <p>${escapeHtml(event.message || event.sessionId || t("delivery.event.default", "Agent 输出了状态事件。"))}</p>
-      </div>
-    `;
-  }
-
-  const message = item.message;
-  const fromRole = getRole(message.fromRoleId);
-  const toNames = message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、");
-  const channelLabel = message.channelType === "task" ? getMessageTaskLabel(message.taskId) : t("taskList.privateChat", "私聊");
-  const refs = getOutputRefsForMessage(project, message.id);
-  const injectedLabel = message.injectedWindowIds?.length
-    ? `<span>${escapeHtml(t("taskList.injected", "已注入 {{count}} 个终端", { count: message.injectedWindowIds.length }))}</span>`
-    : "";
-
-  return `
-    <div class="message-row timeline-row" data-message-id="${escapeHtml(message.id)}">
-      <div class="message-row-head">
-        <strong>${escapeHtml(fromRole.name)} → ${escapeHtml(toNames)}</strong>
-        <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
-      </div>
-      <div class="message-meta">
-        <span>${escapeHtml(channelLabel)}</span>
-        <span>${escapeHtml(message.source || "manual")}</span>
-        ${injectedLabel}
-        ${refs.length ? `<span>${escapeHtml(t("taskList.outputRefs", "{{count}} 条输出引用", { count: refs.length }))}</span>` : ""}
-      </div>
-      ${renderRelayStageChips(project, message)}
-      <p>${escapeHtml(message.content)}</p>
-      <div class="message-row-actions">
-        ${refs.length ? `<button class="secondary-button compact" data-action="show-terminal-output-refs" data-message-id="${escapeHtml(message.id)}">${escapeHtml(t("taskList.viewOutput", "查看输出"))}</button>` : ""}
-      </div>
-    </div>
-  `;
-}
-
 function normalizeAgentFlowSelection(project) {
   if (!messageFlowSelection.roleId && !messageFlowSelection.edgeKey) {
     return false;
@@ -6144,40 +5719,6 @@ function normalizeAgentFlowSelection(project) {
   }
   messageFlowSelection = { roleId: "", edgeKey: "" };
   return true;
-}
-
-function renderMessageRows(project) {
-  normalizeAgentFlowSelection(project);
-  const timeline = getProjectTimelineEvents(project);
-  if (timeline.length === 0) {
-    selectedTimelineItemId = "";
-    return `
-      ${renderAgentFlowGraph(project)}
-      <div class="message-empty">${escapeHtml(t("nav.noEvents", "暂无协作事件。发送一条消息，创建任务，或等待 Agent 输出结构化事件。"))}</div>
-    `;
-  }
-
-  const timelineKeys = new Set(timeline.map(getTimelineItemKey));
-  if (!selectedTimelineItemId || !timelineKeys.has(selectedTimelineItemId)) {
-    selectedTimelineItemId = getTimelineItemKey(timeline[0]);
-  }
-
-  const chronological = [...timeline].sort((a, b) => getTimelineItemDate(a).getTime() - getTimelineItemDate(b).getTime());
-  const selectedItem = timeline.find((item) => getTimelineItemKey(item) === selectedTimelineItemId) || timeline[0];
-
-  return `
-    ${renderAgentFlowGraph(project)}
-    <div class="message-timeline-shell">
-      <div class="message-timeline-scroll" aria-label="${escapeHtml(t("nav.timelineAria", "协作横向时间轴"))}">
-        <div class="message-timeline-track" style="--timeline-count:${chronological.length};">
-          ${chronological.map((item, index) => renderTimelineNode(item, getTimelineItemKey(item) === selectedTimelineItemId, index, chronological.length)).join("")}
-        </div>
-      </div>
-      <div class="message-timeline-detail" data-message-timeline-detail>
-        ${renderTimelineDetail(project, selectedItem)}
-      </div>
-    </div>
-  `;
 }
 
 function getAgentFlowGraph(project) {
@@ -7562,176 +7103,6 @@ function approvePendingCommand(options = {}) {
   closeModal();
 }
 
-function renderClaudeStatus(status) {
-  if (!status) {
-    return `
-      <div class="claude-status empty" data-claude-status>
-        ${escapeHtml(t("claudeCode.notTested", "尚未检测 Claude Code 环境。"))}
-      </div>
-    `;
-  }
-
-  const headline = status.installed ? t("claudeCode.available", "Claude Code 已可用") : t("claudeCode.notFound", "未检测到 Claude Code");
-  const detail = status.installed
-    ? (status.version || status.versionError || t("claudeCode.versionPresent", "claude 命令存在，但未返回版本信息。"))
-    : `${status.autoInstallDisabled ? t("claudeCode.autoInstall.off", "当前环境已关闭自动安装。") : t("claudeCode.autoInstall.on", "创建 Claude Code 角色终端时会尝试自动安装。")} ${t("claudeCode.recommended", "推荐命令：{{command}}", { command: status.installCommand })}`;
-
-  return `
-    <div class="claude-status ${status.installed ? "ready" : "missing"}" data-claude-status>
-      <strong>${escapeHtml(headline)}</strong>
-      <span>${escapeHtml(t("claudeCode.command", "命令：{{command}}", { command: status.command }))}</span>
-      <span>${escapeHtml(detail)}</span>
-      ${renderAgentAuthLines(status.auth)}
-      <span>${escapeHtml(t("claudeCode.checkedAt", "检测时间：{{time}}", { time: formatDateTime(status.checkedAt) }))}</span>
-    </div>
-  `;
-}
-
-function renderCodexStatus(status) {
-  if (!status) {
-    return `
-      <div class="claude-status empty" data-codex-status>
-        ${escapeHtml(t("codex.notTested", "尚未检测 Codex CLI 环境。"))}
-      </div>
-    `;
-  }
-
-  const headline = status.runnable ? t("codex.available", "Codex CLI 已可用") : t("codex.notFound", "未检测到可运行的 Codex CLI");
-  const npmDetail = status.npm?.usable
-    ? t("codex.npm.ok", "npm 可用：{{version}}（{{command}}）", { version: status.npm.version || t("model.secret.masked", "已检测"), command: status.npm.command || "npm" })
-    : t("codex.npm.fail", "npm 不可用：{{error}}", { error: status.npm?.errorDetail || t("model.secret.empty", "未返回版本信息") });
-  const npmCandidates = status.npm?.candidates?.length
-    ? t("codex.npm.candidates", "npm 候选：{{candidates}}", { candidates: status.npm.candidates.join(" | ") })
-    : "";
-  const lookupDetail = status.lookupPaths?.length
-    ? t("codex.path.hit", "PATH 命中：{{paths}}", { paths: status.lookupPaths.join(" | ") })
-    : t("codex.path.miss", "PATH 未命中 codex。");
-  const detail = status.runnable
-    ? (status.version || t("codex.versionPresent", "codex 命令存在，但未返回版本信息。"))
-    : `${status.autoInstallDisabled ? t("codex.autoInstall.off", "当前已关闭 Codex 自动安装。") : t("codex.autoInstall.on", "创建 Codex Agent 时会尝试自动安装。")} ${t("codex.recommended", "推荐命令：{{command}}", { command: status.installCommand })}`;
-
-  return `
-    <div class="claude-status ${status.runnable ? "ready" : "missing"}" data-codex-status>
-      <strong>${escapeHtml(headline)}</strong>
-      <span>${escapeHtml(t("codex.command", "命令：{{command}}", { command: status.command || "codex" }))}</span>
-      <span>${escapeHtml(detail)}</span>
-      <span>${escapeHtml(npmDetail)}</span>
-      ${npmCandidates ? `<span>${escapeHtml(npmCandidates)}</span>` : ""}
-      <span>${escapeHtml(lookupDetail)}</span>
-      ${status.hasWindowsAppsPackagePath ? `<span>${escapeHtml(t("codex.windowsApps", "检测到 WindowsApps 中的 OpenAI Codex 应用包路径，它可能不能作为 CLI 直接启动。"))}</span>` : ""}
-      ${status.errorDetail ? `<span>${escapeHtml(t("common.error", "错误：{{error}}", { error: status.errorDetail }))}</span>` : ""}
-      ${renderAgentAuthLines(status.auth)}
-      <span>${escapeHtml(t("codex.checkedAt", "检测时间：{{time}}", { time: formatDateTime(status.checkedAt) }))}</span>
-    </div>
-  `;
-}
-
-function renderCodeBuddyStatus(status) {
-  if (!status) {
-    return `
-      <div class="claude-status empty" data-codebuddy-status>
-        ${escapeHtml(t("codeBuddy.notTested", "尚未检测 CodeBuddy Code CLI 环境。"))}
-      </div>
-    `;
-  }
-
-  const headline = status.runnable ? t("codeBuddy.available", "CodeBuddy Code CLI 已可用") : t("codeBuddy.notFound", "未检测到可运行的 CodeBuddy Code CLI");
-  const npmDetail = status.npm?.usable
-    ? t("codeBuddy.npm.ok", "npm 可用：{{version}}（{{command}}）", { version: status.npm.version || t("model.secret.masked", "已检测"), command: status.npm.command || "npm" })
-    : t("codeBuddy.npm.fail", "npm 不可用：{{error}}", { error: status.npm?.errorDetail || t("model.secret.empty", "未返回版本信息") });
-  const npmCandidates = status.npm?.candidates?.length
-    ? t("codeBuddy.npm.candidates", "npm 候选：{{candidates}}", { candidates: status.npm.candidates.join(" | ") })
-    : "";
-  const lookupDetail = status.lookupPaths?.length
-    ? t("codeBuddy.path.hit", "PATH 命中：{{paths}}", { paths: status.lookupPaths.join(" | ") })
-    : t("codeBuddy.path.miss", "PATH 未命中 codebuddy 或 cbc。");
-  const detail = status.runnable
-    ? (status.version || t("codeBuddy.versionPresent", "codebuddy 命令存在，但未返回版本信息。"))
-    : `${status.autoInstallDisabled ? t("codeBuddy.autoInstall.off", "当前已关闭 CodeBuddy Code 自动安装。") : t("codeBuddy.autoInstall.on", "创建 CodeBuddy Agent 时会尝试自动安装。")} ${t("codeBuddy.recommended", "推荐命令：{{command}}", { command: status.installCommand })}`;
-
-  return `
-    <div class="claude-status ${status.runnable ? "ready" : "missing"}" data-codebuddy-status>
-      <strong>${escapeHtml(headline)}</strong>
-      <span>${escapeHtml(t("codeBuddy.command", "命令：{{command}}", { command: status.command || "codebuddy" }))}</span>
-      <span>${escapeHtml(detail)}</span>
-      <span>${escapeHtml(npmDetail)}</span>
-      ${npmCandidates ? `<span>${escapeHtml(npmCandidates)}</span>` : ""}
-      <span>${escapeHtml(lookupDetail)}</span>
-      ${status.errorDetail ? `<span>${escapeHtml(t("common.error", "错误：{{error}}", { error: status.errorDetail }))}</span>` : ""}
-      ${renderAgentAuthLines(status.auth)}
-      <span>${escapeHtml(t("codeBuddy.checkedAt", "检测时间：{{time}}", { time: formatDateTime(status.checkedAt) }))}</span>
-    </div>
-  `;
-}
-
-function renderAgentAuthLines(auth) {
-  if (!auth) {
-    return "";
-  }
-
-  const sourceLabels = {
-    env: t("agentLogin.source.env", "环境变量"),
-    config: t("agentLogin.source.config", "配置文件"),
-    "config-present": t("agentLogin.source.configPresent", "配置文件存在但未发现登录凭据"),
-    missing: t("agentLogin.source.missing", "未发现配置")
-  };
-  const credentialPath = auth.authPath || auth.configPath || "";
-  const lines = [
-    t("agentLogin.summary", "登录状态：{{status}} · {{source}}", { status: auth.loggedIn ? t("agentLogin.status.loggedIn", "已检测到登录凭据") : t("agentLogin.status.loggedOut", "未检测到登录凭据"), source: sourceLabels[auth.source] || auth.source || t("agentLogin.source.unknown", "未知来源") }),
-    credentialPath ? t("agentLogin.credentialPath", "凭据路径：{{path}}", { path: credentialPath }) + (auth.configExists === false ? t("agentLogin.credentialPath.missing.suffix", "（不存在）") : "") : "",
-    auth.homePath ? t("agentLogin.homePath", "主目录：{{path}}", { path: auth.homePath }) : "",
-    Array.isArray(auth.envKeys) && auth.envKeys.length ? t("agentLogin.envKeys", "命中环境变量：{{keys}}", { keys: auth.envKeys.join(", ") }) : "",
-    auth.configError ? t("agentLogin.configError", "配置读取错误：{{error}}", { error: auth.configError }) : ""
-  ].filter(Boolean);
-
-  return lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("");
-}
-
-function renderAgentLoginTestStatus(provider) {
-  const normalized = normalizeAgentProvider(provider);
-  const status = agentLoginTestStatuses[normalized];
-  const attr = `data-agent-login-status="${escapeHtml(normalized)}"`;
-  if (!status) {
-    return `<div class="model-connectivity-status idle" ${attr}>${escapeHtml(t("agentLogin.notTested", "尚未测试 {{provider}} 远程登录态。", { provider: getAgentProviderLabel(normalized) }))}</div>`;
-  }
-  if (status.state === "testing") {
-    return `<div class="model-connectivity-status testing" ${attr}>${escapeHtml(t("agentLogin.testing", "正在测试远程登录态..."))}</div>`;
-  }
-  if (status.ok) {
-    return `
-      <div class="model-connectivity-status ready" ${attr}>
-        <strong>${escapeHtml(t("agentLogin.ok", "远程登录态可用"))}</strong>
-        <span>${escapeHtml(status.message || t("agentLogin.ok.default", "远程 API 校验通过。"))} · ${escapeHtml(formatDateTime(status.checkedAt))}</span>
-      </div>
-    `;
-  }
-  return `
-    <div class="model-connectivity-status missing" ${attr}>
-      <strong>${escapeHtml(status.skipped ? t("agentLogin.skipped", "远程登录态未测试") : t("agentLogin.failed", "远程登录态不可用"))}</strong>
-      <span>${escapeHtml(status.message || status.error || t("agentLogin.failed.default", "远程 API 校验失败。"))}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
-    </div>
-  `;
-}
-
-function renderLogRows() {
-  const logs = getProjectCommandLogs().slice(0, 60);
-  if (logs.length === 0) {
-    return `<div class="empty-log">${escapeHtml(t("commandAudit.empty", "暂无命令日志。角色终端执行命令后会在这里记录。"))}</div>`;
-  }
-
-  return logs
-    .map((log) => `
-      <div class="log-item">
-        <div class="log-item-main">
-          <strong>${escapeHtml(log.command)}</strong>
-          <span>${escapeHtml(log.roleName)} · ${escapeHtml(log.riskLabel)} · ${escapeHtml(formatDateTime(log.createdAt))}</span>
-        </div>
-        <span class="status-chip ${escapeHtml(log.status)}">${escapeHtml(renderCommandStatus(log.status))}</span>
-      </div>
-    `)
-    .join("");
-}
-
 function showLogsModal() {
   renderModal(`
     <div class="modal log-panel">
@@ -7756,70 +7127,6 @@ function showLogsModal() {
       </div>
     </div>
   `);
-}
-
-function renderAgentProviderOption(value, label, description) {
-  const active = state.settings.agentProvider === value;
-  return `
-    <button class="agent-provider-option ${active ? "active" : ""}" data-action="set-agent-provider" data-provider="${value}">
-      <strong>${escapeHtml(label)}</strong>
-      <span>${escapeHtml(description)}</span>
-    </button>
-  `;
-}
-
-function renderAgentPermissionOption(policy) {
-  const active = normalizeAgentPermissionMode(state.settings.agentPermissionMode) === policy.id;
-  return `
-    <button class="permission-policy-option ${active ? "active" : ""}" data-action="set-agent-permission-mode" data-permission-mode="${escapeHtml(policy.id)}">
-      <strong>${escapeHtml(policy.label)}</strong>
-      <span>${escapeHtml(policy.description)}</span>
-    </button>
-  `;
-}
-
-function renderModelProviderOption(provider) {
-  const config = getModelConfig(provider);
-  const active = state.settings.modelProvider === config.id;
-  const editing = modelEditorProvider === config.id;
-  const usable = canUseModelProvider(config.id);
-  return `
-    <button class="model-provider-option ${active ? "active" : ""} ${editing ? "editing" : ""}" data-action="edit-model-provider" data-provider="${config.id}">
-      <strong>${escapeHtml(config.label)}</strong>
-      <span>${escapeHtml(getModelDisplayName(config))}</span>
-      <small>${config.locked ? escapeHtml(t("model.noApiKey", "无需 API key")) : config.apiKeyRequired ? `${escapeHtml(t("model.field.apiKey", "API key"))}：${escapeHtml(renderMaskedSecret(config.apiKey))}` : `${escapeHtml(t("model.field.apiKey", "API key"))}：${config.apiKey ? escapeHtml(renderMaskedSecret(config.apiKey)) : escapeHtml(t("common.optional", "可选"))}`}</small>
-      <em>${active ? escapeHtml(t("model.currentlyUsed", "当前使用")) : usable ? escapeHtml(t("model.switchable", "可切换")) : escapeHtml(t("model.needApiKey", "需填写 API key"))}</em>
-    </button>
-  `;
-}
-
-function renderModelConnectivityStatus(provider) {
-  const id = normalizeModelProvider(provider);
-  const status = modelConnectivityStatuses[id];
-  if (!status) {
-    return `<div class="model-connectivity-status idle" data-model-connectivity-status="${escapeHtml(id)}">${escapeHtml(t("model.connectivity.idle", "尚未测试连通性。"))}</div>`;
-  }
-
-  if (status.state === "testing") {
-    return `<div class="model-connectivity-status testing" data-model-connectivity-status="${escapeHtml(id)}">${escapeHtml(t("model.connectivity.testing", "正在测试连通性..."))}</div>`;
-  }
-
-  if (status.ok) {
-    const latencyText = Number.isFinite(status.latencyMs) ? ` · ${status.latencyMs}ms` : "";
-    return `
-      <div class="model-connectivity-status ready" data-model-connectivity-status="${escapeHtml(id)}">
-        <strong>${escapeHtml(t("model.connectivity.ok", "连通性正常"))}</strong>
-        <span>${escapeHtml(status.modelName || "")}${latencyText} · ${escapeHtml(formatDateTime(status.checkedAt))}</span>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="model-connectivity-status missing" data-model-connectivity-status="${escapeHtml(id)}">
-      <strong>${escapeHtml(t("model.connectivity.failed", "连通性失败"))}</strong>
-      <span>${escapeHtml(status.error || t("model.connectivity.unavailable", "模型接口不可用。"))}${status.checkedAt ? ` · ${escapeHtml(formatDateTime(status.checkedAt))}` : ""}</span>
-    </div>
-  `;
 }
 
 function renderModelSettingsSection() {
@@ -9596,517 +8903,6 @@ function renderTaskView(project) {
   `;
 }
 
-function renderProgramWindow(win) {
-  const status = getWindowStatus(win);
-  const collaborators = getCollaboratorsForWindow(win);
-  const content = {
-    terminal: renderTerminalContent,
-    browser: renderBrowserContent,
-    file: renderFileContent,
-    task: renderTaskContent,
-    "task-list": renderTaskListContent
-  }[win.type]?.(win) || "";
-
-  return `
-    <article class="program-window ${win.type} ${focusedWindowId === win.id ? "focused" : ""} ${win.maximized ? "maximized" : ""}"
-      data-window-id="${win.id}"
-      style="${renderProgramWindowStyle(win)}">
-      <div class="window-titlebar" data-drag-handle="true" data-window-id="${win.id}">
-        <div class="traffic-lights"><span></span><span></span><span></span></div>
-        <div class="window-title">${escapeHtml(win.title)}</div>
-        <div class="window-controls" data-no-drag="true" data-no-focus="true">
-          <button class="window-control" title="${escapeHtml(t("window.minimize", "最小化"))}" data-action="minimize-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${escapeHtml(t("window.minimize", "最小化"))}">&#8211;</button>
-          <button class="window-control" title="${escapeHtml(win.maximized ? t("window.restore", "还原") : t("window.maximize", "最大化"))}" data-action="toggle-maximize-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${escapeHtml(win.maximized ? t("window.restore", "还原窗口") : t("window.maximize", "最大化窗口"))}">${win.maximized ? "&#10064;" : "&#9633;"}</button>
-          <button class="window-control" title="${escapeHtml(t("common.close", "关闭"))}" data-action="close-window" data-window-id="${win.id}" data-no-drag="true" data-no-focus="true" aria-label="${escapeHtml(t("window.close", "关闭窗口"))}">×</button>
-        </div>
-      </div>
-      <div class="window-content">${content}</div>
-      ${renderResizeHandles(win)}
-    </article>
-  `;
-}
-
-function renderCollabOverlay(project) {
-  const badges = getVisibleWindows(project)
-    .map((win) => {
-      const status = getWindowStatus(win);
-      const collaborators = getCollaboratorsForWindow(win);
-      const relayStage = getAgentRelayStageForWindow(win);
-      const isAgentWindow = win.type === "terminal" && normalizeTerminalMode(win.terminalMode) === "agent";
-      const relayClass = isAgentWindow ? `relay-${relayStage.className || getRelayStageClass(relayStage.stage)}` : "";
-      const badgeTitle = isAgentWindow
-        ? t("collab.statusWithRelay", "协作状态：{{status}}；Agent 接力阶段：{{label}}", { status: getStatusLabel(status), label: relayStage.label })
-        : t("collab.status", "协作状态：{{status}}", { status: getStatusLabel(status) });
-      const badgeContent = isAgentWindow
-        ? (relayStage.symbol || getRelayStageSymbol(relayStage.stage))
-        : (collaborators.length || statusSymbol(status));
-      return `
-        <div class="collab-overlay-item ${win.maximized ? "maximized" : ""}"
-          data-window-id="${win.id}"
-          style="${renderCollabOverlayStyle(win)}">
-          <button class="collab-badge ${status} ${relayClass}" title="${escapeHtml(badgeTitle)}" data-action="toggle-popover" data-window-id="${win.id}" data-relay-stage="${escapeHtml(relayStage.stage || "idle")}">
-            ${escapeHtml(badgeContent)}
-          </button>
-          ${activePopoverWindowId === win.id ? renderCollabPopover(win, collaborators, status, relayStage) : ""}
-        </div>
-      `;
-    })
-    .join("");
-
-  return `<div class="collab-overlay">${badges}</div>`;
-}
-
-function renderTerminalContent(win) {
-  const role = getRole(win.roleId);
-  const agentProvider = normalizeAgentProvider(win.agentProvider || state.settings.agentProvider);
-  const modeLabel = {
-    agent: `Agent(${getAgentProviderLabel(agentProvider)})`,
-    shell: "PowerShell"
-  }[normalizeTerminalMode(win.terminalMode)];
-  return `
-    <div class="terminal-mount" data-terminal-id="${win.id}" data-role-name="${escapeHtml(role.name)}">
-      <div class="terminal-loading">
-        ${escapeHtml(t("terminal.starting", "正在启动 {{role}} {{mode}}...", { role: role.name, mode: modeLabel }))}
-      </div>
-    </div>
-  `;
-}
-
-function renderBrowserContent(win) {
-  const role = getRole(win.roleId);
-  ensureBrowserWindowShape(win);
-  const activeTab = getActiveBrowserTab(win);
-  const url = normalizeBrowserUrl(activeTab?.url || win.browserUrl || DEFAULT_BROWSER_URL);
-  const bookmarks = uniqueStrings(win.browserBookmarks || []);
-  const history = (win.browserHistory || []).slice(-5).reverse();
-  const partition = `persist:coss-${state.activeProjectId || "default"}-${role.id}`;
-  return `
-    <div class="browser-program">
-      <div class="browser-tabs">
-        ${win.browserTabs.map((tab) => `
-          <div class="browser-tab-shell ${tab.id === win.activeBrowserTabId ? "active" : ""}">
-            <button class="browser-tab ${tab.id === win.activeBrowserTabId ? "active" : ""}" data-action="browser-switch-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">
-              ${tab.favicon ? `<img class="browser-tab-favicon" src="${escapeHtml(tab.favicon)}" alt="" />` : `<span class="browser-tab-fallback"></span>`}
-              <span>${escapeHtml(tab.title || tab.url || t("browser.newTab", "新标签"))}</span>
-            </button>
-            ${win.browserTabs.length > 1 ? `<button class="browser-tab-close" title="${escapeHtml(t("browser.closeTab", "关闭标签"))}" data-action="browser-close-tab" data-window-id="${escapeHtml(win.id)}" data-tab-id="${escapeHtml(tab.id)}">×</button>` : ""}
-          </div>
-        `).join("")}
-        <button class="icon-button" title="${escapeHtml(t("browser.newTab", "新标签"))}" data-action="browser-new-tab" data-window-id="${escapeHtml(win.id)}">+</button>
-      </div>
-      <div class="browser-bar">
-        <button class="icon-button" title="${escapeHtml(t("browser.back", "后退"))}" data-action="browser-back" data-window-id="${escapeHtml(win.id)}">‹</button>
-        <button class="icon-button" title="${escapeHtml(t("browser.forward", "前进"))}" data-action="browser-forward" data-window-id="${escapeHtml(win.id)}">›</button>
-        <button class="icon-button" title="${escapeHtml(t("browser.reload", "刷新"))}" data-action="browser-reload" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
-        <input class="browser-address" data-browser-address="${escapeHtml(win.id)}" value="${escapeHtml(url)}" />
-        <button class="primary-button compact" data-action="browser-go" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("browser.go", "打开"))}</button>
-        <button class="secondary-button compact" data-action="browser-bookmark" data-window-id="${escapeHtml(win.id)}">${escapeHtml(bookmarks.includes(url) ? t("browser.bookmarked", "已收藏") : t("browser.bookmark", "收藏"))}</button>
-      </div>
-      <div class="browser-quick-links">
-        <span>${escapeHtml(t("browser.bookmarks", "收藏"))}</span>
-        ${bookmarks.slice(-5).reverse().map((item) => `<button data-action="browser-open-bookmark" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("") || `<em>${escapeHtml(t("browser.noBookmarks", "暂无"))}</em>`}
-        <span>${escapeHtml(t("browser.history", "历史"))}</span>
-        ${history.map((item) => `<button data-action="browser-open-history" data-window-id="${escapeHtml(win.id)}" data-url="${escapeHtml(item.url)}">${escapeHtml(item.title || item.url)}</button>`).join("") || `<em>${escapeHtml(t("browser.noBookmarks", "暂无"))}</em>`}
-      </div>
-      <div class="browser-status" data-browser-status="${escapeHtml(win.id)}">${escapeHtml(win.browserStatus || t("browser.ready", "{{role}} 浏览器就绪", { role: role.name }))}</div>
-      <webview class="browser-webview"
-        data-browser-webview="${escapeHtml(win.id)}"
-        data-browser-tab-id="${escapeHtml(activeTab?.id || "")}"
-        src="${escapeHtml(url)}"
-        partition="${escapeHtml(partition)}"
-        allowpopups="false"></webview>
-    </div>
-  `;
-}
-
-function getFileEditorMetrics(content, cursorIndex = 0) {
-  const text = String(content || "");
-  const safeCursor = Math.max(0, Math.min(Number(cursorIndex) || 0, text.length));
-  const beforeCursor = text.slice(0, safeCursor);
-  const lines = Math.max(1, text.split(/\r\n|\r|\n/).length);
-  const line = beforeCursor.split(/\r\n|\r|\n/).length;
-  const lastBreak = Math.max(beforeCursor.lastIndexOf("\n"), beforeCursor.lastIndexOf("\r"));
-  const column = safeCursor - lastBreak;
-  return {
-    line,
-    column,
-    lines,
-    chars: text.length
-  };
-}
-
-function renderFileLineNumbers(content) {
-  const metrics = getFileEditorMetrics(content);
-  return Array.from({ length: metrics.lines }, (_item, index) => String(index + 1)).join("\n");
-}
-
-function renderFileEditorFooter(win, content = win.fileDraft || "", cursorIndex = 0) {
-  const metrics = getFileEditorMetrics(content, cursorIndex);
-  const dirtyLabel = win.fileDirty ? t("file.unsaved", "未保存") : t("file.saved", "已保存");
-  const pathLabel = win.filePath || t("file.noFile", "未选择文件");
-  return t("file.footer", "{{path}} · 第 {{line}} 行，第 {{column}} 列 · {{lines}} 行 · {{chars}} 字符 · {{dirty}} · Ctrl+S 保存", { path: pathLabel, line: metrics.line, column: metrics.column, lines: metrics.lines, chars: metrics.chars, dirty: dirtyLabel });
-}
-
-function syncFileEditorChrome(windowId) {
-  const win = getWindowState(windowId);
-  const editor = document.querySelector(`[data-file-editor="${CSS.escape(windowId)}"]`);
-  if (!win || !editor) {
-    return;
-  }
-
-  const content = String(editor.value || "");
-  const lines = document.querySelector(`[data-file-lines="${CSS.escape(windowId)}"]`);
-  if (lines) {
-    lines.textContent = renderFileLineNumbers(content);
-    lines.scrollTop = editor.scrollTop;
-  }
-  const footer = document.querySelector(`[data-file-footer="${CSS.escape(windowId)}"]`);
-  if (footer) {
-    footer.textContent = renderFileEditorFooter(win, content, editor.selectionStart || 0);
-  }
-}
-
-function renderFileContent(win) {
-  const role = getRole(win.roleId);
-  const project = getProject();
-  const fileList = Array.isArray(win.fileList) ? win.fileList : [];
-  const fileDraft = String(win.fileDraft || "");
-  return `
-    <div class="real-file-editor" data-file-window="${escapeHtml(win.id)}">
-      <div class="file-toolbar">
-        <div class="file-path-row">
-          <input class="file-path-input" data-file-path="${escapeHtml(win.id)}" value="${escapeHtml(win.filePath || "")}" placeholder="${escapeHtml(t("file.placeholder.path", "输入项目内文件路径，例如 README.md"))}" />
-          <button class="secondary-button compact" data-action="file-open" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.open", "打开"))}</button>
-          <button class="secondary-button compact" data-action="file-pick" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.pick", "选择"))}</button>
-          <button class="primary-button compact" data-action="file-save" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.save", "保存"))}</button>
-          <button class="secondary-button compact" data-action="file-save-as" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.saveAs", "另存为"))}</button>
-          <button class="secondary-button compact" data-action="file-create-folder" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.newFolder", "新建文件夹"))}</button>
-          <button class="secondary-button compact" data-action="file-rename" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.rename", "重命名"))}</button>
-          <button class="secondary-button compact danger" data-action="file-delete" data-window-id="${escapeHtml(win.id)}">${escapeHtml(t("file.delete", "删除"))}</button>
-        </div>
-        <div class="file-status ${win.fileError ? "error" : ""}" data-file-status="${escapeHtml(win.id)}">
-          ${escapeHtml(win.fileError || win.fileStatus || t("file.editorReady", "{{role}} 文件编辑器 · {{path}}", { role: role.name, path: project ? project.path : t("file.noProject", "未选择项目") }))}
-        </div>
-      </div>
-      <div class="file-editor-layout">
-        <aside class="file-list">
-          <div class="file-list-title">
-            <span>${escapeHtml(t("file.projectFiles", "项目文件"))}</span>
-            <button class="icon-button" title="${escapeHtml(t("file.refreshList", "刷新文件列表"))}" data-action="file-refresh-list" data-window-id="${escapeHtml(win.id)}">${icon("refresh")}</button>
-          </div>
-          <div class="file-list-items">
-            ${
-              fileList.length
-                ? fileList.slice(0, 120).map((file) => `
-                    <button class="file-list-item ${file.path === win.filePath ? "active" : ""} ${file.type === "directory" ? "folder" : ""}"
-                      data-action="${file.type === "directory" ? "file-select-list-path" : "file-open-list-item"}"
-                      data-window-id="${escapeHtml(win.id)}"
-                      data-file-path-value="${escapeHtml(file.path)}">
-                      <span>${file.type === "directory" ? "[dir] " : ""}${escapeHtml(file.path)}</span>
-                    </button>
-                  `).join("")
-                : `<div class="file-list-empty">${escapeHtml(t("file.listEmpty", "点击刷新或输入路径打开项目文件。"))}</div>`
-            }
-          </div>
-        </aside>
-        <section class="file-editor-pane">
-          <div class="file-editor-main">
-            <pre class="file-editor-lines" data-file-lines="${escapeHtml(win.id)}">${escapeHtml(renderFileLineNumbers(fileDraft))}</pre>
-            <textarea class="file-editor-textarea" data-file-editor="${escapeHtml(win.id)}" spellcheck="false" placeholder="${escapeHtml(t("file.placeholder.editor", "打开或新建项目内文本文件。"))}">${escapeHtml(fileDraft)}</textarea>
-          </div>
-          <div class="file-editor-footer" data-file-footer="${escapeHtml(win.id)}">${escapeHtml(renderFileEditorFooter(win, fileDraft))}</div>
-        </section>
-      </div>
-    </div>
-  `;
-}
-
-function renderTaskContent() {
-  const project = getProject();
-  const tasks = project ? getConversationTasks(project) : [];
-  if (tasks.length === 0) {
-    return `<div class="browser-blank">${escapeHtml(t("task.content.empty", "当前对话暂无任务。右键空白处或点击新建任务后，会在这个对话中持续追加任务。"))}</div>`;
-  }
-
-  const pairs = tasks.flatMap((task) => task.subtasks.map((subtask) => ({ task, subtask })));
-  const availableRoleIds = uniqueRoleIds(pairs.map(({ subtask }) => subtask.roleId));
-  if (taskRoleFilter && !availableRoleIds.includes(taskRoleFilter)) {
-    taskRoleFilter = "";
-  }
-  const filteredPairs = taskRoleFilter
-    ? pairs.filter(({ subtask }) => subtask.roleId === taskRoleFilter)
-    : pairs;
-  const roleFilter = `
-    <div class="task-filterbar">
-      <label>
-        <span>${escapeHtml(t("task.filter.role", "角色过滤"))}</span>
-        <select id="taskRoleFilter">
-          <option value="">${escapeHtml(t("task.filter.allRoles", "全部角色"))}</option>
-          ${availableRoleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskRoleFilter ? "selected" : ""}>${escapeHtml(getRoleName(roleId))}</option>`).join("")}
-        </select>
-      </label>
-    </div>
-  `;
-  const taskCards = filteredPairs
-    .map(({ task, subtask }) => {
-      const kernelState = getSubtaskKernelProjection(task, subtask);
-      const leaseLabel = kernelState.step?.lease?.expiresAt
-        ? t("task.lease.validUntil", "有效期至 {{time}}", { time: formatDateTime(kernelState.step.lease.expiresAt) })
-        : t("task.lease.unset", "未设置有效期");
-      return `
-      <div class="task-card ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
-        <div class="task-card-head">
-          <div class="task-role">${escapeHtml(getRoleName(subtask.roleId))} · ${escapeHtml(task.title)} · ${escapeHtml(getTaskModelName(task))}</div>
-          <div class="task-chip-group">${renderKernelPhaseChip(kernelState.phase, kernelState)}${renderSubtaskStatusChip(kernelState.status)}</div>
-        </div>
-        <div class="task-title">${escapeHtml(subtask.title)}</div>
-        <div class="task-desc">${escapeHtml(subtask.description)}</div>
-        <div class="task-desc">${escapeHtml(t("task.currentStep", "当前步骤：{{step}}", { step: kernelState.step?.id || t("task.stepPending", "待分配") }))} · ${escapeHtml(leaseLabel)}</div>
-        <div class="task-desc">${escapeHtml(t("task.planSource", "规划来源：{{source}}", { source: task.planner?.status === "success" ? t("task.planSource.ai", "智能规划") : t("task.planSource.local", "本地规则") }))}</div>
-        ${renderSubtaskActions(task.id, subtask)}
-      </div>
-    `;
-    })
-    .join("");
-
-  return `${roleFilter}${taskCards || `<div class="message-empty">${escapeHtml(t("task.content.noSubtasks", "当前角色暂无子任务。"))}</div>`}${renderRecentAgentEvents(project)}`;
-}
-
-function renderTaskListFilters(project, tasks) {
-  const roleIds = uniqueRoleIds(tasks.flatMap((task) => getTaskRoleIds(task)));
-  const statuses = uniqueStrings(tasks.map(getTaskStatusValue));
-  const models = uniqueStrings(tasks.map(getTaskModelName));
-  return `
-    <div class="task-list-filters">
-      <label>
-        <span>${escapeHtml(t("taskList.filter.search", "搜索"))}</span>
-        <input id="taskListSearch" value="${escapeHtml(taskListFilters.query)}" placeholder="${escapeHtml(t("taskList.filter.searchPlaceholder", "任务、角色、说明"))}" />
-      </label>
-      <label>
-        <span>${escapeHtml(t("taskList.filter.role", "角色"))}</span>
-        <select id="taskListRoleFilter">
-          <option value="">${escapeHtml(t("taskList.filter.allRoles", "全部角色"))}</option>
-          ${roleIds.map((roleId) => `<option value="${escapeHtml(roleId)}" ${roleId === taskListFilters.roleId ? "selected" : ""}>${escapeHtml(getRoleName(roleId))}</option>`).join("")}
-        </select>
-      </label>
-      <label>
-        <span>${escapeHtml(t("taskList.filter.status", "状态"))}</span>
-        <select id="taskListStatusFilter">
-          <option value="">${escapeHtml(t("taskList.filter.allStatuses", "全部状态"))}</option>
-          ${statuses.map((status) => `<option value="${escapeHtml(status)}" ${status === taskListFilters.status ? "selected" : ""}>${escapeHtml(SUBTASK_STATUS_DEFS[status]?.label || status)}</option>`).join("")}
-        </select>
-      </label>
-      <label>
-        <span>${escapeHtml(t("taskList.filter.model", "模型"))}</span>
-        <select id="taskListModelFilter">
-          <option value="">${escapeHtml(t("taskList.filter.allModels", "全部模型"))}</option>
-          ${models.map((model) => `<option value="${escapeHtml(model)}" ${model === taskListFilters.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
-        </select>
-      </label>
-      <label class="task-list-check">
-        <input id="taskListIncludeArchived" type="checkbox" ${taskListFilters.includeArchived ? "checked" : ""} />
-        <span>${escapeHtml(t("taskList.filter.showArchived", "显示归档"))}</span>
-      </label>
-    </div>
-  `;
-}
-
-function renderTaskListDetail(project, task) {
-  if (!task) {
-    return `
-      <aside class="task-list-detail">
-        <div class="message-empty">${escapeHtml(t("taskList.selectTask", "选择一个任务查看详情。"))}</div>
-      </aside>
-    `;
-  }
-
-  const messages = getTaskMessages(project, task.id);
-  const deliveries = getTaskDeliveries(project, task.id);
-  const refs = getTaskOutputRefs(project, task.id);
-  const projection = getTaskKernelProjection(task);
-  const status = projection.status;
-  const doneCount = projection.doneCount;
-  return `
-    <aside class="task-list-detail">
-      <div class="task-detail-head">
-        <div>
-          <strong>${escapeHtml(task.title || t("taskList.untitledTask", "未命名任务"))}</strong>
-          <span>${escapeHtml(task.goal || "")}</span>
-        </div>
-        ${renderSubtaskStatusChip(status)}
-      </div>
-      <div class="task-detail-actions">
-        <button class="secondary-button compact" data-action="show-message-center">${escapeHtml(t("taskList.viewTimeline", "查看时间线"))}</button>
-        ${task.archived
-          ? `<button class="secondary-button compact" data-action="restore-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("taskList.restoreTask", "恢复任务"))}</button>`
-          : `<button class="secondary-button compact" data-action="archive-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("taskList.archiveTask", "归档任务"))}</button>`}
-      </div>
-      <div class="task-detail-metrics">
-        <span>idle ${projection.counts.idle || 0}</span>
-        <span>running ${projection.activeCount || 0}</span>
-        <span>done ${projection.counts.done || 0}</span>
-        <span>locks ${projection.activeLocks.length}</span>
-        <span>approvals ${projection.pendingApprovals.length}</span>
-        <span>events ${projection.events.length}</span>
-        <span>${escapeHtml(t("taskList.metrics.subtasks", "子任务 {{done}}/{{total}}", { done: doneCount, total: task.subtasks?.length || 0 }))}</span>
-        <span>${escapeHtml(t("taskList.metrics.messages", "消息 {{count}}", { count: messages.length }))}</span>
-        <span>${escapeHtml(t("taskList.metrics.deliveries", "投递 {{count}}", { count: deliveries.length }))}</span>
-        <span>${escapeHtml(t("taskList.metrics.outputs", "输出 {{count}}", { count: refs.length }))}</span>
-        <span>${escapeHtml(getTaskModelName(task))}</span>
-      </div>
-      <div class="task-detail-section">
-        <strong>${escapeHtml(t("taskList.detail.subtasks", "子任务"))}</strong>
-        ${(task.subtasks || []).map((subtask) => {
-          const kernelState = getSubtaskKernelProjection(task, subtask);
-          return `
-          <div class="task-detail-subtask ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
-            <span>${escapeHtml(getRoleName(subtask.roleId))}</span>
-            <strong>${escapeHtml(subtask.title)}</strong>
-            <span class="task-chip-group">${renderKernelPhaseChip(kernelState.phase, kernelState)}${renderSubtaskStatusChip(kernelState.status)}</span>
-            <p>${escapeHtml(subtask.description || "")}</p>
-            <p>${escapeHtml(t("task.currentStep", "当前步骤：{{step}}", { step: kernelState.step?.id || t("task.stepPending", "待分配") }))}</p>
-            ${renderSubtaskActions(task.id, subtask)}
-          </div>
-        `;
-        }).join("")}
-      </div>
-      <div class="task-detail-section">
-        <strong>${escapeHtml(t("taskList.detail.deliveries", "关联投递"))}</strong>
-        ${deliveries.length
-          ? deliveries.slice(0, 5).map((delivery) => `
-            <div class="task-detail-linkrow">
-              <span>${escapeHtml(getRoleName(delivery.roleId))} · ${escapeHtml(getDeliveryStatusLabel(delivery.status))}</span>
-              <span>${escapeHtml(delivery.submissionMethod || "pending")}</span>
-            </div>
-          `).join("")
-          : `<div class="message-empty">${escapeHtml(t("taskList.detail.noDeliveries", "暂无投递。"))}</div>`}
-      </div>
-      <div class="task-detail-section">
-        <strong>${escapeHtml(t("taskList.detail.recentMessages", "最近消息"))}</strong>
-        ${messages.length
-          ? messages.slice(-4).reverse().map((message) => `
-            <div class="task-detail-message">
-              <span>${escapeHtml(getRoleName(message.fromRoleId))} -> ${escapeHtml(message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、"))}</span>
-              <p>${escapeHtml(message.content)}</p>
-            </div>
-          `).join("")
-          : `<div class="message-empty">${escapeHtml(t("taskList.detail.noMessages", "暂无消息。"))}</div>`}
-      </div>
-    </aside>
-  `;
-}
-
-function renderTaskListContent() {
-  const project = getProject();
-  const conversation = getActiveDesktop(project);
-
-  if (!project) {
-    return `<div class="browser-blank">${escapeHtml(t("taskList.noProject", "请先选择项目。"))}</div>`;
-  }
-
-  const allTasks = getConversationTasks(project);
-  const visibleTasks = getFilteredConversationTasks(project);
-  const totalSubtasks = allTasks.reduce((sum, task) => sum + (task.subtasks?.length || 0), 0);
-  const archivedCount = allTasks.filter((task) => task.archived).length;
-
-  if (selectedTaskListTaskId && !visibleTasks.some((task) => task.id === selectedTaskListTaskId)) {
-    selectedTaskListTaskId = "";
-  }
-  const selectedTask = visibleTasks.find((task) => task.id === selectedTaskListTaskId) || visibleTasks[0] || null;
-  selectedTaskListTaskId = selectedTask?.id || "";
-
-  return `
-    <div class="task-list-program">
-      <div class="task-list-head">
-        <strong>${escapeHtml(t("taskList.title", "{{name}}任务列表", { name: conversation?.name || t("taskList.currentConversation", "当前对话") }))}</strong>
-        <span>${escapeHtml(t("taskList.header.summary", "{{visible}}/{{total}} 个任务 · {{subtasks}} 个子任务 · {{archived}} 个归档", { visible: visibleTasks.length, total: allTasks.length, subtasks: totalSubtasks, archived: archivedCount }))}</span>
-      </div>
-      ${renderTaskListFilters(project, allTasks)}
-      ${
-        allTasks.length === 0
-          ? `<div class="browser-blank">${escapeHtml(t("taskList.empty.noTasks", "当前对话还没有任务。点击右上角“新建任务”后，任务会持续追加到这个对话中。"))}</div>`
-          : `
-            <div class="task-list-layout">
-              <div class="task-list-items">
-                ${visibleTasks.length ? visibleTasks.map((task, index) => {
-                  const projection = getTaskKernelProjection(task);
-                  const status = projection.status;
-                  const doneCount = projection.doneCount;
-                  return `
-                    <button class="task-list-item ${selectedTask?.id === task.id ? "active" : ""} ${task.archived ? "archived" : ""}" data-action="select-task-list-task" data-task-id="${escapeHtml(task.id)}">
-                      <div class="task-list-row-head">
-                        <div>
-                          <strong>${escapeHtml(task.title || t("taskList.taskIndex", "任务 {{index}}", { index: index + 1 }))}</strong>
-                          <span>${escapeHtml(task.goal || "")}</span>
-                        </div>
-                        ${renderSubtaskStatusChip(status)}
-                      </div>
-                      <div class="task-list-meta">
-                        <span>${escapeHtml(getTaskModelName(task))}</span>
-                        <span>running ${projection.activeCount || 0}</span>
-                        <span>locks ${projection.activeLocks.length}</span>
-                        <span>approvals ${projection.pendingApprovals.length}</span>
-                        <span>${escapeHtml(t("taskList.subtasksDone", "{{done}}/{{total}} 已完成", { done: doneCount, total: task.subtasks?.length || 0 }))}</span>
-                        <span>${escapeHtml(formatDateTime(task.confirmedAt || task.createdAt))}</span>
-                        ${task.archived ? `<span>${escapeHtml(t("taskList.archived", "已归档"))}</span>` : ""}
-                      </div>
-                      <div class="task-list-subtasks">
-                        ${(task.subtasks || []).map((subtask) => {
-                          const kernelState = getSubtaskKernelProjection(task, subtask);
-                          return `
-                          <span class="task-list-subtask ${escapeHtml(kernelState.status)} kernel-phase-${escapeHtml(kernelState.phase)}">
-                            ${escapeHtml(getRoleName(subtask.roleId))} · ${escapeHtml(subtask.title)}
-                          </span>
-                        `;
-                        }).join("")}
-                      </div>
-                    </button>
-                  `;
-                }).join("") : `<div class="message-empty">${escapeHtml(t("taskList.noMatchingTasks", "没有匹配当前筛选条件的任务。"))}</div>`}
-              </div>
-              ${renderTaskListDetail(project, selectedTask)}
-            </div>
-          `
-      }
-    </div>
-  `;
-}
-
-function renderRecentAgentEvents(project) {
-  const events = (project?.agentEvents || []).slice(-6).reverse();
-  if (events.length === 0) {
-    return "";
-  }
-
-  return `
-    <div class="agent-event-panel">
-      <div class="agent-event-panel-title">
-        <strong>${escapeHtml(t("agent.events.title", "Agent 会话事件"))}</strong>
-        <span>${escapeHtml(t("agent.events.recent", "最近 {{count}} 条", { count: events.length }))}</span>
-      </div>
-      ${events.map((event) => `
-        <div class="agent-event-row ${escapeHtml(normalizeAgentEventStatus(event.status) || event.status || "running")}">
-          <strong>${escapeHtml(getRoleName(event.roleId))} · ${escapeHtml(event.provider || "agent")}</strong>
-          <span>${escapeHtml(event.status || "event")} · ${escapeHtml(formatDateTime(event.receivedAt))}</span>
-          <p>${escapeHtml(event.message || event.sessionId || t("delivery.event.default", "Agent 输出了状态事件。"))}</p>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderSubtaskStatusChip(status) {
-  const normalized = normalizeSubtaskStatus(status);
-  return `<span class="subtask-status ${escapeHtml(normalized)}">${escapeHtml(SUBTASK_STATUS_DEFS[normalized].label)}</span>`;
-}
-
-function renderKernelPhaseChip(phase, options = {}) {
-  const normalized = normalizeKernelPhase(phase, options.status || "pending");
-  const def = KERNEL_PHASE_DEFS[normalized] || KERNEL_PHASE_DEFS.idle;
-  const expired = options.leaseExpired === true;
-  return `<span class="kernel-phase-chip ${escapeHtml(normalized)} ${expired ? "expired" : ""}">${escapeHtml(expired ? "租约过期" : def.label)}</span>`;
-}
-
 function getSubtaskTaskUrl(task, subtask) {
   return extractFirstUrl([
     task?.goal || "",
@@ -10155,33 +8951,6 @@ function openTaskUrlForSubtask(taskId, subtaskId) {
   });
   saveState();
   render();
-}
-
-function renderSubtaskActions(taskId, subtask) {
-  const project = getProject();
-  const task = project?.tasks.find((item) => item.id === taskId);
-  const status = normalizeSubtaskStatus(subtask.status);
-  const executeLabel = status === "done" ? t("task.action.reExecute", "重新执行") : t("task.action.execute", "执行");
-  const canExecuteSubtask = task && canManuallyExecuteKernelSubtask(task, subtask);
-  const executeButton = canExecuteSubtask
-    ? `<button class="primary-button compact" data-action="execute-kernel-subtask" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">${escapeHtml(executeLabel)}</button>`
-    : "";
-  const button = (label, nextStatus, kind = "secondary") => (
-    `<button class="${kind}-button compact" data-action="set-subtask-status" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}" data-status="${escapeHtml(nextStatus)}">${escapeHtml(label)}</button>`
-  );
-  const url = getSubtaskTaskUrl(task, subtask);
-  const taskUrlButton = url
-    ? `<button class="secondary-button compact" data-action="open-task-url" data-task-id="${escapeHtml(taskId)}" data-subtask-id="${escapeHtml(subtask.id)}">${escapeHtml(t("task.action.openUrl", "打开任务 URL"))}</button>`
-    : "";
-  let actions = {
-    idle: [button(t("task.action.start", "开始执行"), "running", "primary")],
-    running: [button(t("task.action.markDone", "标记完成"), "done", "primary")],
-    done: [button(t("task.action.reopen", "重新打开"), "idle")]
-  }[status] || [];
-  if (!canExecuteSubtask || status !== "running") {
-    actions = [];
-  }
-  return `<div class="task-actions">${[executeButton, ...actions, taskUrlButton].join("")}</div>`;
 }
 
 function renderCollabPopover(win, collaborators, status, relayStage = getAgentRelayStageForWindow(win)) {
@@ -12110,7 +10879,7 @@ document.addEventListener("click", (event) => {
         const loaded = await window.cossAPI.loadState();
         if (loaded?.projects?.length) {
           normalizeStoredWindowStacks(loaded);
-          state = loaded;
+          replaceAppState(loaded, "storage-import");
         }
       }
       return result;

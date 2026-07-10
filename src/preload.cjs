@@ -1,18 +1,35 @@
 const { contextBridge, ipcRenderer } = require("electron");
+// Sandbox preload scripts cannot require arbitrary local modules. Keep this
+// small mirror aligned with src/shared/ipc-contracts.cjs; main.cjs and tests
+// use the shared source of truth directly.
+const IPC_CHANNELS = Object.freeze({
+  STATE_LOAD: "state:load", STATE_SAVE: "state:save", STATE_META: "state:meta",
+  MCP_INFO: "mcp:info", MCP_CHECK_PROJECT_CONFIG: "mcp:check-project-config",
+  MCP_WRITE_PROJECT_CONFIG: "mcp:write-project-config", MCP_AUDIT_EVENTS: "mcp:audit-events",
+  LLM_PLAN_TASK: "llm:plan-task", LLM_TEST_MODEL: "llm:test-model",
+  APP_INFO: "app:info", APP_OPEN_EXTERNAL_URL: "app:open-external-url", APP_LOG_EVENT: "app:log-event",
+  WORLD_AGENT_RUN: "world-agent:run", TERMINAL_CREATE: "terminal:create",
+  TERMINAL_INPUT: "terminal:input", TERMINAL_RESIZE: "terminal:resize", TERMINAL_DISPOSE: "terminal:dispose"
+});
+const IPC_EVENTS = Object.freeze({
+  APP_MENU_ACTION: "app-menu:action", WINDOW_MAXIMIZED: "window:maximized",
+  BROWSER_OPEN_URL: "browser:open-url", TERMINAL_DATA: "terminal:data",
+  TERMINAL_EXIT: "terminal:exit", TERMINAL_AGENT_EVENT: "terminal:agent-event"
+});
 
 contextBridge.exposeInMainWorld("cossAPI", {
-  loadState: () => ipcRenderer.invoke("state:load"),
-  saveState: (state) => ipcRenderer.invoke("state:save", state),
-  getStateMeta: () => ipcRenderer.invoke("state:meta"),
-  getMcpInfo: (context) => ipcRenderer.invoke("mcp:info", context),
-  checkProjectMcpConfig: (request) => ipcRenderer.invoke("mcp:check-project-config", request),
-  writeProjectMcpConfig: (request) => ipcRenderer.invoke("mcp:write-project-config", request),
-  getMcpAuditEvents: (request) => ipcRenderer.invoke("mcp:audit-events", request),
-  planTask: (request) => ipcRenderer.invoke("llm:plan-task", request),
-  testModelConnectivity: (request) => ipcRenderer.invoke("llm:test-model", request),
-  getAppInfo: () => ipcRenderer.invoke("app:info"),
-  openExternalUrl: (url) => ipcRenderer.invoke("app:open-external-url", url),
-  logEvent: (eventName, payload, level) => ipcRenderer.invoke("app:log-event", eventName, payload, level),
+  loadState: () => ipcRenderer.invoke(IPC_CHANNELS.STATE_LOAD),
+  saveState: (state) => ipcRenderer.invoke(IPC_CHANNELS.STATE_SAVE, state),
+  getStateMeta: () => ipcRenderer.invoke(IPC_CHANNELS.STATE_META),
+  getMcpInfo: (context) => ipcRenderer.invoke(IPC_CHANNELS.MCP_INFO, context),
+  checkProjectMcpConfig: (request) => ipcRenderer.invoke(IPC_CHANNELS.MCP_CHECK_PROJECT_CONFIG, request),
+  writeProjectMcpConfig: (request) => ipcRenderer.invoke(IPC_CHANNELS.MCP_WRITE_PROJECT_CONFIG, request),
+  getMcpAuditEvents: (request) => ipcRenderer.invoke(IPC_CHANNELS.MCP_AUDIT_EVENTS, request),
+  planTask: (request) => ipcRenderer.invoke(IPC_CHANNELS.LLM_PLAN_TASK, request),
+  testModelConnectivity: (request) => ipcRenderer.invoke(IPC_CHANNELS.LLM_TEST_MODEL, request),
+  getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.APP_INFO),
+  openExternalUrl: (url) => ipcRenderer.invoke(IPC_CHANNELS.APP_OPEN_EXTERNAL_URL, url),
+  logEvent: (eventName, payload, level) => ipcRenderer.invoke(IPC_CHANNELS.APP_LOG_EVENT, eventName, payload, level),
   openLogDirectory: () => ipcRenderer.invoke("logs:open-directory"),
   getStorageInfo: () => ipcRenderer.invoke("storage:info"),
   createStorageBackup: () => ipcRenderer.invoke("storage:backup"),
@@ -33,18 +50,18 @@ contextBridge.exposeInMainWorld("cossAPI", {
   isWindowMaximized: () => ipcRenderer.invoke("window:is-maximized"),
   onAppMenuAction: (callback) => {
     const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on("app-menu:action", listener);
-    return () => ipcRenderer.removeListener("app-menu:action", listener);
+    ipcRenderer.on(IPC_EVENTS.APP_MENU_ACTION, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.APP_MENU_ACTION, listener);
   },
   onWindowMaximized: (callback) => {
     const listener = (_event, maximized) => callback(maximized);
-    ipcRenderer.on("window:maximized", listener);
-    return () => ipcRenderer.removeListener("window:maximized", listener);
+    ipcRenderer.on(IPC_EVENTS.WINDOW_MAXIMIZED, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.WINDOW_MAXIMIZED, listener);
   },
   onBrowserOpenUrl: (callback) => {
     const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on("browser:open-url", listener);
-    return () => ipcRenderer.removeListener("browser:open-url", listener);
+    ipcRenderer.on(IPC_EVENTS.BROWSER_OPEN_URL, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.BROWSER_OPEN_URL, listener);
   },
   getClaudeStatus: () => ipcRenderer.invoke("claude:status"),
   installClaude: () => ipcRenderer.invoke("agent:install-claude"),
@@ -53,24 +70,24 @@ contextBridge.exposeInMainWorld("cossAPI", {
   getCodexStatus: () => ipcRenderer.invoke("codex:status"),
   getCodeBuddyStatus: (request) => ipcRenderer.invoke("codebuddy:status", request),
   testAgentLogin: (request) => ipcRenderer.invoke("agent:login-test", request),
-  runWorldAgent: (request) => ipcRenderer.invoke("world-agent:run", request),
-  createTerminal: (options) => ipcRenderer.invoke("terminal:create", options),
-  sendTerminalInput: (id, data, options) => ipcRenderer.invoke("terminal:input", id, data, options),
-  resizeTerminal: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", id, cols, rows),
-  disposeTerminal: (id) => ipcRenderer.invoke("terminal:dispose", id),
+  runWorldAgent: (request) => ipcRenderer.invoke(IPC_CHANNELS.WORLD_AGENT_RUN, request),
+  createTerminal: (options) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_CREATE, options),
+  sendTerminalInput: (id, data, options) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_INPUT, id, data, options),
+  resizeTerminal: (id, cols, rows) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_RESIZE, id, cols, rows),
+  disposeTerminal: (id) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_DISPOSE, id),
   onTerminalData: (callback) => {
     const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on("terminal:data", listener);
-    return () => ipcRenderer.removeListener("terminal:data", listener);
+    ipcRenderer.on(IPC_EVENTS.TERMINAL_DATA, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.TERMINAL_DATA, listener);
   },
   onTerminalExit: (callback) => {
     const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on("terminal:exit", listener);
-    return () => ipcRenderer.removeListener("terminal:exit", listener);
+    ipcRenderer.on(IPC_EVENTS.TERMINAL_EXIT, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.TERMINAL_EXIT, listener);
   },
   onAgentEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on("terminal:agent-event", listener);
-    return () => ipcRenderer.removeListener("terminal:agent-event", listener);
+    ipcRenderer.on(IPC_EVENTS.TERMINAL_AGENT_EVENT, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.TERMINAL_AGENT_EVENT, listener);
   }
 });
