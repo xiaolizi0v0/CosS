@@ -156,7 +156,10 @@ CosS/
 ├── src/
 │   ├── main.cjs                 # Electron 主进程
 │   ├── preload.cjs              # 预加载脚本（IPC 桥接，76 个方法）
-│   ├── renderer.js              # 渲染进程
+│   ├── renderer.js              # 渲染进程编排与交互入口
+│   ├── renderer/
+│   │   ├── config.js            # 角色、模型、权限和风险规则
+│   │   └── world.js             # 2D 世界 Agent 协作功能
 │   ├── coss-mcp-server.cjs      # MCP 服务器
 │   ├── orchestrator/
 │   │   └── kernel.cjs           # Kernel 内核
@@ -174,6 +177,16 @@ CosS/
 ├── .mcp.json                    # MCP 服务器注册
 └── package.json
 ```
+
+### 渲染层拆分约定
+
+渲染进程按职责逐步拆分为三类模块：
+
+1. **配置模块**（`renderer/config.js`）只保存角色、模型、权限、风险和界面元数据，不直接读写应用状态。
+2. **领域模块**（`renderer/world.js`）负责 2D 世界的任务、聊天和 Agent 运行流程，通过现有渲染层服务完成持久化和刷新。
+3. **应用编排入口**（`renderer.js`）负责状态生命周期、窗口交互、IPC 调用和模块协调；后续任务、终端、浏览器等领域功能按同样边界继续迁移。
+
+模块通过 `index.html` 的显式加载顺序连接，保持当前 Electron 无打包器的运行方式和持久化格式不变。
 
 ## 文档
 
