@@ -37,6 +37,7 @@ const appStore = window.COSS_STORE.createAppStore(structuredClone(defaultState),
   onListenerError: (error) => console.warn("CosS store listener failed", error)
 });
 let state = appStore.getState();
+let agentWorkflowService = null;
 
 function replaceAppState(nextState, reason = "replace") {
   state = appStore.replace(nextState, reason);
@@ -75,7 +76,7 @@ const persistenceController = window.COSS_PERSISTENCE.createPersistenceControlle
   reconcileExternalState: reconcileAgentWorkflowAfterStateRefresh,
   repairReadyState: repairAllReadyKernelDispatches,
   render,
-  resumePending: resumePendingKernelAutoWorkflowMessages,
+  resumePending: (...args) => agentWorkflowService?.resumePending?.(...args) || [],
   recordLog: recordAppLog
 });
 const stateSaveQueue = persistenceController.queue;
@@ -159,6 +160,41 @@ const {
   wait
 } = agentDeliveryService;
 
+agentWorkflowService = window.COSS_AGENT_WORKFLOW_SERVICE.createAgentWorkflowService({
+  getState: () => state,
+  getProject: () => getProject(),
+  translate: t,
+  saveState: () => saveState(),
+  render: () => render(),
+  recordLog: recordAppLog,
+  finalizeCompletedKernelDispatchMessages,
+  getPendingKernelMessages: (project) => getPendingKernelAutoWorkflowMessages(project),
+  isKernelDispatchMessageForCompletedWork,
+  markKernelDispatchMessageCompleted,
+  persistAgentPoolMessages,
+  ensureAutoWorkflowAgentTargets,
+  queueAgentDeliveriesForMessage,
+  confirmAgentDelivery,
+  drainDeliveryQueueForWindow: (windowId) => drainAgentDeliveryQueueForWindow(windowId),
+  getTaskContextForWindow,
+  normalizeTerminalMode,
+  getSaveQueue: () => stateSaveQueue
+});
+const {
+  isActive: isAgentAutoWorkflowActive,
+  getStatusLabel: getAgentAutoWorkflowStatusLabel,
+  ensureRunning: ensureAgentAutoWorkflowRunning,
+  stop: stopAgentAutoWorkflow,
+  schedule: scheduleAgentAutoWorkflow,
+  scheduleForMessages: scheduleAgentAutoWorkflowForMessages,
+  scheduleQueueDrain: scheduleAgentDeliveryQueueDrain,
+  resumePending: resumePendingKernelAutoWorkflowMessages,
+  startPump: startPendingKernelAutoWorkflowPump,
+  resume: resumeAgentAutoWorkflow,
+  dispatchMessage: autoDispatchAgentMessage,
+  resumeForWindow: resumeAutoWorkflowMessagesForWindow
+} = agentWorkflowService;
+
 const workspaceViewRenderer = window.COSS_WORKSPACE_VIEW_RENDERER.createWorkspaceViewRenderer({
   getState: () => state,
   getProject: () => getProject(),
@@ -186,6 +222,25 @@ const {
   renderFileContent
 } = workspaceViewRenderer;
 
+const programActionService = window.COSS_PROGRAM_ACTION_SERVICE.createProgramActionService({
+  navigateBrowserWindow,
+  createBrowserTab,
+  closeBrowserTab,
+  switchBrowserTab,
+  toggleBrowserBookmark,
+  openBrowserUrlInWindow,
+  runBrowserCommand,
+  refreshFileList,
+  openFileInWindow,
+  selectFileListPath,
+  pickFileForWindow,
+  saveFileFromWindow,
+  saveFileAsFromWindow,
+  createFolderFromWindow,
+  renameFileFromWindow,
+  deleteFileFromWindow,
+  confirmFileOperationFromModal
+});
 const taskViewRenderer = window.COSS_TASK_VIEW.createTaskViewRenderer({
   escapeHtml,
   translate: t,
@@ -229,6 +284,27 @@ const {
   renderTaskListDetail,
   renderTaskListContent
 } = taskViewRenderer;
+
+const searchService = window.COSS_SEARCH_SERVICE.createSearchService({
+  getState: () => state,
+  translate: t,
+  ensureProjectShape,
+  getRole,
+  getRoleName,
+  getTaskRoleIds,
+  getTaskConversationId,
+  getTaskStatusValue,
+  getMessageTaskLabel,
+  formatDateTime,
+  programs: PROGRAMS,
+  subtaskStatusDefs: SUBTASK_STATUS_DEFS
+});
+const {
+  normalizeSearchText,
+  searchHaystackMatches,
+  getSearchResultScore,
+  buildGlobalSearchResults
+} = searchService;
 
 const messageViewRenderer = window.COSS_MESSAGE_VIEW.createMessageViewRenderer({
   escapeHtml,
@@ -325,7 +401,12 @@ const settingsSectionView = window.COSS_SETTINGS_SECTION_VIEW.createSettingsSect
     codebuddy: latestCodeBuddyStatus
   }),
   getDefaultAgentPromptTemplate,
-  formatFileSize,
+  formatFileSize: (size) => {
+    const value = Number(size) || 0;
+    if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${value} B`;
+  },
   getStorageInfo: () => latestStorageInfo,
   getStorageOperationStatus: () => storageOperationStatus
 });
@@ -341,6 +422,155 @@ const {
   renderSecuritySettingsSection,
   renderStorageSettingsSection
 } = settingsSectionView;
+
+const settingsActionService = window.COSS_SETTINGS_ACTION_SERVICE.createSettingsActionService({
+  getState: () => state,
+  getProject: () => getProject(),
+  saveState: () => saveState(),
+  render: () => render(),
+  recordLog: recordAppLog,
+  translate: t,
+  closeMenus,
+  showSettingsModal,
+  refreshStorageInfo,
+  runStorageOperation,
+  api: window.cossAPI,
+  ensureProjectMemoryShape,
+  rebuildProjectMemory,
+  createEmptyProjectMemory,
+  getUserProfile,
+  openProductUrl,
+  showFeedbackModal,
+  closeFeedbackModal,
+  showMcpAuditModal,
+  checkCurrentProjectMcpConfig,
+  writeCurrentProjectMcpConfig,
+  ensureAgentPromptMcpInstructions,
+  ensureAgentPromptPermissionPlaceholders,
+  getDefaultAgentPromptTemplate,
+  settingsSections: SETTINGS_SECTIONS,
+  languageOptions: LANGUAGE_OPTIONS,
+  setActiveSettingsSection: (value) => { activeSettingsSection = value; },
+  normalizeAgentProvider,
+  normalizeAgentPermissionMode,
+  getAgentPermissionPolicy,
+  getMcpAuditFilters: () => mcpAuditFilters,
+  setMcpAuditFilters: (value) => { mcpAuditFilters = value; },
+  normalizeStoredWindowStacks,
+  replaceAppState,
+  productHelpUrl: PRODUCT_HELP_URL,
+  normalizeModelProvider,
+  getModelConfig,
+  testModelConnectivity,
+  setModelEditorProvider: (value) => { modelEditorProvider = value; }
+});
+const workspaceActionService = window.COSS_WORKSPACE_ACTION_SERVICE.createWorkspaceActionService({
+  getState: () => state,
+  closeMenus,
+  render: () => render(),
+  openTaskListWindow,
+  selectTaskListTask,
+  setTaskArchived,
+  applyLayoutPreset,
+  showCreateProjectModal,
+  createProjectFromModal,
+  chooseProjectDirectoryFromModal,
+  setActiveProject,
+  showDeleteProjectModal,
+  deleteProject,
+  showRolePicker,
+  openRoleMenu,
+  createProgram,
+  closeModal,
+  showCreateTaskModal,
+  showMessageCenterModal,
+  showLogsModal,
+  checkClaudeStatus,
+  showAboutModal,
+  openLogDirectoryFromRenderer,
+  switchDesktop,
+  createProjectDesktop,
+  getTaskViewOpen: () => taskViewOpen,
+  setTaskViewOpen: (value) => { taskViewOpen = value; },
+  getActivePopoverWindowId: () => activePopoverWindowId,
+  setActivePopoverWindowId: (value) => { activePopoverWindowId = value; },
+  getOpenAppMenuId: () => openAppMenuId,
+  setOpenAppMenuId: (value) => { openAppMenuId = value; },
+  setContextMenu: (value) => { contextMenu = value; },
+  setRoleMenu: (value) => { roleMenu = value; },
+  getSidebarCollapsed: () => sidebarCollapsed,
+  setSidebarCollapsed: (value) => { sidebarCollapsed = value; },
+  setSidebarResizeState: (value) => { sidebarResizeState = value; },
+  getSidebarCollapseTimer: () => sidebarCollapseTimer,
+  setSidebarCollapseTimer: (value) => { sidebarCollapseTimer = value; },
+  getSidebarWidth: () => sidebarWidth,
+  updateSidebarWidth,
+  animateSidebarCollapse,
+  documentRef: document,
+  showSearchModal,
+  openSearchResult,
+  executeCustomMenuCommand,
+  controlWindow: (action) => window.cossAPI?.controlWindow?.(action),
+  setMaximized: (value) => { isWindowMaximized = value; },
+  closeWindow,
+  minimizeWindow,
+  toggleMaximizeWindow,
+  focusWindow,
+  bootWorkspace
+});
+const taskActionService = window.COSS_TASK_ACTION_SERVICE.createTaskActionService({
+  checkCodexStatus,
+  checkCodeBuddyStatus,
+  testAgentLogin,
+  createTaskFromModal,
+  openTaskUrlForSubtask: openTaskUrlForSubtask,
+  showTerminalOutputRefsModal,
+  selectMessageTimelineNode,
+  selectAgentFlowRole,
+  selectAgentFlowEdge,
+  clearAgentFlowSelection,
+  autoLayoutAgentBlueprint,
+  closeModal,
+  focusWindow,
+  confirmTaskPlanInConversation,
+  recordAppLog: recordAppLog,
+  addPendingTaskPlanSubtask,
+  deletePendingTaskPlanSubtask,
+  updateSubtaskStatus,
+  executeKernelSubtask,
+  getPendingTaskPlanDraft: () => pendingTaskPlanDraft,
+  setPendingTaskPlanDraft: (value) => { pendingTaskPlanDraft = value; },
+  hasPendingCommandApproval: () => Boolean(pendingCommandApproval),
+  approvePendingCommand,
+  rejectPendingCommand
+});
+const worldActionService = window.COSS_WORLD_ACTION_SERVICE.createWorldActionService({
+  showWorldChatModal,
+  updateWorldChatModal,
+  showWorldTaskPublisherModal,
+  showWorldAgentActionModal,
+  setWorldTaskStatus,
+  translate: t,
+  publishWorldTask,
+  createWorldAgent,
+  showWorldList,
+  getState: () => state,
+  saveState,
+  render: () => render(),
+  showCreateWorldModal,
+  createWorldFromModal,
+  selectWorld,
+  showDeleteWorldModal,
+  deleteWorld,
+  chooseWorldDirectoryFromModal
+});
+const appMenuActionService = window.COSS_APP_MENU_ACTION_SERVICE.createAppMenuActionService({
+  showCreateProjectModal,
+  showCreateTaskModal,
+  setActiveSettingsSection: (value) => { activeSettingsSection = value; },
+  showSettingsModal,
+  showAboutModal
+});
 
 const windowShellRenderer = window.COSS_WINDOW_SHELL_RENDERER.createWindowShellRenderer({
   escapeHtml,
@@ -432,7 +662,6 @@ const terminalBackendActiveModes = new Map();
 const terminalBackendReadyAt = new Map();
 const terminalRecentOutput = new Map();
 const deliveryStuckTimers = new Map();
-const agentDeliveryDrainTimers = new Map();
 const hydratedBrowserViews = new Set();
 let pendingCommandApproval = null;
 let latestClaudeStatus = null;
@@ -4672,33 +4901,6 @@ function getInjectableWindowsForMessage(project, message) {
     .filter(Boolean);
 }
 
-function isAgentAutoWorkflowActive() {
-  return state.settings.agentAutoWorkflowEnabled === true && state.settings.agentAutoWorkflowPaused !== true;
-}
-
-function getAgentAutoWorkflowStatusLabel() {
-  if (!state.settings.agentAutoWorkflowEnabled) {
-    return t("kernel.autoWorkflow.off", "未开启");
-  }
-  return state.settings.agentAutoWorkflowPaused ? t("kernel.autoWorkflow.paused", "已中止") : t("kernel.autoWorkflow.running", "运行中");
-}
-
-function ensureAgentAutoWorkflowRunning(reason = "auto-start") {
-  state.settings ||= {};
-  const wasEnabled = state.settings.agentAutoWorkflowEnabled === true;
-  const wasPaused = state.settings.agentAutoWorkflowPaused === true;
-  state.settings.agentAutoWorkflowEnabled = true;
-  state.settings.agentAutoWorkflowPaused = false;
-  if (!wasEnabled || wasPaused) {
-    recordAppLog("agent.workflow.auto-started", {
-      projectId: state.activeProjectId || "",
-      reason,
-      wasEnabled,
-      wasPaused
-    });
-  }
-}
-
 async function waitForAutoWorkflowTargets(message, timeoutMs = 6000) {
   const deadline = Date.now() + timeoutMs;
   const project = getProject();
@@ -4780,51 +4982,6 @@ async function ensureAutoWorkflowAgentTargets(message) {
     reason: ready ? (interactive.reason || "") : "target-agent-not-ready",
     targetWindowIds: interactive.targets?.map((win) => win.id) || []
   };
-}
-
-function stopAgentAutoWorkflow(reason = "user-stop") {
-  const project = getProject();
-  state.settings.agentAutoWorkflowPaused = true;
-  let canceledCount = 0;
-  if (project?.agentDeliveries) {
-    const now = new Date().toISOString();
-    project.agentDeliveries.forEach((delivery) => {
-      if (delivery.autoWorkflow && delivery.status === "pending") {
-        delivery.status = "canceled";
-        delivery.canceledAt = now;
-        delivery.updatedAt = now;
-        delivery.lastFeedback = t("kernel.autoWorkflow.userPaused", "用户已暂停 Kernel 自动调度。");
-        canceledCount += 1;
-      }
-    });
-  }
-  recordAppLog("agent.workflow.stopped", {
-    projectId: project?.id || "",
-    reason,
-    canceledCount
-  }, "warn");
-  saveState();
-  render();
-}
-
-function scheduleAgentDeliveryQueueDrain(windowId, delayMs = 250) {
-  if (!windowId || !state.settings.agentAutoWorkflowEnabled) {
-    return;
-  }
-  if (agentDeliveryDrainTimers.has(windowId)) {
-    clearTimeout(agentDeliveryDrainTimers.get(windowId));
-  }
-  const timer = setTimeout(() => {
-    agentDeliveryDrainTimers.delete(windowId);
-    drainAgentDeliveryQueueForWindow(windowId).catch((error) => {
-      recordAppLog("agent.workflow.queue-drain.error", {
-        projectId: state.activeProjectId || "",
-        windowId,
-        error: error.message
-      }, "error");
-    });
-  }, delayMs);
-  agentDeliveryDrainTimers.set(windowId, timer);
 }
 
 async function drainAgentDeliveryQueueForWindow(windowId) {
@@ -4938,303 +5095,6 @@ function getPendingKernelAutoWorkflowMessages(project = getProject()) {
       && activeDeliveryStatuses.has(delivery.status)
     ));
   });
-}
-
-function resumePendingKernelAutoWorkflowMessages(reason = "auto-workflow-resume") {
-  if (!isAgentAutoWorkflowActive()) {
-    return [];
-  }
-  const project = getProject();
-  const finalizedCount = finalizeCompletedKernelDispatchMessages(project, reason);
-  const messages = getPendingKernelAutoWorkflowMessages(project);
-  if (messages.length === 0) {
-    if (finalizedCount > 0) {
-      saveState();
-      render();
-    }
-    return [];
-  }
-  messages.forEach((message) => {
-    message.autoWorkflow = true;
-    message.autoWorkflowStatus = "queued";
-  });
-  recordAppLog("agent.workflow.pending-kernel-messages-resumed", {
-    projectId: project.id,
-    reason,
-    messageIds: messages.map((message) => message.id),
-    count: messages.length
-  });
-  saveState();
-  messages.forEach((message) => scheduleAgentAutoWorkflow(message.id, reason));
-  return messages;
-}
-
-function startPendingKernelAutoWorkflowPump() {
-  if (pendingKernelAutoWorkflowTimer) {
-    return;
-  }
-  pendingKernelAutoWorkflowTimer = setInterval(() => {
-    if (!isAgentAutoWorkflowActive() || stateSaveQueue.isInFlight || stateSaveQueue.isDirty) {
-      return;
-    }
-    try {
-      const messages = resumePendingKernelAutoWorkflowMessages("kernel-sequence-pump");
-      if (messages.length > 0) {
-        recordAppLog("agent.workflow.kernel-sequence-pump.dispatched", {
-          projectId: getProject()?.id || "",
-          messageIds: messages.map((message) => message.id),
-          count: messages.length
-        });
-      }
-    } catch (error) {
-      recordAppLog("agent.workflow.kernel-sequence-pump.error", {
-        projectId: state.activeProjectId || "",
-        error: error.message
-      }, "error");
-    }
-  }, 1200);
-}
-
-function resumeAgentAutoWorkflow() {
-  state.settings.agentAutoWorkflowEnabled = true;
-  state.settings.agentAutoWorkflowPaused = false;
-  recordAppLog("agent.workflow.resumed", {
-    projectId: state.activeProjectId || ""
-  });
-  saveState();
-  render();
-  resumePendingKernelAutoWorkflowMessages("manual-resume");
-  getProject()?.windows
-    ?.filter((win) => normalizeTerminalMode(win.terminalMode) === "agent")
-    .forEach((win) => scheduleAgentDeliveryQueueDrain(win.id, 200));
-}
-
-async function autoDispatchAgentMessage(messageId, sourceEventId = "") {
-  const project = getProject();
-  const message = project?.messages?.find((item) => item.id === messageId);
-  if (!project || !message) {
-    return { ok: false, reason: "message-not-found" };
-  }
-  if (markKernelDispatchMessageCompleted(project, message, `auto-dispatch:${sourceEventId || "unknown"}`)) {
-    saveState();
-    render();
-    return { ok: false, reason: "completed-work" };
-  }
-
-  if (!state.settings.agentAutoWorkflowEnabled) {
-    return { ok: false, reason: "disabled" };
-  }
-  if (state.settings.agentAutoWorkflowPaused) {
-    message.autoWorkflow = true;
-    message.autoWorkflowStatus = "paused";
-    message.autoWorkflowStoppedAt = new Date().toISOString();
-    saveState();
-    recordAppLog("agent.workflow.auto-dispatch.skipped", {
-      projectId: project.id,
-      messageId,
-      sourceEventId,
-      reason: "paused"
-    }, "warn");
-    return { ok: false, reason: "paused" };
-  }
-
-  message.autoWorkflow = true;
-  message.autoWorkflowStatus = "preparing";
-  saveState();
-  recordAppLog("agent.workflow.auto-dispatch.started", {
-    projectId: project.id,
-    messageId,
-    sourceEventId,
-    fromRoleId: message.fromRoleId,
-    toRoleIds: message.toRoleIds,
-    taskId: message.taskId || ""
-  });
-
-  const missingPoolPath = uniqueRoleIds(message.toRoleIds || []).some((roleId) => !message.agentPoolPaths?.[roleId]);
-  if (missingPoolPath) {
-    await persistAgentPoolMessages(project, [message], "auto-dispatch-backfill");
-    saveState();
-  }
-
-  const targetResult = await ensureAutoWorkflowAgentTargets(message);
-  if (!targetResult.ok || !isAgentAutoWorkflowActive()) {
-    message.autoWorkflowStatus = state.settings.agentAutoWorkflowPaused ? "stopped" : targetResult.reason || "target-not-ready";
-    message.autoWorkflowStoppedAt = new Date().toISOString();
-    saveState();
-    render();
-    recordAppLog("agent.workflow.auto-dispatch.skipped", {
-      projectId: project.id,
-      messageId,
-      sourceEventId,
-      reason: message.autoWorkflowStatus,
-      createdWindowIds: targetResult.createdWindowIds || []
-    }, "warn");
-    return { ok: false, reason: message.autoWorkflowStatus };
-  }
-
-  const queueResult = queueAgentDeliveriesForMessage(messageId, {
-    limit: 8,
-    autoWorkflow: true,
-    sourceEventId
-  });
-  if (!queueResult.ok) {
-    message.autoWorkflowStatus = queueResult.reason || "queue-failed";
-    saveState();
-    render();
-    recordAppLog("agent.workflow.auto-dispatch.failed", {
-      projectId: project.id,
-      messageId,
-      sourceEventId,
-      reason: message.autoWorkflowStatus
-    }, "warn");
-    return queueResult;
-  }
-
-  let confirmedCount = 0;
-  let deferredCount = 0;
-  for (const deliveryId of queueResult.deliveryIds || []) {
-    if (!isAgentAutoWorkflowActive()) {
-      break;
-    }
-    const result = await confirmAgentDelivery(deliveryId, {
-      autoWorkflow: true,
-      sourceEventId
-    });
-    if (result?.ok) {
-      confirmedCount += 1;
-    } else if (result?.deferred) {
-      deferredCount += 1;
-    }
-  }
-
-  message.autoWorkflowStatus = isAgentAutoWorkflowActive()
-    ? (confirmedCount > 0 ? "submitted" : (deferredCount > 0 ? "queued" : "delivery-not-confirmed"))
-    : "stopped";
-  if (confirmedCount > 0) {
-    message.autoWorkflowDispatchedAt = new Date().toISOString();
-  }
-  saveState();
-  render();
-  recordAppLog("agent.workflow.auto-dispatched", {
-    projectId: project.id,
-    messageId,
-    sourceEventId,
-    queuedCount: queueResult.queuedCount,
-    confirmedCount,
-    deferredCount,
-    status: message.autoWorkflowStatus,
-    stopped: !isAgentAutoWorkflowActive()
-  });
-  return {
-    ok: confirmedCount > 0 || deferredCount > 0,
-    queuedCount: queueResult.queuedCount,
-    confirmedCount,
-    deferredCount
-  };
-}
-
-function scheduleAgentAutoWorkflow(messageId, sourceEventId = "") {
-  if (!state.settings.agentAutoWorkflowEnabled) {
-    return;
-  }
-  setTimeout(() => {
-    autoDispatchAgentMessage(messageId, sourceEventId).catch((error) => {
-      const project = getProject();
-      const message = project?.messages?.find((item) => item.id === messageId);
-      if (message) {
-        message.autoWorkflowStatus = `error:${error.message || "unknown"}`;
-        message.autoWorkflowStoppedAt = new Date().toISOString();
-        saveState();
-      }
-      recordAppLog("agent.workflow.auto-dispatch.error", {
-        projectId: state.activeProjectId || "",
-        messageId,
-        sourceEventId,
-        error: error.message
-      }, "error");
-    });
-  }, 0);
-}
-
-function scheduleAgentAutoWorkflowForMessages(messages, sourceEventId = "") {
-  const project = getProject();
-  const finalizedCount = finalizeCompletedKernelDispatchMessages(project, `schedule:${sourceEventId || "unknown"}`);
-  const list = (messages || []).filter((message) => (
-    message?.id
-    && !isKernelDispatchMessageForCompletedWork(project, message)
-    && message.autoWorkflowStatus !== "completed"
-  ));
-  if (!state.settings.agentAutoWorkflowEnabled || list.length === 0) {
-    if (finalizedCount > 0) {
-      saveState();
-      render();
-    }
-    return;
-  }
-
-  recordAppLog("agent.workflow.batch-scheduled", {
-    projectId: state.activeProjectId || "",
-    sourceEventId,
-    messageIds: list.map((message) => message.id),
-    count: list.length
-  });
-  list.forEach((message) => scheduleAgentAutoWorkflow(message.id, sourceEventId));
-}
-
-function resumeAutoWorkflowMessagesForWindow(win, reason = "terminal-ready") {
-  if (!win || !state.settings.agentAutoWorkflowEnabled || state.settings.agentAutoWorkflowPaused) {
-    return;
-  }
-  const project = getProject();
-  if (!project) {
-    return;
-  }
-  const finalizedCount = finalizeCompletedKernelDispatchMessages(project, reason);
-  const taskContext = getTaskContextForWindow(win, project);
-  const retryStatuses = new Set([
-    "target-agent-not-ready",
-    "no-running-agent-terminal",
-    "queue-failed",
-    "delivery-not-confirmed",
-    "external-queued",
-    "queued",
-    "preparing"
-  ]);
-  const messages = (project.messages || []).filter((message) => (
-    message.toRoleIds?.includes(win.roleId)
-    && (message.autoWorkflow || ["orchestrator-dispatch"].includes(message.source || ""))
-    && (!message.taskId || !taskContext.taskId || message.taskId === taskContext.taskId)
-    && !isKernelDispatchMessageForCompletedWork(project, message)
-    && (!message.autoWorkflowStatus || retryStatuses.has(message.autoWorkflowStatus))
-    && !(project.agentDeliveries || []).some((delivery) => (
-      delivery.messageId === message.id
-      && delivery.windowId === win.id
-      && ["pending", "sent", "submitted", "responded", "waiting", "completed"].includes(delivery.status)
-    ))
-  ));
-  if (messages.length === 0) {
-    if (finalizedCount > 0) {
-      saveState();
-      render();
-    }
-    scheduleAgentDeliveryQueueDrain(win.id, 250);
-    return;
-  }
-  recordAppLog("agent.workflow.terminal-ready-resume", {
-    projectId: project.id,
-    windowId: win.id,
-    roleId: win.roleId,
-    reason,
-    messageIds: messages.map((message) => message.id),
-    count: messages.length
-  });
-  messages.forEach((message) => {
-    message.autoWorkflow = true;
-    message.autoWorkflowStatus = "terminal-ready-queued";
-    scheduleAgentAutoWorkflow(message.id, reason);
-  });
-  saveState();
-  scheduleAgentDeliveryQueueDrain(win.id, 350);
 }
 
 function isCodeBuddyAgentWindow(win) {
@@ -6778,123 +6638,6 @@ function closeFeedbackModal() {
   document.querySelector(".feedback-modal-backdrop")?.remove();
 }
 
-function normalizeSearchText(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function searchHaystackMatches(query, values) {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) {
-    return true;
-  }
-  return values.join(" ").toLowerCase().includes(normalizedQuery);
-}
-
-function getSearchResultScore(query, values) {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) {
-    return 0;
-  }
-  const normalizedValues = values.map((value) => String(value || "").toLowerCase());
-  if (normalizedValues.some((value) => value === normalizedQuery)) {
-    return 100;
-  }
-  if (normalizedValues.some((value) => value.startsWith(normalizedQuery))) {
-    return 70;
-  }
-  return normalizedValues.some((value) => value.includes(normalizedQuery)) ? 30 : 0;
-}
-
-function buildGlobalSearchResults(query = globalSearchQuery) {
-  const normalizedQuery = normalizeSearchText(query);
-  const activeProjectId = state.activeProjectId || "";
-  const results = [];
-  const pushResult = (result, haystack) => {
-    if (!searchHaystackMatches(normalizedQuery, haystack)) {
-      return;
-    }
-    results.push({
-      ...result,
-      score: getSearchResultScore(normalizedQuery, haystack) + (result.projectId === activeProjectId ? 8 : 0)
-    });
-  };
-
-  state.projects.forEach((project) => {
-    ensureProjectShape(project);
-    pushResult({
-      kind: "project",
-      projectId: project.id,
-      title: project.name || t("search.result.untitledProject", "未命名项目"),
-      subtitle: project.path || t("search.result.noPath", "未设置项目路径"),
-      meta: `${t("search.result.taskCount", "{{count}} 个任务", { count: project.tasks.length })} · ${t("search.result.windowCount", "{{count}} 个窗口", { count: project.windows.length })}`,
-      actionLabel: t("search.result.openProject", "打开项目")
-    }, [project.name, project.path, project.id]);
-
-    project.windows.forEach((win) => {
-      const role = getRole(win.roleId);
-      pushResult({
-        kind: "window",
-        projectId: project.id,
-        windowId: win.id,
-        desktopId: win.desktopId || "",
-        title: win.title || PROGRAMS[win.type]?.label || t("search.result.window", "窗口"),
-        subtitle: `${project.name} · ${role.name} · ${PROGRAMS[win.type]?.label || win.type}`,
-        meta: win.minimized ? t("search.result.minimized", "已最小化") : t("search.result.running", "运行中"),
-        actionLabel: t("search.result.locateWindow", "定位窗口")
-      }, [project.name, project.path, win.title, win.type, role.name, win.filePath, win.url, win.browserTabs?.map((tab) => `${tab.title} ${tab.url}`).join(" ")]);
-    });
-
-    project.tasks.forEach((task) => {
-      const roleNames = getTaskRoleIds(task).map((roleId) => getRoleName(roleId)).join("、");
-      pushResult({
-        kind: "task",
-        projectId: project.id,
-        taskId: task.id,
-        desktopId: getTaskConversationId(task),
-        title: task.title || t("search.result.untitledTask", "未命名任务"),
-        subtitle: task.goal || t("search.result.noGoal", "无任务目标"),
-        meta: `${project.name} · ${roleNames || t("search.result.unassigned", "未分配角色")} · ${SUBTASK_STATUS_DEFS[getTaskStatusValue(task)]?.label || getTaskStatusValue(task)}`,
-        actionLabel: t("search.result.viewTask", "查看任务")
-      }, [project.name, project.path, task.title, task.goal, task.model?.modelName, roleNames, ...(task.subtasks || []).flatMap((subtask) => [subtask.title, subtask.description, getRoleName(subtask.roleId)])]);
-    });
-
-    project.messages.forEach((message) => {
-      const fromRole = getRoleName(message.fromRoleId);
-      const toRoles = message.toRoleIds.map((roleId) => getRoleName(roleId)).join("、");
-      pushResult({
-        kind: "message",
-        timelineKind: "message",
-        projectId: project.id,
-        itemId: message.id,
-        taskId: message.taskId || "",
-        title: `${fromRole} → ${toRoles}`,
-        subtitle: message.content || t("search.result.emptyMessage", "空消息"),
-        meta: `${project.name} · ${getMessageTaskLabel(message.taskId)} · ${formatDateTime(message.createdAt)}`,
-        actionLabel: t("search.result.viewMessage", "查看消息")
-      }, [project.name, project.path, fromRole, toRoles, message.content, message.source, getMessageTaskLabel(message.taskId)]);
-    });
-
-    project.agentEvents.forEach((event) => {
-      const roleName = getRoleName(event.roleId);
-      pushResult({
-        kind: "event",
-        timelineKind: "agent-event",
-        projectId: project.id,
-        itemId: event.id,
-        taskId: event.taskId || "",
-        title: t("search.result.agentEvent", "Agent 事件 · {{name}}", { name: roleName }),
-        subtitle: event.message || event.sessionId || event.status || t("search.result.statusEvent", "状态事件"),
-        meta: `${project.name} · ${event.provider || "agent"} · ${formatDateTime(event.receivedAt)}`,
-        actionLabel: t("search.result.viewEvent", "查看事件")
-      }, [project.name, project.path, roleName, event.provider, event.status, event.type, event.toolName, event.message, event.sessionId, getMessageTaskLabel(event.taskId)]);
-    });
-  });
-
-  return results
-    .sort((a, b) => b.score - a.score || String(a.title).localeCompare(String(b.title), "zh-CN"))
-    .slice(0, normalizedQuery ? 80 : 28);
-}
-
 function renderGlobalSearchResults(query = globalSearchQuery) {
   const results = buildGlobalSearchResults(query);
   const normalizedQuery = normalizeSearchText(query);
@@ -7028,54 +6771,6 @@ function renderSeverityLabel(severity) {
     medium: t("risk.severity.medium", "需确认"),
     low: t("risk.severity.low", "低风险")
   }[severity] || t("risk.severity.unknown", "未知");
-}
-
-function renderCommandStatus(status) {
-  return {
-    pending: t("risk.status.pending", "等待确认"),
-    approved: t("risk.status.approved", "已确认执行"),
-    executed: t("risk.status.executed", "已执行"),
-    rejected: t("risk.status.rejected", "已拒绝")
-  }[status] || status;
-}
-
-function showCommandApprovalModal() {
-  if (!pendingCommandApproval) {
-    return;
-  }
-
-  const role = getRole(pendingCommandApproval.roleId);
-  const assessment = pendingCommandApproval.assessment;
-  renderModal(`
-    <div class="modal command-approval">
-      <h2>${escapeHtml(t("risk.command.title", "命令执行需要确认"))}</h2>
-      <p>${escapeHtml(t("risk.command.desc", "{{role}} 即将执行一个 {{severity}} 命令。请确认它符合当前项目目标。", { role: role.name, severity: renderSeverityLabel(assessment.severity) }))}</p>
-      <div class="risk-summary ${assessment.severity}">
-        <strong>${escapeHtml(assessment.label)}</strong>
-        <span>${escapeHtml(assessment.description)}</span>
-      </div>
-      <pre class="command-preview">${escapeHtml(pendingCommandApproval.command)}</pre>
-      <div class="modal-actions">
-        <button class="secondary-button" data-action="reject-command">${escapeHtml(t("risk.command.reject", "拒绝执行"))}</button>
-        <button class="primary-button" data-action="approve-command">${escapeHtml(t("risk.command.approve", "确认执行"))}</button>
-      </div>
-    </div>
-  `);
-}
-
-function approvePendingCommand() {
-  if (!pendingCommandApproval) {
-    return;
-  }
-
-  window.cossAPI?.sendTerminalInput?.(pendingCommandApproval.windowId, "\r", {
-    bypassPermissionGuard: true,
-    clearInputGuard: true,
-    reason: "renderer-approved"
-  });
-  updateCommandLog(pendingCommandApproval.logId, "approved");
-  pendingCommandApproval = null;
-  closeModal();
 }
 
 function rejectPendingCommand() {
@@ -7862,26 +7557,7 @@ async function testModelConnectivity(provider) {
 }
 
 function handleAppMenuAction(payload) {
-  const action = payload?.action;
-  if (action === "show-create-project") {
-    showCreateProjectModal();
-    return;
-  }
-
-  if (action === "show-create-task") {
-    showCreateTaskModal();
-    return;
-  }
-
-  if (action === "show-settings") {
-    activeSettingsSection = "system";
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "show-about") {
-    showAboutModal();
-  }
+  appMenuActionService.handle(payload);
 }
 
 const APP_MENU_DEFINITIONS = [
@@ -10009,1154 +9685,73 @@ document.addEventListener("click", (event) => {
 
   const action = target.dataset.action;
 
-  if (action === "toggle-app-menu") {
-    openAppMenuId = openAppMenuId === target.dataset.menuId ? null : target.dataset.menuId;
-    contextMenu = null;
-    roleMenu = null;
-    render();
+  if (settingsActionService.handle(action, target)) {
     return;
   }
-
-  if (action === "toggle-sidebar") {
-    sidebarResizeState = null;
-    document.body.classList.remove("sidebar-resizing");
-    closeMenus();
-    if (sidebarCollapsed) {
-      if (sidebarCollapseTimer) {
-        clearTimeout(sidebarCollapseTimer);
-        sidebarCollapseTimer = null;
-      }
-      sidebarCollapsed = false;
-      updateSidebarWidth(sidebarWidth);
-      render();
-    } else {
-      animateSidebarCollapse();
-    }
-    return;
-  }
-
-  if (action === "show-search") {
-    showSearchModal();
-    return;
-  }
-
-  if (action === "open-search-result") {
-    openSearchResult(target);
-    return;
-  }
-
-  if (action === "custom-menu-command") {
-    executeCustomMenuCommand(target.dataset.command);
-    return;
-  }
-
-  if (action === "window-control") {
-    const windowAction = target.dataset.windowAction;
-    window.cossAPI?.controlWindow?.(windowAction).then((result) => {
-      if (windowAction === "toggle-maximize" && typeof result?.maximized === "boolean") {
-        isWindowMaximized = result.maximized;
-        render();
-      }
-    });
-    return;
-  }
-
-  if (action === "desktop") {
-    const shouldRefreshFloatingUi = Boolean(activePopoverWindowId || openAppMenuId || taskViewOpen);
-    closeMenus();
-    activePopoverWindowId = null;
-    taskViewOpen = false;
-    if (shouldRefreshFloatingUi) {
-      render();
-    }
-    return;
-  }
-
-  if (action === "show-task-view") {
-    taskViewOpen = !taskViewOpen;
-    closeMenus();
-    activePopoverWindowId = null;
-    render();
-    return;
-  }
-
-  if (action === "close-task-view") {
-    if (target.classList.contains("task-view-backdrop") && event.target !== target) {
-      return;
-    }
-    taskViewOpen = false;
-    render();
-    return;
-  }
-
-  if (action === "switch-desktop") {
-    switchDesktop(target.dataset.desktopId);
-    return;
-  }
-
-  if (action === "create-desktop") {
-    createProjectDesktop();
-    return;
-  }
-
-  if (action === "open-task-list-window") {
-    closeMenus();
-    openTaskListWindow();
-    return;
-  }
-
-  if (action === "select-task-list-task") {
-    selectTaskListTask(target.dataset.taskId);
-    return;
-  }
-
-  if (action === "archive-task") {
-    setTaskArchived(target.dataset.taskId, true);
-    return;
-  }
-
-  if (action === "restore-task") {
-    setTaskArchived(target.dataset.taskId, false);
-    return;
-  }
-
-  if (action === "select-layout-preset") {
-    applyLayoutPreset(target.dataset.layout);
-    return;
-  }
-
-  if (action === "show-create-project") {
-    showCreateProjectModal();
-    return;
-  }
-
-  if (action === "create-project") {
-    createProjectFromModal();
-    return;
-  }
-
-  if (action === "choose-project-directory") {
-    chooseProjectDirectoryFromModal();
-    return;
-  }
-
-  if (action === "select-project") {
-    setActiveProject(target.dataset.projectId);
-    return;
-  }
-
-  if (action === "show-delete-project") {
-    showDeleteProjectModal(target.dataset.projectId);
-    return;
-  }
-
-  if (action === "confirm-delete-project") {
-    deleteProject(target.dataset.projectId);
-    return;
-  }
-
-  if (action === "show-role-picker") {
-    showRolePicker(target.dataset.type);
-    return;
-  }
-
-  if (action === "role-menu") {
-    openRoleMenu(target.dataset.type, target);
-    return;
-  }
-
-  if (action === "select-role") {
-    createProgram(target.dataset.type, target.dataset.roleId, {
-      terminalMode: target.dataset.terminalMode,
-      agentProvider: target.dataset.terminalMode === "agent" ? state.settings.agentProvider : undefined
-    });
-    closeModal();
-    return;
-  }
-
-  if (action === "browser-go") {
-    navigateBrowserWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "browser-new-tab") {
-    createBrowserTab(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "browser-close-tab") {
-    closeBrowserTab(target.dataset.windowId, target.dataset.tabId || "");
-    return;
-  }
-
-  if (action === "browser-switch-tab") {
-    switchBrowserTab(target.dataset.windowId, target.dataset.tabId);
-    return;
-  }
-
-  if (action === "browser-bookmark") {
-    toggleBrowserBookmark(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "browser-open-history" || action === "browser-open-bookmark") {
-    openBrowserUrlInWindow(target.dataset.windowId, target.dataset.url);
-    return;
-  }
-
-  if (action === "browser-reload") {
-    runBrowserCommand(target.dataset.windowId, "reload");
-    return;
-  }
-
-  if (action === "browser-back") {
-    runBrowserCommand(target.dataset.windowId, "back");
-    return;
-  }
-
-  if (action === "browser-forward") {
-    runBrowserCommand(target.dataset.windowId, "forward");
-    return;
-  }
-
-  if (action === "file-refresh-list") {
-    refreshFileList(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-open") {
-    openFileInWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-open-list-item") {
-    openFileInWindow(target.dataset.windowId, target.dataset.filePathValue);
-    return;
-  }
-
-  if (action === "file-select-list-path") {
-    selectFileListPath(target.dataset.windowId, target.dataset.filePathValue);
-    return;
-  }
-
-  if (action === "file-pick") {
-    pickFileForWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-save") {
-    saveFileFromWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-save-as") {
-    saveFileAsFromWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-create-folder") {
-    createFolderFromWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-rename") {
-    renameFileFromWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "file-delete") {
-    deleteFileFromWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "confirm-file-operation") {
-    confirmFileOperationFromModal();
-    return;
-  }
-
-  if (action === "show-create-task") {
-    showCreateTaskModal();
-    return;
-  }
-
-  if (action === "show-message-center") {
-    showMessageCenterModal({ fromRoleId: target.dataset.roleId || undefined });
-    return;
-  }
-
-  if (action === "show-logs") {
-    showLogsModal();
-    checkClaudeStatus();
-    return;
-  }
-
-  if (action === "show-settings") {
-    closeMenus();
-    activeSettingsSection = "system";
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "open-agent-settings") {
-    closeMenus();
-    activeSettingsSection = "agent";
-    showSettingsModal();
-    checkCurrentProjectMcpConfig();
-    return;
-  }
-
-  if (action === "show-about") {
-    showAboutModal();
-    return;
-  }
-
-  if (action === "open-log-directory") {
-    openLogDirectoryFromRenderer();
-    return;
-  }
-
-  if (action === "set-settings-section") {
-    activeSettingsSection = SETTINGS_SECTIONS.some((section) => section.id === target.dataset.section)
-      ? target.dataset.section
-      : "system";
-    showSettingsModal();
-    if (activeSettingsSection === "data") {
-      refreshStorageInfo();
-    }
-    return;
-  }
-
-  if (action === "refresh-storage-info") {
-    refreshStorageInfo();
-    return;
-  }
-
-  if (action === "toggle-project-memory") {
-    const project = getProject();
-    if (project) {
-      const memory = ensureProjectMemoryShape(project);
-      memory.enabled = memory.enabled === false;
-      memory.updatedAt = new Date().toISOString();
-      memory.lastSource = "settings-toggle";
-      recordAppLog("project.memory.toggled", {
-        projectId: project.id,
-        enabled: memory.enabled !== false
-      });
-      saveState();
-    }
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "refresh-project-memory") {
-    const project = getProject();
-    if (project) {
-      rebuildProjectMemory(project, "settings-refresh");
-      recordAppLog("project.memory.refreshed", {
-        projectId: project.id,
-        taskCount: project.memory?.taskHistory?.length || 0,
-        artifactCount: project.memory?.artifacts?.length || 0,
-        decisionCount: project.memory?.decisions?.length || 0
-      });
-      saveState();
-    }
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "save-project-memory") {
-    const project = getProject();
-    if (project) {
-      const memory = ensureProjectMemoryShape(project);
-      memory.manualNotes = String(document.getElementById("projectMemoryManualNotes")?.value || "").slice(0, 6000);
-      rebuildProjectMemory(project, "settings-save");
-      recordAppLog("project.memory.manual-notes.saved", {
-        projectId: project.id,
-        length: memory.manualNotes.length
-      });
-      saveState();
-    }
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "clear-project-memory") {
-    const project = getProject();
-    if (project) {
-      project.memory = createEmptyProjectMemory(true);
-      project.memory.updatedAt = new Date().toISOString();
-      project.memory.lastSource = "settings-clear";
-      recordAppLog("project.memory.cleared", {
-        projectId: project.id
-      }, "warn");
-      saveState();
-    }
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "create-storage-backup") {
-    runStorageOperation("创建备份", () => window.cossAPI.createStorageBackup());
-    return;
-  }
-
-  if (action === "export-storage-state") {
-    runStorageOperation("导出状态数据", () => window.cossAPI.exportStorageState());
-    return;
-  }
-
-  if (action === "import-storage-state") {
-    runStorageOperation("导入状态数据", async () => {
-      const result = await window.cossAPI.importStorageState();
-      if (result?.ok) {
-        const loaded = await window.cossAPI.loadState();
-        if (loaded?.projects?.length) {
-          normalizeStoredWindowStacks(loaded);
-          replaceAppState(loaded, "storage-import");
-        }
-      }
-      return result;
-    });
-    return;
-  }
-
-  if (action === "export-diagnostics-package") {
-    runStorageOperation("导出诊断包", () => window.cossAPI.exportDiagnosticsPackage());
-    return;
-  }
-
-  if (action === "open-storage-directory") {
-    runStorageOperation("打开数据目录", () => window.cossAPI.openStorageDirectory());
+  if (workspaceActionService.handle(action, target, event)) {
     return;
   }
 
-  if (action === "open-product-url") {
-    openProductUrl(target.dataset.url || PRODUCT_HELP_URL);
+  if (programActionService.handle(action, target)) {
     return;
   }
-
-  if (action === "show-feedback-modal") {
-    showFeedbackModal();
-    return;
-  }
-
-  if (action === "close-feedback-modal") {
-    closeFeedbackModal();
-    return;
-  }
-
-  if (action === "choose-feedback-images") {
-    document.getElementById("feedbackImageInput")?.click();
-    return;
-  }
-
-  if (action === "submit-feedback") {
-    recordAppLog("help.feedback.submitted", {
-      length: String(document.getElementById("feedbackContent")?.value || "").length,
-      imageCount: Math.min(document.getElementById("feedbackImageInput")?.files?.length || 0, 4),
-      uploadLogs: Boolean(document.getElementById("feedbackUploadLogs")?.checked)
-    });
-    closeFeedbackModal();
-    return;
-  }
-
-  if (action === "choose-account-avatar") {
-    document.getElementById("accountAvatarInput")?.click();
-    return;
-  }
-
-  if (action === "clear-account-avatar") {
-    getUserProfile().avatarDataUrl = "";
-    saveState();
-    render();
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "set-agent-provider") {
-    state.settings.agentProvider = normalizeAgentProvider(target.dataset.provider);
-    recordAppLog("settings.agent-provider.changed", {
-      provider: state.settings.agentProvider
-    });
-    saveState();
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "set-agent-permission-mode") {
-    state.settings.agentPermissionMode = normalizeAgentPermissionMode(target.dataset.permissionMode);
-    const policy = getAgentPermissionPolicy();
-    recordAppLog("settings.agent-permission.changed", {
-      mode: policy.id,
-      label: policy.label
-    });
-    saveState();
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "toggle-agent-fallback") {
-    state.settings.agentFallbackToShell = state.settings.agentFallbackToShell === false;
-    recordAppLog("settings.agent-fallback.changed", {
-      enabled: state.settings.agentFallbackToShell !== false
-    });
-    saveState();
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "toggle-agent-mcp-auto-config") {
-    state.settings.agentMcpAutoConfigEnabled = state.settings.agentMcpAutoConfigEnabled !== true;
-    recordAppLog("settings.agent-mcp-auto-config.changed", {
-      enabled: state.settings.agentMcpAutoConfigEnabled === true
-    });
-    saveState();
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "check-project-mcp-config") {
-    checkCurrentProjectMcpConfig();
-    return;
-  }
-
-  if (action === "write-project-mcp-config") {
-    writeCurrentProjectMcpConfig();
-    return;
-  }
-
-  if (action === "write-task-mcp-config") {
-    writeCurrentProjectMcpConfig().then(() => {
-      activeSettingsSection = "agent";
-      showSettingsModal();
-    });
-    return;
-  }
-
-  if (action === "show-mcp-audit") {
-    showMcpAuditModal();
-    return;
-  }
-
-  if (action === "apply-mcp-audit-filters") {
-    mcpAuditFilters = {
-      roleId: document.getElementById("mcpAuditRoleFilter")?.value || "",
-      taskId: document.getElementById("mcpAuditTaskFilter")?.value || "",
-      tool: document.getElementById("mcpAuditToolFilter")?.value || "",
-      query: document.getElementById("mcpAuditQueryFilter")?.value.trim() || ""
-    };
-    showMcpAuditModal();
-    return;
-  }
-
-  if (action === "reset-agent-prompt-template") {
-    state.settings.agentPromptTemplate = ensureAgentPromptMcpInstructions(
-      ensureAgentPromptPermissionPlaceholders(getDefaultAgentPromptTemplate())
-    );
-    recordAppLog("settings.agent-prompt-template.reset", {
-      length: state.settings.agentPromptTemplate.length
-    });
-    saveState();
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "edit-model-provider") {
-    modelEditorProvider = normalizeModelProvider(target.dataset.provider);
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "set-model-provider") {
-    const provider = normalizeModelProvider(target.dataset.provider);
-    modelEditorProvider = provider;
-    if (canUseModelProvider(provider)) {
-      state.settings.modelProvider = provider;
-      const config = getModelConfig(provider);
-      recordAppLog("settings.model-provider.changed", {
-        provider,
-        modelName: config.modelName,
-        baseUrl: config.baseUrl,
-        hasApiKey: Boolean(config.apiKey)
-      });
-      saveState();
-    } else {
-      const config = getModelConfig(provider);
-      recordAppLog("settings.model-provider.rejected", {
-        provider,
-        modelName: config.modelName,
-        reason: "missing-api-key"
-      }, "warn");
-    }
-    showSettingsModal();
-    return;
-  }
-
-  if (action === "test-model-connectivity") {
-    testModelConnectivity(target.dataset.provider);
-    return;
-  }
-
-  if (action === "check-claude") {
-    checkClaudeStatus();
-    return;
-  }
-
-  if (action === "check-codex") {
-    checkCodexStatus();
-    return;
-  }
-
-  if (action === "check-codebuddy") {
-    checkCodeBuddyStatus();
-    return;
-  }
-
-  if (action === "test-agent-login") {
-    testAgentLogin(target.dataset.provider);
-    return;
-  }
-
-  if (action === "create-task") {
-    createTaskFromModal();
-    return;
-  }
-
-  if (action === "open-task-url") {
-    openTaskUrlForSubtask(target.dataset.taskId, target.dataset.subtaskId);
-    return;
-  }
-
-  if (action === "show-terminal-output-refs") {
-    showTerminalOutputRefsModal(target.dataset.messageId);
-    return;
-  }
-
-  if (action === "select-message-timeline-node") {
-    selectMessageTimelineNode(target.dataset.timelineItemId || "");
-    return;
-  }
-
-  if (action === "select-agent-flow-role") {
-    const blueprintNode = target.closest(".agent-blueprint-node");
-    if (blueprintNode?.dataset.blueprintDragged === "true") {
-      delete blueprintNode.dataset.blueprintDragged;
-      return;
-    }
-    selectAgentFlowRole(target.dataset.roleId || "");
-    return;
-  }
-
-  if (action === "select-agent-flow-edge") {
-    selectAgentFlowEdge(target.dataset.flowEdgeKey || "");
-    return;
-  }
-
-  if (action === "clear-agent-flow-selection") {
-    clearAgentFlowSelection();
-    return;
-  }
-
-  if (action === "auto-layout-agent-blueprint") {
-    autoLayoutAgentBlueprint();
-    return;
-  }
-
-  if (action === "focus-terminal-ref-window") {
-    closeModal();
-    focusWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "confirm-task-plan") {
-    confirmTaskPlanInConversation().catch((error) => {
-      recordAppLog("task.confirm.error", { error: error.message }, "error");
-    });
-    return;
-  }
-
-  if (action === "add-task-plan-subtask") {
-    addPendingTaskPlanSubtask();
-    return;
-  }
-
-  if (action === "delete-task-plan-subtask") {
-    deletePendingTaskPlanSubtask(Number(target.dataset.planIndex));
-    return;
-  }
-
-  if (action === "set-subtask-status") {
-    updateSubtaskStatus(target.dataset.taskId, target.dataset.subtaskId, target.dataset.status);
-    return;
-  }
-
-  if (action === "execute-kernel-subtask") {
-    executeKernelSubtask(target.dataset.taskId, target.dataset.subtaskId).catch((error) => {
-      recordAppLog("kernel.step.manual-execute.error", {
-        taskId: target.dataset.taskId || "",
-        subtaskId: target.dataset.subtaskId || "",
-        error: error.message
-      }, "error");
-    });
-    return;
-  }
-
-  if (action === "close-modal") {
-    pendingTaskPlanDraft = null;
-    if (pendingCommandApproval) {
-      rejectPendingCommand();
-    } else {
-      closeModal();
-    }
-    return;
-  }
-
-  if (action === "approve-command") {
-    approvePendingCommand();
-    return;
-  }
-
-  if (action === "approve-command-session") {
-    approvePendingCommand({ remember: true });
-    return;
-  }
-
-  if (action === "reject-command") {
-    rejectPendingCommand();
-    return;
-  }
-
-  if (action === "close-window") {
-    event.preventDefault();
-    event.stopPropagation();
-    closeWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "minimize-window") {
-    event.preventDefault();
-    event.stopPropagation();
-    minimizeWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "toggle-maximize-window") {
-    event.preventDefault();
-    event.stopPropagation();
-    toggleMaximizeWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "focus-window") {
-    focusWindow(target.dataset.windowId);
-    return;
-  }
-
-  if (action === "toggle-popover") {
-    activePopoverWindowId = activePopoverWindowId === target.dataset.windowId ? null : target.dataset.windowId;
-    render();
-    return;
-  }
-
-  if (action === "refresh-workspace") {
-    bootWorkspace(state.activeProjectId);
-    closeMenus();
-    return;
-  }
-
-  // 世界空间 action
-  if (action === "show-world-chat") {
-    showWorldChatModal();
-    return;
-  }
-
-  if (action === "scroll-to-bottom") {
-    const chatList = document.querySelector(".world-chat-list");
-    if (chatList) {
-      chatList.scrollTop = chatList.scrollHeight;
-    }
-    const indicator = document.querySelector(".world-chat-new-msg");
-    if (indicator) {
-      indicator.classList.remove("visible");
-    }
-    return;
-  }
-
-  // 群聊筛选 action
-  if (action === "filter-task" || action === "filter-role") {
-    const modal = document.querySelector(".world-chat-modal");
-    if (!modal) return;
-    const key = action === "filter-task" ? "filterTask" : "filterRole";
-    modal.dataset[key] = target.value;
-    updateWorldChatModal(modal.dataset.worldChatTaskId || "");
-    return;
-  }
-
-  if (action === "filter-mode") {
-    const modal = document.querySelector(".world-chat-modal");
-    if (!modal) return;
-    const mode = target.dataset.mode;
-    modal.dataset.filterMode = mode;
-    // 更新按钮 active 状态
-    modal.querySelectorAll(".world-chat-filter-btn").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.mode === mode);
-    });
-    // 历史记录才显示筛选下拉
-    const filterExtras = modal.querySelector(".world-chat-filter-extras");
-    if (filterExtras) {
-      filterExtras.style.display = mode === "history" ? "" : "none";
-    }
-    updateWorldChatModal(modal.dataset.worldChatTaskId || "");
-    return;
-  }
-
-  if (action === "show-world-task-publisher") {
-    showWorldTaskPublisherModal();
-    return;
-  }
-
-  if (action === "show-world-agent-actions") {
-    showWorldAgentActionModal(target.dataset.roleId);
-    return;
-  }
-
-  if (action === "publish-world-task") {
-    const goal = document.getElementById("worldTaskGoal")?.value?.trim();
-    if (!goal) {
-      setWorldTaskStatus(t("world.task.validation.empty", "请填写任务内容。"));
-      return;
-    }
-    publishWorldTask(goal);
-    return;
-  }
-
-  if (action === "create-world-agent") {
-    const roleId = target.dataset.roleId;
-    if (roleId) {
-      createWorldAgent(roleId, Number(target.dataset.x), Number(target.dataset.y));
-    }
-    return;
-  }
-
-  // 世界导航 action
-  if (action === "show-world-list") {
-    showWorldList();
-    return;
-  }
-
-  if (action === "show-project-list") {
-    state.activeSidebarSection = "projects";
-    saveState();
-    render();
-    return;
-  }
-
-  if (action === "show-create-world") {
-    showCreateWorldModal();
-    return;
-  }
-
-  if (action === "create-world") {
-    createWorldFromModal();
-    return;
-  }
-
-  if (action === "select-world") {
-    selectWorld(target.dataset.worldId);
-    return;
-  }
-
-  if (action === "show-delete-world") {
-    showDeleteWorldModal(target.dataset.worldId);
-    return;
-  }
-
-  if (action === "confirm-delete-world") {
-    deleteWorld(target.dataset.worldId);
+  if (taskActionService.handle(action, target)) {
     return;
   }
 
-  if (action === "choose-world-directory") {
-    chooseWorldDirectoryFromModal();
+  if (worldActionService.handle(action, target)) {
     return;
   }
 });
 
-document.addEventListener("input", (event) => {
-  const inputTarget = event.target instanceof Element ? event.target : null;
-  const planField = inputTarget?.closest("[data-plan-field]");
-  if (planField) {
-    updatePendingTaskPlanField(Number(planField.dataset.planIndex), planField.dataset.planField, planField.value);
-    return;
-  }
-
-  if (inputTarget?.id === "messageTimelineSearch") {
-    messageTimelineFilters = {
-      ...messageTimelineFilters,
-      query: inputTarget.value
-    };
-    refreshMessageTimelineList();
-    return;
-  }
-
-  if (inputTarget?.id === "globalSearchInput") {
-    globalSearchQuery = inputTarget.value;
-    refreshGlobalSearchResults();
-    return;
-  }
-
-  if (inputTarget?.id === "taskListSearch") {
-    taskListFilters = {
-      ...taskListFilters,
-      query: inputTarget.value
-    };
-    selectedTaskListTaskId = "";
-    render();
-    return;
-  }
-
-  if (inputTarget?.id === "feedbackContent") {
-    updateFeedbackCounters();
-    return;
-  }
-
-  if (inputTarget?.id === "accountDisplayName") {
-    updateAccountDisplayName(inputTarget.value);
-    return;
-  }
-
-  const agentPromptTemplate = event.target instanceof Element ? event.target.closest("[data-agent-prompt-template]") : null;
-  if (agentPromptTemplate) {
-    state.settings.agentPromptTemplate = agentPromptTemplate.value;
-    saveState();
-    return;
-  }
-
-  const codeBuddyApiKey = event.target instanceof Element ? event.target.closest("[data-codebuddy-api-key]") : null;
-  if (codeBuddyApiKey) {
-    state.settings.codeBuddyApiKey = codeBuddyApiKey.value;
+const interactionService = window.COSS_INTERACTION_SERVICE.createInteractionService({
+  getState: () => state,
+  saveState: () => saveState(),
+  updatePendingTaskPlanField,
+  getMessageTimelineFilters: () => messageTimelineFilters,
+  setMessageTimelineFilters: (value) => { messageTimelineFilters = value; },
+  refreshMessageTimelineList,
+  setMessageTimelineScrollLeft: (value) => { messageTimelineScrollLeft = value; },
+  getGlobalSearchQuery: () => globalSearchQuery,
+  setGlobalSearchQuery: (value) => { globalSearchQuery = value; },
+  refreshGlobalSearchResults,
+  getTaskListFilters: () => taskListFilters,
+  setTaskListFilters: (value) => { taskListFilters = value; },
+  setSelectedTaskListTaskId: (value) => { selectedTaskListTaskId = value; },
+  render,
+  updateFeedbackCounters,
+  updateAccountDisplayName,
+  updateAccountAvatarFromFile,
+  showSettingsModal,
+  setAgentPromptTemplate: (value) => { state.settings.agentPromptTemplate = value; },
+  setCodeBuddyApiKey: (value) => {
+    state.settings.codeBuddyApiKey = value;
     delete agentLoginTestStatuses.codebuddy;
-    saveState();
-    return;
-  }
-
-  const target = event.target instanceof Element ? event.target.closest("[data-model-field]") : null;
-  if (target) {
-    const provider = normalizeModelProvider(target.dataset.modelProvider);
-    updateModelConfigField(provider, target.dataset.modelField, target.value);
-    const statusMount = document.querySelector(`[data-model-connectivity-status="${provider}"]`);
-    if (statusMount) {
-      statusMount.outerHTML = renderModelConnectivityStatus(provider);
-    }
-    return;
-  }
-
-  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
-  if (fileEditor) {
-    const win = getWindowState(fileEditor.dataset.fileEditor);
-    if (win) {
-      win.fileDraft = fileEditor.value;
-      win.fileDirty = true;
-      win.fileError = "";
-      win.fileStatus = win.filePath ? `正在编辑 ${win.filePath}，尚未保存。` : "正在编辑新文件，尚未保存。";
-      const status = document.querySelector(`[data-file-status="${CSS.escape(win.id)}"]`);
-      if (status) {
-        status.textContent = win.fileStatus;
-        status.classList.remove("error");
-      }
-      syncFileEditorChrome(win.id);
-    }
-  }
+  },
+  normalizeModelProvider,
+  updateModelConfigField,
+  renderModelConnectivityStatus,
+  getWindowState,
+  syncFileEditorChrome,
+  getMessageComposerDefaults: () => messageComposerDefaults,
+  setMessageComposerDefaults: (value) => { messageComposerDefaults = value; },
+  showMessageCenterModal,
+  languageOptions: LANGUAGE_OPTIONS,
+  getTaskRoleFilter: () => taskRoleFilter,
+  setTaskRoleFilter: (value) => { taskRoleFilter = value; },
+  openContextMenu,
+  showSearchModal,
+  openSearchResult,
+  navigateBrowserWindow,
+  saveFileFromWindow,
+  hasPendingCommandApproval: () => Boolean(pendingCommandApproval),
+  rejectPendingCommand,
+  closeMenus,
+  closeModal,
+  setActivePopoverWindowId: (value) => { activePopoverWindowId = value; },
+  updateWorldChatModal
 });
-
-document.addEventListener("scroll", (event) => {
-  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
-  if (fileEditor) {
-    const lines = document.querySelector(`[data-file-lines="${CSS.escape(fileEditor.dataset.fileEditor)}"]`);
-    if (lines) {
-      lines.scrollTop = fileEditor.scrollTop;
-    }
-  }
-
-  const scroller = event.target instanceof Element ? event.target.closest(".message-timeline-scroll") : null;
-  if (scroller) {
-    messageTimelineScrollLeft = scroller.scrollLeft;
-  }
-}, true);
-
-document.addEventListener("change", (event) => {
-  const target = event.target instanceof Element ? event.target : null;
-  if (!target) {
-    return;
-  }
-
-  if (target.id === "feedbackImageInput") {
-    updateFeedbackCounters();
-    return;
-  }
-
-  if (target.id === "accountAvatarInput") {
-    updateAccountAvatarFromFile(target.files?.[0]);
-    return;
-  }
-
-  const planField = target.closest("[data-plan-field]");
-  if (planField) {
-    updatePendingTaskPlanField(Number(planField.dataset.planIndex), planField.dataset.planField, planField.value);
-    return;
-  }
-
-  if (target.id === "messageFromRole") {
-    messageComposerDefaults = {
-      ...messageComposerDefaults,
-      fromRoleId: target.value,
-      toRoleId: ""
-    };
-    showMessageCenterModal(messageComposerDefaults);
-  }
-
-  if (target.id === "messageTimelineTaskFilter") {
-    messageTimelineFilters = {
-      ...messageTimelineFilters,
-      taskId: target.value
-    };
-    refreshMessageTimelineList();
-  }
-
-  if (target.id === "appLanguageSelect") {
-    state.settings.language = LANGUAGE_OPTIONS.some((item) => item.id === target.value) ? target.value : "zh-CN";
-    saveState();
-    render();
-    showSettingsModal();
-    return;
-  }
-
-  if (target.id === "taskRoleFilter") {
-    taskRoleFilter = target.value;
-    render();
-    return;
-  }
-
-  if (target.id === "taskListRoleFilter") {
-    taskListFilters = {
-      ...taskListFilters,
-      roleId: target.value
-    };
-    selectedTaskListTaskId = "";
-    render();
-    return;
-  }
-
-  if (target.id === "taskListStatusFilter") {
-    taskListFilters = {
-      ...taskListFilters,
-      status: target.value
-    };
-    selectedTaskListTaskId = "";
-    render();
-    return;
-  }
-
-  if (target.id === "taskListModelFilter") {
-    taskListFilters = {
-      ...taskListFilters,
-      model: target.value
-    };
-    selectedTaskListTaskId = "";
-    render();
-    return;
-  }
-
-  if (target.id === "taskListIncludeArchived") {
-    taskListFilters = {
-      ...taskListFilters,
-      includeArchived: Boolean(target.checked)
-    };
-    selectedTaskListTaskId = "";
-    render();
-  }
-});
-
-document.addEventListener("contextmenu", (event) => {
-  const desktop = event.target.closest(".desktop");
-  if (desktop) {
-    openContextMenu(event);
-  }
-});
-
-document.addEventListener("keydown", (event) => {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-    event.preventDefault();
-    showSearchModal();
-    return;
-  }
-
-  const globalSearchInput = event.target instanceof Element ? event.target.closest("#globalSearchInput") : null;
-  if (globalSearchInput && event.key === "Enter") {
-    event.preventDefault();
-    const firstResult = document.querySelector(".global-search-result");
-    if (firstResult) {
-      openSearchResult(firstResult);
-    }
-    return;
-  }
-
-  const browserAddress = event.target instanceof Element ? event.target.closest("[data-browser-address]") : null;
-  if (browserAddress && event.key === "Enter") {
-    event.preventDefault();
-    navigateBrowserWindow(browserAddress.dataset.browserAddress, browserAddress.value);
-    return;
-  }
-
-  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
-  if (fileEditor && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-    event.preventDefault();
-    saveFileFromWindow(fileEditor.dataset.fileEditor);
-    return;
-  }
-
-  if (event.key === "Escape") {
-    if (pendingCommandApproval) {
-      rejectPendingCommand();
-      return;
-    }
-
-    closeMenus();
-    closeModal();
-    activePopoverWindowId = null;
-    render();
-  }
-});
-
-document.addEventListener("keyup", (event) => {
-  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
-  if (fileEditor) {
-    syncFileEditorChrome(fileEditor.dataset.fileEditor);
-  }
-});
-
-// select 元素用 change 事件触发 data-action
-document.addEventListener("change", (event) => {
-  const target = event.target instanceof Element ? event.target.closest("select[data-action]") : null;
-  if (!target) return;
-  const action = target.dataset.action;
-
-  // 处理筛选下拉
-  if (action === "filter-task" || action === "filter-role") {
-    const modal = document.querySelector(".world-chat-modal");
-    if (!modal) return;
-    const key = action === "filter-task" ? "filterTask" : "filterRole";
-    modal.dataset[key] = target.value;
-    updateWorldChatModal(modal.dataset.worldChatTaskId || "");
-  }
-});
-
-document.addEventListener("click", (event) => {
-  const fileEditor = event.target instanceof Element ? event.target.closest("[data-file-editor]") : null;
-  if (fileEditor) {
-    syncFileEditorChrome(fileEditor.dataset.fileEditor);
-  }
-});
+interactionService.bind(document);
 
 function escapeHtml(value) {
   return String(value)
@@ -11280,15 +9875,8 @@ async function tryAutoInstallAgent(name, statusGetter, installFn) {
 async function runStartupConfigurationLoad() {
   setAppLoadingStep(t("app.loading.workspace", "正在加载工作区状态..."));
   await loadState();
-  // 先显示可交互的工作区，环境探测等非关键任务完成后再刷新对应状态。
-  render();
-  // 启动期间外部 MCP/存储恢复可能晚于首次状态读取，再做一次幂等修复。
-  setTimeout(() => {
-    repairAllReadyKernelDispatches("startup-repair").catch((error) => {
-      recordAppLog("kernel.dispatch.startup-repair.error", { error: error.message }, "warn");
-    });
-  }, 0);
 
+  // 环境探测（保持加载画面，让用户看到检测进度）
   setAppLoadingStep(t("app.loading.windows", "正在读取窗口状态..."));
   try {
     isWindowMaximized = Boolean(await window.cossAPI?.isWindowMaximized?.());
@@ -11319,6 +9907,15 @@ async function runStartupConfigurationLoad() {
     await tryAutoInstallAgent("CodeBuddy Code", () => latestCodeBuddyStatus, () => window.cossAPI?.installCodeBuddy?.());
     await checkCodeBuddyStatus();
   }
+
+  // 环境探测完成后首次渲染工作区
+  render();
+  // 启动期间外部 MCP/存储恢复可能晚于首次状态读取，再做一次幂等修复。
+  setTimeout(() => {
+    repairAllReadyKernelDispatches("startup-repair").catch((error) => {
+      recordAppLog("kernel.dispatch.startup-repair.error", { error: error.message }, "warn");
+    });
+  }, 0);
 
   setAppLoadingStep(t("app.loading.storage", "正在读取存储与项目配置..."));
   await refreshStorageInfo({ rerender: false });

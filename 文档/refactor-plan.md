@@ -8,8 +8,8 @@
 
 ## 2. 当前基线
 
-- `src/renderer.js`：约 1.3 万行，仍包含状态管理、窗口系统、任务编排、终端投递、设置页、搜索和大量 UI 模板。
-- `src/main.cjs`：约 5900 行，仍包含存储、SQLite、LLM、终端后端、Agent 检测、MCP 配置和文件操作。
+- `src/renderer.js`：约 1 万行，保留状态装配、模板渲染和跨领域生命周期编排。
+- `src/main.cjs`：约 4800 行，保留 Electron 生命周期、依赖装配和窗口创建。
 - 已完成第一轮拆分：
   - `src/renderer/config.js`：角色、模型、权限、风险规则等静态配置。
   - `src/renderer/world.js`：2D 世界 Agent、任务和群聊领域逻辑。
@@ -25,7 +25,7 @@
 - `src/main/services/` 与 `src/main/ipc/`：主进程存储、LLM 服务和 IPC 注册入口。
 - `tests/unit/architecture.test.cjs`：共享契约和服务基础单元测试。
 
-截至 2026-07-10，`renderer.js` 已完成状态/持久化、Kernel 投影、Agent 投递基础、终端/浏览器/文件视图、任务视图主体、消息时间线、设置状态组件和窗口壳渲染的物理迁移，文件约 11,817 行；`main.cjs` 的 Planner/模型连通性也已迁移到 `main/services/llm-service.cjs`，入口约 5,945 行。这不等于全部重构完成，设置页面主体、窗口事件委托、Agent 自动工作流和主进程终端/Agent 检测仍需继续迁移。
+截至 2026-07-10，`renderer.js` 已完成状态/持久化、Kernel 投影、Agent 投递与自动工作流、搜索索引、输入交互绑定、浏览器/文件动作、设置动作、项目/任务/角色/桌面动作、任务/消息/世界动作、应用菜单动作、终端/浏览器/文件视图、任务视图、消息时间线、设置页面区块、设置状态组件和窗口壳渲染的物理迁移，当前约 9,941 行；`main.cjs` 的 Planner/模型连通性、Agent 检测、终端会话及生命周期、项目文件、MCP 配置和 IPC handler 注册已分别迁移到 `main/services/llm-service.cjs`、`agent-runtime.cjs`、`terminal-service.cjs`、`project-file-service.cjs`、`mcp-config-service.cjs` 和 `main/ipc/register-ipc.cjs`，当前约 4,758 行。入口文件现在主要保留状态装配、模板渲染、Electron 生命周期和跨领域协调。
 
 ## 3. 重构原则
 
@@ -102,7 +102,7 @@ src/renderer/
 
 ### 第 3 轮：任务与 Kernel 应用服务拆分
 
-状态：Kernel 投影已物理迁移；任务服务、Planner 和 dispatch 仍有入口逻辑待迁移。
+状态：Kernel 投影、任务视图和 Planner/dispatch 边界已落地；自动工作流仍由入口编排。
 
 目标：把任务规划、任务板、子任务状态、Kernel 投影和 dispatch 修复从渲染入口中独立出来。
 
@@ -133,7 +133,7 @@ src/renderer/
 
 ### 第 4 轮：Agent、终端和消息投递拆分
 
-状态：终端投递构造与适配已物理迁移；投递队列、输出状态和审批主流程仍需继续迁移。
+状态：终端投递构造、投递队列、输出追踪、审批和自动工作流完整编排服务边界已落地。
 
 目标：拆分当前集中在 `renderer.js` 中的终端注入、投递队列、输出反馈和审批流程。
 
@@ -146,7 +146,8 @@ src/renderer/
 │   ├── delivery-queue.js      # 消息投递队列和重试
 │   ├── terminal-adapter.js    # xterm/终端后端适配
 │   ├── output-tracker.js      # 输出引用、状态和卡住检测
-│   └── approval-service.js    # 命令风险和审批交互
+│   ├── approval-service.js    # 命令风险和审批交互
+│   └── workflow-service.js    # 自动工作流启停、恢复和调度泵
 ```
 
 工作内容：
@@ -164,7 +165,7 @@ src/renderer/
 
 ### 第 5 轮：窗口系统与视图模块拆分
 
-状态：窗口/桌面基础服务已接入；终端、浏览器、文件内容渲染已物理迁移，任务/消息/设置视图和事件委托仍需迁移。
+状态：已完成。
 
 目标：拆分窗口管理、桌面布局和各类程序视图，降低渲染模板之间的耦合。
 
@@ -181,7 +182,15 @@ src/renderer/
 │   ├── message-view.js
 │   ├── terminal-view.js
 │   ├── browser-view.js
-│   └── file-view.js
+│   ├── file-view.js
+│   ├── search-service.js
+│   ├── interaction-service.js
+│   ├── program-action-service.js
+│   ├── settings-action-service.js
+│   ├── workspace-action-service.js
+│   ├── task-action-service.js
+│   ├── world-action-service.js
+│   └── app-menu-action-service.js
 ```
 
 工作内容：
@@ -189,7 +198,7 @@ src/renderer/
 - 将窗口状态变更从 HTML 模板和事件委托中抽出。
 - 为每类程序视图定义统一的 `render`、`mount`、`unmount` 和事件入口。
 - 将终端、浏览器和文件视图的生命周期管理与窗口层分离。
-- 逐步减少 `data-action` 字符串在单一事件处理器中的分支数量。
+- 将 `data-action` 按设置、工作区、程序、任务、世界和应用菜单分派到独立服务。
 
 验收标准：
 
@@ -199,7 +208,7 @@ src/renderer/
 
 ### 第 6 轮：主进程模块化
 
-状态：存储服务、LLM 服务、IPC 契约和注册适配器已完成首批物理迁移；`main.cjs` 中仍有终端、Agent 检测和文件能力待继续迁移。
+状态：已完成首轮迁移。
 
 目标：将 `main.cjs` 从“所有系统能力的单一脚本”拆为可测试的服务层。
 
@@ -235,13 +244,13 @@ src/main/
 
 验收标准：
 
-- `main.cjs` 只负责启动、依赖装配和 IPC 注册。
+- `main.cjs` 只负责启动、依赖装配和调用 IPC 注册器；具体 handler 注册位于 `main/ipc/register-ipc.cjs`。
 - 存储、LLM、终端、项目文件能力可以在无窗口环境下单独测试。
 - IPC 方法名、参数和返回值保持兼容。
 
 ### 第 7 轮：构建、测试和清理
 
-状态：进行中。
+状态：已完成本轮验证，后续仅保留增量维护。
 
 目标：在完成模块迁移后建立长期维护机制。
 

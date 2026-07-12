@@ -162,7 +162,7 @@ CosS/
 │   │   ├── world.js             # 2D 世界 Agent 协作功能
 │   │   ├── store/               # 默认状态、Store、归一化和持久化
 │   │   ├── task/                # 任务、Planner、Kernel 服务
-│   │   ├── agent/               # Agent、终端、投递和输出服务
+│   │   ├── agent/               # Agent、终端、投递、输出和自动工作流服务
 │   │   ├── windowing/           # 窗口和桌面管理
 │   │   └── views/               # 视图契约和工作区内容渲染
 │   ├── shared/                  # IPC 与状态契约
@@ -196,7 +196,7 @@ CosS/
 3. **Store 与持久化**（`renderer/store/`）负责状态默认值、兼容归一化、保存队列和外部刷新。
 4. **任务与 Agent 服务**（`renderer/task/`、`renderer/agent/`）负责 Kernel 投影、规划、投递构造、终端适配和输出追踪。
 5. **视图与窗口**（`renderer/views/`、`renderer/windowing/`）负责工作区内容渲染和窗口/桌面边界。
-6. **应用编排入口**（`renderer.js`）暂时保留跨领域事件编排、消息中心、设置页和部分自动工作流；这些代码仍按 [重构计划](文档/refactor-plan.md) 继续迁移。
+6. **应用编排入口**（`renderer.js`）保留状态装配、模板渲染和少量跨领域生命周期编排；状态、任务、Agent 投递/工作流、窗口、搜索、交互绑定、动作分派和主要视图已按 [重构计划](文档/refactor-plan.md) 拆出。
 
 模块通过 `index.html` 的显式加载顺序连接，保持当前 Electron 无打包器的运行方式和持久化格式不变。
 

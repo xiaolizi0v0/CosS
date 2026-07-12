@@ -1,9 +1,16 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 const { IPC_CHANNELS, IPC_EVENTS } = require("../../src/shared/ipc-contracts.cjs");
 const state = require("../../src/shared/state-contracts.cjs");
 const { createStorageService } = require("../../src/main/services/storage-service.cjs");
 const { createLlmService } = require("../../src/main/services/llm-service.cjs");
+const { createAgentRuntime } = require("../../src/main/services/agent-runtime.cjs");
+const { createTerminalService } = require("../../src/main/services/terminal-service.cjs");
+const { createProjectFileService } = require("../../src/main/services/project-file-service.cjs");
+const { createMcpConfigService } = require("../../src/main/services/mcp-config-service.cjs");
 
 test("IPC contracts keep the public state channels stable", () => {
   assert.equal(IPC_CHANNELS.STATE_LOAD, "state:load");
@@ -52,4 +59,73 @@ test("LLM service normalizes a linear planner result outside main process entry"
 test("LLM service extracts balanced JSON with trailing text", () => {
   const service = createLlmService();
   assert.deepEqual(service.extractJsonObject('{"ok":true,"nested":{"value":1}} trailing note'), { ok: true, nested: { value: 1 } });
+});
+
+test("Agent runtime keeps CLI detection outside the main process entry", () => {
+  const service = createAgentRuntime({
+    getWindowsShellEnv: () => ({ PATH: "C:\\Tools" }),
+    findCommandPaths: (command) => [command],
+    preferWindowsCmdShim: (command) => command,
+    runCommandForStatus: (command) => ({ status: 0, stdout: command === "npm" ? "10.0.0" : `${command} 1.2.3`, stderr: "" }),
+    commandOutput: (result) => `${result.stdout || ""}${result.stderr || ""}`.trim(),
+    commandErrorDetail: () => "",
+    getNpmCandidates: () => ["npm"],
+    getNpmCommand: () => "npm",
+    commandExists: () => true,
+    getCodexAuthState: () => ({ loggedIn: true }),
+    getCodeBuddyAuthState: () => ({ loggedIn: true }),
+    getClaudeAuthState: () => ({ loggedIn: true }),
+    ensureClaudeOnboardingCompleted: () => ({ completed: true }),
+    getCodexInstallCommand: () => "npm install -g @openai/codex",
+    getCodeBuddyInstallCommand: () => "npm install -g @tencent-ai/codebuddy-code"
+  });
+  const result = service.getCodexCommandStatus();
+  assert.equal(result.runnable, true);
+  assert.equal(result.version, "codex 1.2.3");
+  assert.equal(result.npm.usable, true);
+});
+
+test("terminal service owns session transcripts and renderer forwarding", () => {
+  const service = createTerminalService({ maxTranscriptLength: 8 });
+  const sent = [];
+  const target = { isDestroyed: () => false, send: (...args) => sent.push(args) };
+  service.webContents.set("terminal-1", target);
+  service.sendData(null, "terminal-1", "123456789");
+  service.sendExit(null, "terminal-1", 0);
+  assert.equal(service.transcripts.get("terminal-1"), "23456789");
+  assert.deepEqual(sent, [
+    ["terminal:data", { id: "terminal-1", data: "123456789" }],
+    ["terminal:exit", { id: "terminal-1", exitCode: 0 }]
+  ]);
+});
+
+test("project file service enforces the project boundary", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "coss-file-service-"));
+  try {
+    const service = createProjectFileService({ appendLogEvent: () => undefined });
+    assert.equal(service.writeProjectFile(null, { projectPath: root, filePath: "notes.md", content: "hello" }).ok, true);
+    assert.equal(service.readProjectFile(null, { projectPath: root, filePath: "notes.md" }).content, "hello");
+    assert.equal(service.listProjectFiles(null, root).files.some((item) => item.path === "notes.md"), true);
+    assert.equal(service.readProjectFile(null, { projectPath: root, filePath: "../outside.txt" }).ok, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MCP config service builds a portable server entry outside main.cjs", () => {
+  const service = createMcpConfigService({
+    resolveNodeCommandForMcp: () => "node",
+    getStorageDirectory: () => "C:\\Temp\\CosS",
+    getProjectRoot: (value) => value,
+    writeJsonAtomic: () => undefined,
+    getLogDirectory: () => "C:\\Temp\\CosS\\logs",
+    appendLogEvent: () => undefined,
+    appVersion: "0.11.0"
+  });
+  const info = service.getMcpServerInfo({ projectId: "project-1", roleId: "tech-lead" });
+  const entry = service.buildMcpServerEntry({ projectId: "project-1" });
+  assert.equal(info.command, "node");
+  assert.equal(info.args.includes("--project-id"), true);
+  assert.equal(entry.type, "stdio");
+  assert.equal(entry.env.COSS_MCP_PROJECT_ID, "project-1");
 });

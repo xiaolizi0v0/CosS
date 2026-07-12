@@ -8,7 +8,11 @@ const { STATE_SCHEMA_VERSION } = require("./shared/state-contracts.cjs");
 const { ARCHITECTURE_VERSION } = require("./shared/architecture.cjs");
 const { createStorageService } = require("./main/services/storage-service.cjs");
 const { createLlmService } = require("./main/services/llm-service.cjs");
-const { registerIpcHandlers } = require("./main/ipc/register-ipc.cjs");
+const { createAgentRuntime } = require("./main/services/agent-runtime.cjs");
+const { createTerminalService } = require("./main/services/terminal-service.cjs");
+const { createProjectFileService } = require("./main/services/project-file-service.cjs");
+const { createMcpConfigService } = require("./main/services/mcp-config-service.cjs");
+const { createIpcRegistrar } = require("./main/ipc/register-ipc.cjs");
 
 let nodePty = null;
 let initSqlJs = null;
@@ -36,10 +40,6 @@ const appVersion = (() => {
     return "0.11.0";
   }
 })();
-const terminalSessions = new Map();
-const terminalTranscripts = new Map();
-const terminalWebContents = new Map();
-const agentOutputEventKeys = new Map();
 const terminalProcessTreeSnapshotDelaysMs = [500, 2000, 5000];
 const claudeCodeWingetPackage = "Anthropic.ClaudeCode";
 const codexNpmPackage = "@openai/codex";
@@ -71,6 +71,35 @@ const agentPermissionPolicies = {
     instruction: "当前 CosS 世界 Agent 权限模式：完全访问。你运行在从 0 开始的隔离世界 CLI 内核中，不复用任何项目终端会话；可直接使用终端完成角色任务。涉及真实外部发布、删除用户数据、付款、发送消息给外部人员等不可逆动作时仍需遵守系统与用户授权边界。"
   }
 };
+const agentRuntime = createAgentRuntime({
+  getWindowsShellEnv,
+  findCommandPaths,
+  preferWindowsCmdShim,
+  runCommandForStatus,
+  commandOutput,
+  commandErrorDetail,
+  getNpmCandidates,
+  getNpmCommand,
+  commandExists,
+  getCodexAuthState,
+  getCodeBuddyAuthState,
+  getClaudeAuthState,
+  ensureClaudeOnboardingCompleted,
+  getCodexInstallCommand,
+  getCodeBuddyInstallCommand,
+  packages: {
+    claudePackage: claudeCodeWingetPackage,
+    codexPackage: codexNpmPackage,
+    codeBuddyPackage: codeBuddyNpmPackage
+  }
+});
+const {
+  getNpmStatus,
+  getWingetStatus,
+  getCodexCommandStatus,
+  getCodeBuddyCommandStatus,
+  getClaudeCodeStatus
+} = agentRuntime;
 const terminalPermissionRiskRules = [
   {
     id: "delete-files",
@@ -131,6 +160,80 @@ const {
 } = llmService;
 const maxEditableFileBytes = 1024 * 1024 * 2;
 const fileListLimit = 240;
+const projectFileService = createProjectFileService({
+  fileListLimit,
+  maxEditableFileBytes,
+  appendLogEvent,
+  serializeError
+});
+const {
+  isPathInside,
+  getProjectRoot,
+  getProjectFileTarget,
+  isLikelyTextFile,
+  listProjectFiles,
+  readProjectFile,
+  writeProjectFile,
+  createProjectFolder,
+  renameProjectFile,
+  deleteProjectFile
+} = projectFileService;
+const mcpConfigService = createMcpConfigService({
+  resolveNodeCommandForMcp,
+  getStorageDirectory,
+  getProjectRoot,
+  writeJsonAtomic,
+  getLogDirectory,
+  appendLogEvent,
+  serializeError,
+  appVersion
+});
+const {
+  getMcpServerInfo,
+  buildMcpServerEntry,
+  readProjectMcpJsonConfig,
+  writeProjectMcpConfig,
+  readJsonConfigSnapshot,
+  areStringArraysEqual,
+  getMcpServerMatchStatus,
+  checkProjectMcpConfig,
+  readMcpAuditEvents
+} = mcpConfigService;
+const agentOutputEventKeys = new Map();
+const terminalService = createTerminalService({
+  agentOutputEventKeys,
+  createId: randomUUID,
+  normalizeCwd,
+  normalizeTerminalMode,
+  getEffectiveAgentProvider,
+  getAgentPermissionPolicy,
+  getAgentProviderLabel,
+  writeProjectMcpConfig,
+  resolveTerminalLaunch,
+  shouldUsePipeTerminalBackend,
+  createPipeTerminal,
+  shouldUseNativeTerminalBackend,
+  createNativeTerminal,
+  nodePty,
+  createPtyTerminal,
+  serializeError,
+  sanitizeLogText,
+  appendLogEvent,
+  scheduleTerminalProcessTreeSnapshots,
+  killProcessTree
+});
+const {
+  sessions: terminalSessions,
+  transcripts: terminalTranscripts,
+  webContents: terminalWebContents,
+  appendTranscript: appendTerminalTranscript,
+  getTargetWebContents: getTerminalTargetWebContents,
+  sendData: sendTerminalData,
+  sendExit: sendTerminalExit,
+  createSession: createTerminalSession,
+  disposeSession: disposeTerminalSession,
+  disposeAllSessions: disposeAllTerminalSessions
+} = terminalService;
 let windowsEnvCache = null;
 const cossMainWindowIds = new Set();
 let creatingCosSMainWindow = false;
@@ -1292,404 +1395,6 @@ function resolveNodeCommandForMcp() {
   return resolveCommandOnPath("node") || "node";
 }
 
-function getMcpServerInfo(context = {}) {
-  const serverPath = path.join(__dirname, "coss-mcp-server.cjs");
-  const command = resolveNodeCommandForMcp();
-  const args = [
-    serverPath,
-    "--user-data",
-    getStorageDirectory()
-  ];
-  if (context.projectId) {
-    args.push("--project-id", context.projectId);
-  }
-  if (context.roleId) {
-    args.push("--role-id", context.roleId);
-  }
-  if (context.taskId) {
-    args.push("--task-id", context.taskId);
-  }
-  if (context.sessionId) {
-    args.push("--session-id", context.sessionId);
-  }
-  return {
-    name: "coss-mcp",
-    command,
-    args,
-    serverPath,
-    cwd: path.dirname(path.dirname(serverPath)),
-    userData: getStorageDirectory(),
-    projectId: context.projectId || "",
-    roleId: context.roleId || "",
-    taskId: context.taskId || "",
-    sessionId: context.sessionId || ""
-  };
-}
-
-function buildMcpServerEntry(context = {}) {
-  const info = getMcpServerInfo(context);
-  const env = {
-    COSS_MCP_USER_DATA: info.userData
-  };
-  if (info.projectId) {
-    env.COSS_MCP_PROJECT_ID = info.projectId;
-  }
-
-  return {
-    type: "stdio",
-    description: "CosS v0.10 Kernel MCP tools for durable task context, leased steps, structured results, locks, approvals, and projections.",
-    defer_loading: false,
-    command: info.command,
-    args: info.args,
-    env
-  };
-}
-
-function readProjectMcpJsonConfig(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return { data: {}, backupPath: "" };
-  }
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(".mcp.json must be a JSON object");
-    }
-    return { data: parsed, backupPath: "" };
-  } catch (error) {
-    const backupPath = `${filePath}.invalid-${Date.now()}.bak`;
-    fs.copyFileSync(filePath, backupPath);
-    appendLogEvent("mcp.project-config.invalid-backed-up", {
-      filePath,
-      backupPath,
-      error: serializeError(error)
-    }, "warn");
-    return { data: {}, backupPath };
-  }
-}
-
-function writeProjectMcpConfig(_event, request = {}) {
-  try {
-    const root = getProjectRoot(request.projectPath);
-    const projectId = String(request.projectId || "").trim();
-    const generatedAt = new Date().toISOString();
-    const serverEntry = buildMcpServerEntry({ projectId });
-    const rootConfigPath = path.join(root, ".mcp.json");
-    const cossConfigPath = path.join(root, ".coss", "mcp", "coss-mcp.json");
-    const existingRootConfig = readProjectMcpJsonConfig(rootConfigPath);
-    const rootConfig = existingRootConfig.data;
-    const existingServers = rootConfig.mcpServers && typeof rootConfig.mcpServers === "object" && !Array.isArray(rootConfig.mcpServers)
-      ? rootConfig.mcpServers
-      : {};
-
-    rootConfig.mcpServers = {
-      ...existingServers,
-      coss: serverEntry
-    };
-
-    const cossConfig = {
-      generatedBy: "CosS",
-      appVersion,
-      generatedAt,
-      projectId,
-      projectPath: root,
-      mcpServers: {
-        coss: serverEntry
-      },
-      tools: [
-        "coss_get_context",
-        "coss_list_roles",
-        "coss_get_task_board",
-        "coss_pool_read",
-        "coss_pool_claim",
-        "coss_list_tasks",
-        "coss_claim_task",
-        "coss_claim_step",
-        "coss_heartbeat_step",
-        "coss_release_step",
-        "coss_get_kernel_events",
-        "coss_report_status",
-        "coss_submit_result",
-        "coss_acquire_lock",
-        "coss_release_lock",
-        "coss_request_approval"
-      ],
-      note: "CosS v0.10 Agents must use the Kernel task board, leased step claiming, structured results, locks, and approvals."
-    };
-
-    writeJsonAtomic(cossConfigPath, cossConfig);
-    writeJsonAtomic(rootConfigPath, rootConfig);
-    appendLogEvent("mcp.project-config.written", {
-      projectPath: root,
-      projectId,
-      rootConfigPath,
-      cossConfigPath,
-      backupPath: existingRootConfig.backupPath,
-      serverName: "coss"
-    });
-
-    return {
-      ok: true,
-      projectPath: root,
-      projectId,
-      rootConfigPath,
-      cossConfigPath,
-      backupPath: existingRootConfig.backupPath,
-      server: serverEntry
-    };
-  } catch (error) {
-    appendLogEvent("mcp.project-config.write.failed", {
-      projectPath: request.projectPath,
-      projectId: request.projectId,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message };
-  }
-}
-
-function readJsonConfigSnapshot(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return {
-      path: filePath,
-      exists: false,
-      valid: false,
-      error: "",
-      data: null,
-      modifiedAt: "",
-      size: 0
-    };
-  }
-
-  const stat = fs.statSync(filePath);
-  try {
-    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    const isObject = data && typeof data === "object" && !Array.isArray(data);
-    return {
-      path: filePath,
-      exists: true,
-      valid: isObject,
-      error: isObject ? "" : "JSON root is not an object.",
-      data: isObject ? data : null,
-      modifiedAt: stat.mtime.toISOString(),
-      size: stat.size
-    };
-  } catch (error) {
-    return {
-      path: filePath,
-      exists: true,
-      valid: false,
-      error: error.message,
-      data: null,
-      modifiedAt: stat.mtime.toISOString(),
-      size: stat.size
-    };
-  }
-}
-
-function areStringArraysEqual(left = [], right = []) {
-  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-    return false;
-  }
-  return left.every((item, index) => String(item) === String(right[index]));
-}
-
-function getMcpServerMatchStatus(actual, expected) {
-  const server = actual && typeof actual === "object" && !Array.isArray(actual) ? actual : null;
-  if (!server) {
-    return {
-      hasServer: false,
-      commandMatches: false,
-      argsMatches: false,
-      envMatches: false,
-      matches: false,
-      command: "",
-      args: [],
-      env: {}
-    };
-  }
-
-  const env = server.env && typeof server.env === "object" && !Array.isArray(server.env) ? server.env : {};
-  const expectedEnv = expected.env || {};
-  const envMatches = Object.keys(expectedEnv).every((key) => String(env[key] || "") === String(expectedEnv[key] || ""));
-  const typeMatches = String(server.type || "stdio") === String(expected.type || "stdio");
-  const commandMatches = String(server.command || "") === String(expected.command || "");
-  const argsMatches = areStringArraysEqual(server.args || [], expected.args || []);
-
-  return {
-    hasServer: true,
-    typeMatches,
-    commandMatches,
-    argsMatches,
-    envMatches,
-    matches: typeMatches && commandMatches && argsMatches && envMatches,
-    type: String(server.type || ""),
-    command: String(server.command || ""),
-    args: Array.isArray(server.args) ? server.args : [],
-    env
-  };
-}
-
-function checkProjectMcpConfig(_event, request = {}) {
-  try {
-    const root = getProjectRoot(request.projectPath);
-    const projectId = String(request.projectId || "").trim();
-    const expectedServer = buildMcpServerEntry({ projectId });
-    const rootConfigPath = path.join(root, ".mcp.json");
-    const cossConfigPath = path.join(root, ".coss", "mcp", "coss-mcp.json");
-    const rootSnapshot = readJsonConfigSnapshot(rootConfigPath);
-    const cossSnapshot = readJsonConfigSnapshot(cossConfigPath);
-    const rootServerStatus = getMcpServerMatchStatus(rootSnapshot.data?.mcpServers?.coss, expectedServer);
-    const cossServerStatus = getMcpServerMatchStatus(cossSnapshot.data?.mcpServers?.coss, expectedServer);
-    const cossMetaMatches = cossSnapshot.valid
-      && String(cossSnapshot.data?.projectId || "") === projectId
-      && String(cossSnapshot.data?.generatedBy || "") === "CosS";
-    const ok = rootSnapshot.valid
-      && cossSnapshot.valid
-      && rootServerStatus.matches
-      && cossServerStatus.matches
-      && cossMetaMatches;
-
-    const result = {
-      ok,
-      projectPath: root,
-      projectId,
-      checkedAt: new Date().toISOString(),
-      rootConfig: {
-        path: rootConfigPath,
-        exists: rootSnapshot.exists,
-        valid: rootSnapshot.valid,
-        error: rootSnapshot.error,
-        modifiedAt: rootSnapshot.modifiedAt,
-        size: rootSnapshot.size,
-        ...rootServerStatus
-      },
-      cossConfig: {
-        path: cossConfigPath,
-        exists: cossSnapshot.exists,
-        valid: cossSnapshot.valid,
-        error: cossSnapshot.error,
-        modifiedAt: cossSnapshot.modifiedAt,
-        size: cossSnapshot.size,
-        metaMatches: cossMetaMatches,
-        ...cossServerStatus
-      },
-      expectedServer,
-      fixAvailable: true
-    };
-
-    appendLogEvent("mcp.project-config.checked", {
-      projectPath: root,
-      projectId,
-      ok,
-      rootConfig: {
-        exists: result.rootConfig.exists,
-        valid: result.rootConfig.valid,
-        matches: result.rootConfig.matches
-      },
-      cossConfig: {
-        exists: result.cossConfig.exists,
-        valid: result.cossConfig.valid,
-        matches: result.cossConfig.matches,
-        metaMatches: result.cossConfig.metaMatches
-      }
-    }, ok ? "info" : "warn");
-
-    return result;
-  } catch (error) {
-    appendLogEvent("mcp.project-config.check.failed", {
-      projectPath: request.projectPath,
-      projectId: request.projectId,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message, fixAvailable: false };
-  }
-}
-
-function readMcpAuditEvents(_event, request = {}) {
-  const limit = Math.min(Math.max(Number.parseInt(request.limit || "80", 10) || 80, 1), 200);
-  const roleId = String(request.roleId || "").trim();
-  const taskId = String(request.taskId || "").trim();
-  const tool = String(request.tool || "").trim().toLowerCase();
-  const query = String(request.query || "").trim().toLowerCase();
-  const logDirectory = getLogDirectory();
-  const matchesAuditFilters = (entry) => {
-    const payload = entry.payload || {};
-    const text = JSON.stringify({ event: entry.event, payload }).toLowerCase();
-    if (roleId) {
-      const roleValues = [
-        payload.roleId,
-        payload.fromRoleId,
-        ...(Array.isArray(payload.toRoleIds) ? payload.toRoleIds : [])
-      ].map((value) => String(value || ""));
-      if (!roleValues.includes(roleId)) {
-        return false;
-      }
-    }
-    if (taskId && String(payload.taskId || "") !== taskId) {
-      return false;
-    }
-    if (tool) {
-      const payloadTool = String(payload.tool || payload.toolName || "").toLowerCase();
-      if (payloadTool !== tool && !String(entry.event || "").toLowerCase().includes(tool)) {
-        return false;
-      }
-    }
-    if (query && !text.includes(query)) {
-      return false;
-    }
-    return true;
-  };
-
-  try {
-    if (!fs.existsSync(logDirectory)) {
-      return { ok: true, logDirectory, events: [] };
-    }
-
-    const files = fs.readdirSync(logDirectory)
-      .filter((name) => name.endsWith(".jsonl"))
-      .sort()
-      .reverse()
-      .slice(0, 8);
-    const events = [];
-
-    for (const fileName of files) {
-      const filePath = path.join(logDirectory, fileName);
-      const lines = fs.readFileSync(filePath, "utf8").trim().split(/\r?\n/).filter(Boolean).reverse();
-      for (const line of lines) {
-        if (events.length >= limit) {
-          break;
-        }
-        try {
-          const entry = JSON.parse(line);
-          if (String(entry.event || "").startsWith("mcp.") && matchesAuditFilters(entry)) {
-            events.push({
-              timestamp: entry.timestamp || "",
-              level: entry.level || "info",
-              event: entry.event || "",
-              payload: entry.payload || {},
-              fileName
-            });
-          }
-        } catch {
-          // Ignore malformed log lines in the audit reader.
-        }
-      }
-      if (events.length >= limit) {
-        break;
-      }
-    }
-
-    appendLogEvent("mcp.audit-events.read", { count: events.length, limit, roleId, taskId, tool, query });
-    return { ok: true, logDirectory, events, filters: { roleId, taskId, tool, query } };
-  } catch (error) {
-    appendLogEvent("mcp.audit-events.read.failed", {
-      logDirectory,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, logDirectory, error: error.message, events: [] };
-  }
-}
-
 function normalizeExportedStatePayload(payload) {
   const value = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
   if (!value) {
@@ -2229,102 +1934,6 @@ function runCommandForStatus(command, args, env, timeout = 5000) {
     timeout,
     windowsHide: true
   });
-}
-
-function checkCodexVersion(command, env) {
-  const result = runCommandForStatus(command, ["--version"], env);
-  const output = commandOutput(result);
-  const errorDetail = commandErrorDetail(result, "codex --version");
-
-  return {
-    runnable: result.status === 0,
-    version: result.status === 0 ? output : "",
-    errorDetail
-  };
-}
-
-function checkCodeBuddyVersion(command, env) {
-  const result = runCommandForStatus(command, ["--version"], env);
-  const output = commandOutput(result);
-  const errorDetail = commandErrorDetail(result, "codebuddy --version");
-
-  return {
-    runnable: result.status === 0,
-    version: result.status === 0 ? output : "",
-    errorDetail
-  };
-}
-
-function getCodexCommandStatus(env = getWindowsShellEnv()) {
-  const requestedCommand = process.env.COSS_CODEX_COMMAND || "codex";
-  const lookupPaths = findCommandPaths(requestedCommand, env);
-  const npmStatus = getNpmStatus(env);
-  const attemptedCommands = [requestedCommand, ...lookupPaths].filter((item, index, list) => (
-    item && list.indexOf(item) === index
-  ));
-  const attempts = attemptedCommands.map((item) => ({
-    command: item,
-    status: checkCodexVersion(item, env)
-  }));
-  const runnableAttempt = attempts.find((attempt) => attempt.status.runnable);
-  const primaryStatus = attempts[0]?.status || checkCodexVersion(requestedCommand, env);
-  const hasWindowsAppsPackagePath = lookupPaths.some((item) => item.toLowerCase().includes("\\windowsapps\\openai.codex_"));
-
-  const command = runnableAttempt
-    ? preferWindowsCmdShim(runnableAttempt.command, lookupPaths)
-    : requestedCommand;
-
-  return {
-    command,
-    requestedCommand,
-    lookupPaths,
-    runnable: Boolean(runnableAttempt),
-    version: runnableAttempt?.status.version || "",
-    errorDetail: runnableAttempt ? "" : primaryStatus.errorDetail,
-    hasWindowsAppsPackagePath,
-    npm: npmStatus,
-    auth: getCodexAuthState(),
-    installCommand: getCodexInstallCommand(npmStatus.command),
-    autoInstallDisabled: process.env.COSS_DISABLE_CODEX_AUTO_INSTALL === "1",
-    checkedAt: new Date().toISOString()
-  };
-}
-
-function getCodeBuddyCommandStatus(env = getWindowsShellEnv()) {
-  const requestedCommand = process.env.COSS_CODEBUDDY_COMMAND || "codebuddy";
-  const aliasCommand = requestedCommand === "codebuddy" ? "cbc" : "";
-  const lookupPaths = [
-    ...findCommandPaths(requestedCommand, env),
-    ...(aliasCommand ? findCommandPaths(aliasCommand, env) : [])
-  ].filter((item, index, list) => item && list.indexOf(item) === index);
-  const npmStatus = getNpmStatus(env);
-  const attemptedCommands = [requestedCommand, ...lookupPaths].filter((item, index, list) => (
-    item && list.indexOf(item) === index
-  ));
-  const attempts = attemptedCommands.map((item) => ({
-    command: item,
-    status: checkCodeBuddyVersion(item, env)
-  }));
-  const runnableAttempt = attempts.find((attempt) => attempt.status.runnable);
-  const primaryStatus = attempts[0]?.status || checkCodeBuddyVersion(requestedCommand, env);
-  const command = runnableAttempt
-    ? preferWindowsCmdShim(runnableAttempt.command, lookupPaths)
-    : requestedCommand;
-
-  return {
-    command,
-    requestedCommand,
-    aliasCommand,
-    lookupPaths,
-    runnable: Boolean(runnableAttempt),
-    version: runnableAttempt?.status.version || "",
-    errorDetail: runnableAttempt ? "" : primaryStatus.errorDetail,
-    npm: npmStatus,
-    auth: getCodeBuddyAuthState(env),
-    installCommand: getCodeBuddyInstallCommand(npmStatus.command),
-    autoInstallDisabled: process.env.COSS_DISABLE_CODEBUDDY_AUTO_INSTALL === "1",
-    checkedAt: new Date().toISOString()
-  };
 }
 
 function getCodexLaunchCommandInfo(env = getWindowsShellEnv()) {
@@ -2915,115 +2524,6 @@ function buildCodeBuddyInstallPowerShellCommand(codeBuddyStatus, installCommand)
     : "";
 
   return `${writeMessages}; ${getCodeBuddyInstallPowerShellInvocation(codeBuddyStatus.npm?.command)}; Write-Host ''; Write-Host ${powerShellQuote(doneMessage)}${holdScript}`;
-}
-
-function getNpmStatus(env = getWindowsShellEnv()) {
-  const candidates = getNpmCandidates(env);
-  const attempts = candidates.map((command) => {
-    const result = runCommandForStatus(command, ["--version"], env);
-    const output = commandOutput(result);
-
-    return {
-      command,
-      status: result.status,
-      output,
-      errorDetail: commandErrorDetail(result, `${command} --version`)
-    };
-  });
-  const success = attempts.find((attempt) => attempt.status === 0 && attempt.output.length > 0);
-  const firstAttempt = attempts[0] || {
-    command: getNpmCommand(),
-    status: null,
-    output: "",
-    errorDetail: "未找到 npm 命令入口。"
-  };
-
-  return {
-    command: success?.command || firstAttempt.command,
-    candidates,
-    usable: Boolean(success),
-    version: success?.output || "",
-    errorDetail: success ? "" : firstAttempt.errorDetail,
-    runner: process.platform === "win32" ? "powershell-hidden" : "direct"
-  };
-}
-
-function getWingetStatus() {
-  if (process.platform !== "win32") {
-    return {
-      exists: false,
-      usable: false,
-      detail: "当前安装流程仅支持 Windows 系统上的 winget。"
-    };
-  }
-
-  const lookup = childProcess.spawnSync("where.exe", ["winget"], {
-    encoding: "utf8",
-    env: getWindowsShellEnv(),
-    windowsHide: true
-  });
-  const exists = lookup.status === 0;
-
-  if (!exists) {
-    return {
-      exists: false,
-      usable: false,
-      detail: "未找到 winget 命令入口。"
-    };
-  }
-
-  const version = childProcess.spawnSync("winget", ["--version"], {
-    encoding: "utf8",
-    env: getWindowsShellEnv(),
-    timeout: 5000,
-    windowsHide: true
-  });
-  const output = `${version.stdout || ""}${version.stderr || ""}`.trim();
-
-  return {
-    exists: true,
-    usable: version.status === 0 && output.length > 0,
-    detail:
-      version.status === 0 && output.length > 0
-        ? output
-        : `检测到 winget 入口，但 winget --version 运行失败或无输出，退出码 ${version.status ?? "unknown"}。`
-  };
-}
-
-function getClaudeCodeStatus() {
-  const command = process.env.COSS_CLAUDE_COMMAND || "claude";
-  const env = getWindowsShellEnv();
-  const installed = commandExists(command, env);
-  const wingetStatus = getWingetStatus();
-  const onboarding = ensureClaudeOnboardingCompleted();
-  let version = "";
-  let versionError = "";
-
-  if (installed) {
-    const versionResult = childProcess.spawnSync(command, ["--version"], {
-      encoding: "utf8",
-      env,
-      timeout: 5000,
-      windowsHide: true
-    });
-    version = `${versionResult.stdout || ""}${versionResult.stderr || ""}`.trim();
-    if (versionResult.status !== 0 && !version) {
-      versionError = `claude --version exited with ${versionResult.status ?? "unknown"}`;
-    }
-  }
-
-  return {
-    command,
-    installed,
-    version,
-    versionError,
-    onboarding,
-    auth: getClaudeAuthState(onboarding),
-    winget: wingetStatus,
-    installCommand: `winget install ${claudeCodeWingetPackage}`,
-    autoInstallDisabled: process.env.COSS_DISABLE_CLAUDE_AUTO_INSTALL === "1",
-    checkedAt: new Date().toISOString()
-  };
 }
 
 function findDeepStringValue(value, keys, depth = 0) {
@@ -4113,37 +3613,6 @@ function resolveTerminalLaunch(options) {
   };
 }
 
-function appendTerminalTranscript(id, data) {
-  if (!id || typeof data !== "string" || !data) {
-    return;
-  }
-  const previous = terminalTranscripts.get(id) || "";
-  terminalTranscripts.set(id, `${previous}${data}`.slice(-120000));
-}
-
-function getTerminalTargetWebContents(id, fallbackWebContents) {
-  const current = terminalWebContents.get(id);
-  if (current && !current.isDestroyed()) {
-    return current;
-  }
-  return fallbackWebContents;
-}
-
-function sendTerminalData(webContents, id, data) {
-  appendTerminalTranscript(id, data);
-  const targetWebContents = getTerminalTargetWebContents(id, webContents);
-  if (targetWebContents && !targetWebContents.isDestroyed()) {
-    targetWebContents.send("terminal:data", { id, data });
-  }
-}
-
-function sendTerminalExit(webContents, id, exitCode) {
-  const targetWebContents = getTerminalTargetWebContents(id, webContents);
-  if (targetWebContents && !targetWebContents.isDestroyed()) {
-    targetWebContents.send("terminal:exit", { id, exitCode });
-  }
-}
-
 function getTerminalInputGuard(session) {
   session.inputGuard ||= { buffer: "" };
   return session.inputGuard;
@@ -4871,284 +4340,6 @@ function createPtyTerminal(webContents, id, options, launch = resolveTerminalLau
   };
 }
 
-function createTerminalSession(event, options = {}) {
-  const id = typeof options.id === "string" ? options.id : randomUUID();
-  const webContents = event.sender;
-  terminalWebContents.set(id, webContents);
-  const existingSession = terminalSessions.get(id);
-  if (existingSession) {
-    appendLogEvent("terminal.reattached", {
-      id,
-      mode: existingSession.mode,
-      activeMode: existingSession.launch?.activeMode || "",
-      transcriptLength: (terminalTranscripts.get(id) || "").length,
-      sessionId: existingSession.launch?.agentSession?.sessionId || ""
-    });
-    return {
-      id,
-      mode: existingSession.mode,
-      requestedMode: existingSession.launch?.requestedMode || "shell",
-      activeMode: existingSession.launch?.activeMode || existingSession.mode || "shell",
-      agentSession: existingSession.launch?.agentSession || null,
-      reattached: true,
-      transcript: terminalTranscripts.get(id) || ""
-    };
-  }
-
-  const roleName = options.roleName || "角色终端";
-  const cwd = normalizeCwd(options.cwd);
-  const terminalMode = normalizeTerminalMode(options.terminalMode);
-  const agentProvider = getEffectiveAgentProvider(options);
-  const permissionPolicy = getAgentPermissionPolicy(options.agentPermissionMode);
-  const requestedMode = {
-    agent: `Agent(${getAgentProviderLabel(agentProvider)})`,
-    shell: "PowerShell"
-  }[terminalMode];
-  appendLogEvent("terminal.create.requested", {
-    id,
-    roleName,
-    cwd,
-    terminalMode,
-    agentProvider,
-    permissionMode: permissionPolicy.id,
-    permissionLabel: permissionPolicy.label,
-    requestedMode,
-    sessionId: options.agentSession?.sessionId || "",
-    taskId: options.taskContext?.taskId || options.agentSession?.taskId || ""
-  });
-
-  sendTerminalData(
-    webContents,
-    id,
-    `\x1b[32mCosS ${roleName} terminal\x1b[0m\r\n` +
-      `工作目录: ${cwd}\r\n` +
-      `请求模式: ${requestedMode}\r\n` +
-      `权限模式: ${permissionPolicy.label}\r\n` +
-      `会话 ID: ${options.agentSession?.sessionId || "shell"}\r\n` +
-      "角色提示词、会话信息和任务上下文已写入 COSS_* 环境变量。\r\n\r\n"
-  );
-
-  if (terminalMode === "agent" && options.agentMcpAutoConfigEnabled === true) {
-    const mcpConfigResult = writeProjectMcpConfig(null, {
-      projectPath: cwd,
-      projectId: options.projectId || options.agentSession?.projectId || ""
-    });
-    if (mcpConfigResult.ok) {
-      sendTerminalData(webContents, id, `\x1b[32m已生成项目 MCP 配置: ${mcpConfigResult.rootConfigPath}\x1b[0m\r\n`);
-    } else {
-      sendTerminalData(webContents, id, `\x1b[33m项目 MCP 配置生成失败: ${mcpConfigResult.error}\x1b[0m\r\n`);
-    }
-  }
-
-  if (process.env.COSS_DISABLE_TERMINAL_BACKEND === "1") {
-    const mockSession = {
-      write: (data) => sendTerminalData(webContents, id, data),
-      resize: () => {},
-      kill: () => {},
-      mode: "mock",
-      launch: {
-        requestedMode: terminalMode,
-        activeMode: "mock",
-        permissionMode: permissionPolicy.id,
-        permissionLabel: permissionPolicy.label
-      }
-    };
-    terminalSessions.set(id, mockSession);
-    appendLogEvent("terminal.create.mock", {
-      id,
-      roleName,
-      requestedMode: mockSession.launch.requestedMode,
-      activeMode: "mock"
-    }, "warn");
-    sendTerminalData(webContents, id, "\x1b[33m当前环境已关闭真实终端后端。\x1b[0m\r\n");
-    return {
-      id,
-      mode: "mock",
-      requestedMode: mockSession.launch.requestedMode,
-      activeMode: "mock"
-    };
-  }
-
-  const launch = resolveTerminalLaunch({ ...options, cwd });
-  launch.permissionMode = permissionPolicy.id;
-  launch.permissionLabel = permissionPolicy.label;
-  launch.roleId = options.roleId || "";
-  launch.roleName = options.roleName || "";
-  launch.projectId = options.projectId || options.agentSession?.projectId || "";
-  launch.projectName = options.projectName || options.agentSession?.projectName || "";
-  launch.agentSession = options.agentSession || {};
-  launch.taskContext = options.taskContext || {};
-  if (launch.activeMode === "error") {
-    const staticSession = {
-      write: () => {},
-      resize: () => {},
-      kill: () => {},
-      mode: "static",
-      launch
-    };
-    terminalSessions.set(id, staticSession);
-    if (launch.warning) {
-      sendTerminalData(webContents, id, `\x1b[31m${launch.warning}\x1b[0m\r\n`);
-    }
-    appendLogEvent("terminal.create.static-error", {
-      id,
-      roleName,
-      requestedMode: launch.requestedMode || "agent",
-      activeMode: launch.activeMode,
-      warning: sanitizeLogText(launch.warning, 500)
-    }, "error");
-    return {
-      id,
-      mode: "static",
-      requestedMode: launch.requestedMode || "agent",
-      activeMode: launch.activeMode
-    };
-  }
-
-  let session;
-  if (shouldUsePipeTerminalBackend(launch)) {
-    session = createPipeTerminal(webContents, id, { ...options, cwd }, launch);
-  }
-  if (!session && shouldUseNativeTerminalBackend(launch)) {
-    try {
-      session = createNativeTerminal(webContents, id, { ...options, cwd }, launch);
-    } catch (error) {
-      appendLogEvent("terminal.native-helper.failed", {
-        id,
-        roleName,
-        launch: {
-          file: launch.file,
-          args: launch.args,
-          activeMode: launch.activeMode,
-          requestedMode: launch.requestedMode
-        },
-        error: serializeError(error)
-      }, "warn");
-      sendTerminalData(
-        webContents,
-        id,
-        `\x1b[33mnative terminal helper 启动失败，已切换到 node-pty: ${error.message}\x1b[0m\r\n`
-      );
-    }
-  }
-  if (!session) {
-    try {
-      if (!nodePty) {
-        throw new Error("node-pty is unavailable");
-      }
-      session = createPtyTerminal(webContents, id, { ...options, cwd }, launch);
-    } catch (error) {
-      appendLogEvent("terminal.pty.failed", {
-        id,
-        roleName,
-        launch: {
-          file: launch.file,
-          args: launch.args,
-          activeMode: launch.activeMode,
-          requestedMode: launch.requestedMode
-        },
-        error: serializeError(error)
-      }, "warn");
-      sendTerminalData(
-        webContents,
-        id,
-        `\x1b[33mnode-pty 启动失败，已切换到兼容终端: ${error.message}\x1b[0m\r\n`
-      );
-      session = createPipeTerminal(webContents, id, { ...options, cwd }, launch);
-    }
-  }
-
-  if (session.launch?.warning) {
-    sendTerminalData(webContents, id, `\x1b[33m${session.launch.warning}\x1b[0m\r\n\r\n`);
-  }
-
-  if (session.launch?.claudeConfig?.error) {
-    sendTerminalData(
-      webContents,
-      id,
-      `\x1b[33mClaude Code 首次启动配置写入失败: ${session.launch.claudeConfig.error}\x1b[0m\r\n`
-    );
-  } else if (session.launch?.claudeConfig?.changed) {
-    sendTerminalData(webContents, id, "\x1b[32m已自动完成 Claude Code 首次启动配置。\x1b[0m\r\n");
-  }
-
-  terminalSessions.set(id, session);
-  appendLogEvent("terminal.create.succeeded", {
-    id,
-    roleName,
-    mode: session.mode,
-    requestedMode: session.launch?.requestedMode || "shell",
-    activeMode: session.launch?.activeMode || "shell",
-    file: session.launch?.file || "",
-    launchMethod: session.launch?.launchMethod || "",
-    scriptPath: session.launch?.scriptPath || "",
-    pid: session.pid || null,
-    helperPid: session.helperPid || null,
-    childPid: session.childPid || null,
-    sessionId: session.launch?.agentSession?.sessionId || "",
-    taskId: session.launch?.taskContext?.taskId || session.launch?.agentSession?.taskId || ""
-  });
-  scheduleTerminalProcessTreeSnapshots(id, session, roleName);
-
-  if (session.launch?.installCommand) {
-    try {
-      session.write(`${session.launch.installCommand}\r`);
-    } catch (error) {
-      appendLogEvent("terminal.install-command.failed", {
-        id,
-        installCommand: session.launch.installCommand,
-        error: serializeError(error)
-      }, "error");
-      sendTerminalData(webContents, id, `\x1b[31m自动执行安装命令失败: ${error.message}\x1b[0m\r\n`);
-    }
-  }
-
-  return {
-    id,
-    mode: session.mode,
-    requestedMode: session.launch?.requestedMode || "shell",
-    activeMode: session.launch?.activeMode || "shell",
-    agentSession: session.launch?.agentSession || null
-  };
-}
-
-function disposeTerminalSession(id) {
-  const session = terminalSessions.get(id);
-  if (!session) {
-    return false;
-  }
-
-  terminalSessions.delete(id);
-  terminalTranscripts.delete(id);
-  terminalWebContents.delete(id);
-  agentOutputEventKeys.delete(id);
-  try {
-    session.kill();
-    killProcessTree(session.pid);
-    appendLogEvent("terminal.dispose.succeeded", {
-      id,
-      mode: session.mode,
-      activeMode: session.launch?.activeMode || "",
-      pid: session.pid || null
-    });
-  } catch (error) {
-    killProcessTree(session.pid);
-    console.warn(`Failed to kill terminal session ${id}`, error);
-    appendLogEvent("terminal.dispose.failed", {
-      id,
-      mode: session.mode,
-      pid: session.pid || null,
-      error: serializeError(error)
-    }, "error");
-  }
-  return true;
-}
-
-function disposeAllTerminalSessions() {
-  Array.from(terminalSessions.keys()).forEach((id) => disposeTerminalSession(id));
-  agentOutputEventKeys.clear();
-}
-
 async function selectProjectDirectory(event, currentPath) {
   if (process.env.COSS_MOCK_PROJECT_DIRECTORY) {
     appendLogEvent("project.directory.mock-selected", { path: process.env.COSS_MOCK_PROJECT_DIRECTORY });
@@ -5189,237 +4380,6 @@ async function openLogDirectory() {
     appendLogEvent("logs.open-directory.failed", { path: logDirectory, error }, "error");
   }
   return { ok: !error, path: logDirectory, error };
-}
-
-function isPathInside(rootPath, targetPath) {
-  const relative = path.relative(rootPath, targetPath);
-  return relative === "" || (relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function getProjectRoot(projectPath) {
-  const root = path.resolve(String(projectPath || ""));
-  if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
-    throw new Error("项目目录不存在或不可访问。");
-  }
-  return root;
-}
-
-function getProjectFileTarget(projectPath, filePath) {
-  const root = getProjectRoot(projectPath);
-  const rawFilePath = String(filePath || "").trim();
-  if (!rawFilePath) {
-    throw new Error("文件路径为空。");
-  }
-  const target = path.resolve(path.isAbsolute(rawFilePath) ? rawFilePath : path.join(root, rawFilePath));
-  if (!isPathInside(root, target)) {
-    throw new Error("文件路径超出当前项目目录，已阻止访问。");
-  }
-  return {
-    root,
-    target,
-    relativePath: path.relative(root, target)
-  };
-}
-
-function isLikelyTextFile(filePath, size) {
-  if (size > maxEditableFileBytes) {
-    return false;
-  }
-  const textExtensions = new Set([
-    ".txt", ".md", ".json", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".css", ".html", ".xml",
-    ".yml", ".yaml", ".toml", ".ini", ".env", ".gitignore", ".py", ".ps1", ".bat", ".cmd", ".sh",
-    ".java", ".kt", ".go", ".rs", ".cs", ".cpp", ".c", ".h", ".sql", ".csv", ".log"
-  ]);
-  const basename = path.basename(filePath).toLowerCase();
-  const extension = path.extname(filePath).toLowerCase();
-  return textExtensions.has(extension) || textExtensions.has(basename) || extension === "";
-}
-
-function listProjectFiles(_event, projectPath) {
-  try {
-    const root = getProjectRoot(projectPath);
-    const skippedDirectories = new Set(["node_modules", ".git", "dist", "build", "out", "coverage", "test-results"]);
-    const files = [];
-
-    function visit(directory, depth = 0) {
-      if (files.length >= fileListLimit || depth > 3) {
-        return;
-      }
-      const entries = fs.readdirSync(directory, { withFileTypes: true })
-        .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
-
-      entries.forEach((entry) => {
-        if (files.length >= fileListLimit) {
-          return;
-        }
-        const absolutePath = path.join(directory, entry.name);
-        const relativePath = path.relative(root, absolutePath);
-        if (entry.isDirectory()) {
-          if (!skippedDirectories.has(entry.name)) {
-            files.push({
-              name: entry.name,
-              path: relativePath,
-              type: "directory",
-              size: 0,
-              modifiedAt: fs.statSync(absolutePath).mtime.toISOString()
-            });
-          }
-          if (!skippedDirectories.has(entry.name)) {
-            visit(absolutePath, depth + 1);
-          }
-          return;
-        }
-        if (!entry.isFile()) {
-          return;
-        }
-        const stat = fs.statSync(absolutePath);
-        if (!isLikelyTextFile(absolutePath, stat.size)) {
-          return;
-        }
-        files.push({
-          name: entry.name,
-          path: relativePath,
-          type: "file",
-          size: stat.size,
-          modifiedAt: stat.mtime.toISOString()
-        });
-      });
-    }
-
-    visit(root);
-    appendLogEvent("files.listed", { projectPath: root, count: files.length });
-    return { ok: true, root, files, truncated: files.length >= fileListLimit };
-  } catch (error) {
-    appendLogEvent("files.list.failed", { projectPath, error: serializeError(error) }, "error");
-    return { ok: false, error: error.message, files: [] };
-  }
-}
-
-function readProjectFile(_event, request = {}) {
-  try {
-    const { root, target, relativePath } = getProjectFileTarget(request.projectPath, request.filePath);
-    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
-      throw new Error("文件不存在。");
-    }
-    const stat = fs.statSync(target);
-    if (!isLikelyTextFile(target, stat.size)) {
-      throw new Error("文件过大或不是可编辑文本文件。");
-    }
-    const content = fs.readFileSync(target, "utf8");
-    appendLogEvent("file.read", { projectPath: root, path: relativePath, size: stat.size });
-    return {
-      ok: true,
-      path: relativePath,
-      absolutePath: target,
-      content,
-      size: stat.size,
-      modifiedAt: stat.mtime.toISOString()
-    };
-  } catch (error) {
-    appendLogEvent("file.read.failed", {
-      projectPath: request.projectPath,
-      path: request.filePath,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message };
-  }
-}
-
-function writeProjectFile(_event, request = {}) {
-  try {
-    const content = String(request.content || "");
-    if (Buffer.byteLength(content, "utf8") > maxEditableFileBytes) {
-      throw new Error("文件内容超过 2MB，已阻止保存。");
-    }
-    const { root, target, relativePath } = getProjectFileTarget(request.projectPath, request.filePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, "utf8");
-    const stat = fs.statSync(target);
-    appendLogEvent("file.saved", { projectPath: root, path: relativePath, size: stat.size });
-    return {
-      ok: true,
-      path: relativePath,
-      absolutePath: target,
-      size: stat.size,
-      modifiedAt: stat.mtime.toISOString()
-    };
-  } catch (error) {
-    appendLogEvent("file.save.failed", {
-      projectPath: request.projectPath,
-      path: request.filePath,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message };
-  }
-}
-
-function createProjectFolder(_event, request = {}) {
-  try {
-    const { root, target, relativePath } = getProjectFileTarget(request.projectPath, request.folderPath);
-    fs.mkdirSync(target, { recursive: true });
-    const stat = fs.statSync(target);
-    if (!stat.isDirectory()) {
-      throw new Error("目标路径不是文件夹。");
-    }
-    appendLogEvent("file.folder.created", { projectPath: root, path: relativePath });
-    return { ok: true, path: relativePath, absolutePath: target };
-  } catch (error) {
-    appendLogEvent("file.folder.create.failed", {
-      projectPath: request.projectPath,
-      path: request.folderPath,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message };
-  }
-}
-
-function renameProjectFile(_event, request = {}) {
-  try {
-    const from = getProjectFileTarget(request.projectPath, request.fromPath);
-    const to = getProjectFileTarget(request.projectPath, request.toPath);
-    if (!fs.existsSync(from.target)) {
-      throw new Error("源路径不存在。");
-    }
-    if (fs.existsSync(to.target)) {
-      throw new Error("目标路径已存在。");
-    }
-    fs.mkdirSync(path.dirname(to.target), { recursive: true });
-    fs.renameSync(from.target, to.target);
-    appendLogEvent("file.renamed", { projectPath: from.root, from: from.relativePath, to: to.relativePath });
-    return { ok: true, fromPath: from.relativePath, path: to.relativePath, absolutePath: to.target };
-  } catch (error) {
-    appendLogEvent("file.rename.failed", {
-      projectPath: request.projectPath,
-      from: request.fromPath,
-      to: request.toPath,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message };
-  }
-}
-
-function deleteProjectFile(_event, request = {}) {
-  try {
-    const { root, target, relativePath } = getProjectFileTarget(request.projectPath, request.filePath);
-    if (!fs.existsSync(target)) {
-      throw new Error("目标路径不存在。");
-    }
-    const stat = fs.statSync(target);
-    if (stat.isDirectory()) {
-      fs.rmSync(target, { recursive: true, force: true });
-    } else {
-      fs.unlinkSync(target);
-    }
-    appendLogEvent("file.deleted", { projectPath: root, path: relativePath, type: stat.isDirectory() ? "directory" : "file" });
-    return { ok: true, path: relativePath };
-  } catch (error) {
-    appendLogEvent("file.delete.failed", {
-      projectPath: request.projectPath,
-      path: request.filePath,
-      error: serializeError(error)
-    }, "error");
-    return { ok: false, error: error.message };
-  }
 }
 
 async function selectProjectFile(event, request = {}) {
@@ -5720,210 +4680,63 @@ app.whenReady().then(() => {
     architectureVersion: ARCHITECTURE_VERSION,
     stateSchemaVersion: STATE_SCHEMA_VERSION
   });
-  ipcMain.handle(IPC_CHANNELS.STATE_LOAD, () => readState());
-  ipcMain.handle(IPC_CHANNELS.STATE_SAVE, async (_event, state) => {
-    try {
-      const durableState = await readState();
-      const mergedState = mergeStateForRendererSave(state, durableState);
-      const result = await writeState(mergedState);
-      appendLogEvent("state.saved", {
-        projects: Array.isArray(mergedState?.projects) ? mergedState.projects.length : 0,
-        mergedDurableState: Boolean(durableState?.projects?.length)
-      });
-      return result;
-    } catch (error) {
-      appendLogEvent("state.save.failed", {
-        projects: Array.isArray(state?.projects) ? state.projects.length : 0,
-        error: serializeError(error)
-      }, "error");
-      throw error;
-    }
+  createIpcRegistrar(ipcMain, {
+    IPC_CHANNELS,
+    app,
+    readState,
+    mergeStateForRendererSave,
+    writeState,
+    appendLogEvent,
+    serializeError,
+    handlePlanTask,
+    handleTestModelConnectivity,
+    appVersion,
+    getLogDirectory,
+    getMcpServerInfo,
+    shell,
+    openLogDirectory,
+    getStateMeta,
+    checkProjectMcpConfig,
+    writeProjectMcpConfig,
+    readMcpAuditEvents,
+    getStorageInfo,
+    createManualStateBackup,
+    exportStorageState,
+    importStorageState,
+    exportDiagnosticsPackage,
+    openStorageDirectory,
+    selectProjectDirectory,
+    selectProjectFile,
+    listProjectFiles,
+    readProjectFile,
+    writeProjectFile,
+    createProjectFolder,
+    renameProjectFile,
+    deleteProjectFile,
+    createMainWindow,
+    controlWindow,
+    getWindowFromEvent,
+    getClaudeCodeStatus,
+    sanitizeLogText,
+    getCodexCommandStatus,
+    handleWorldAgentRun,
+    getCodeBuddyCommandStatus,
+    getShellEnv,
+    getWindowsShellEnv,
+    claudeCodeWingetPackage,
+    childProcess,
+    codexNpmPackage,
+    buildPowerShellInvocation,
+    getNpmCommand,
+    getCodexInstallCommand,
+    codeBuddyNpmPackage,
+    getCodeBuddyInstallCommand,
+    testAgentRemoteLogin,
+    createTerminalSession,
+    terminalSessions,
+    processTerminalPermissionGuard,
+    disposeTerminalSession
   });
-  ipcMain.handle(IPC_CHANNELS.LLM_PLAN_TASK, handlePlanTask);
-  ipcMain.handle(IPC_CHANNELS.LLM_TEST_MODEL, handleTestModelConnectivity);
-  ipcMain.handle("app:info", () => ({
-    version: appVersion,
-    logDirectory: getLogDirectory(),
-    userData: app.getPath("userData"),
-    mcp: getMcpServerInfo()
-  }));
-  ipcMain.handle("app:open-external-url", async (_event, url) => {
-    const targetUrl = new URL(String(url || ""));
-    if (!["http:", "https:"].includes(targetUrl.protocol)) {
-      throw new Error("仅支持打开 HTTP/HTTPS 链接。");
-    }
-    await shell.openExternal(targetUrl.toString());
-    appendLogEvent("app.open-external-url", { url: targetUrl.toString() });
-    return { ok: true };
-  });
-  ipcMain.handle("app:log-event", (_event, eventName, payload = {}, level = "info") => appendLogEvent(eventName, payload, level));
-  ipcMain.handle("logs:open-directory", () => openLogDirectory());
-  registerIpcHandlers(ipcMain, {
-    [IPC_CHANNELS.STATE_META]: () => getStateMeta()
-  });
-  ipcMain.handle("mcp:info", (_event, context = {}) => getMcpServerInfo(context));
-  ipcMain.handle("mcp:check-project-config", checkProjectMcpConfig);
-  ipcMain.handle("mcp:write-project-config", writeProjectMcpConfig);
-  ipcMain.handle("mcp:audit-events", readMcpAuditEvents);
-  ipcMain.handle(IPC_CHANNELS.STORAGE_INFO, () => getStorageInfo());
-  ipcMain.handle(IPC_CHANNELS.STORAGE_BACKUP, () => createManualStateBackup());
-  ipcMain.handle("storage:export", exportStorageState);
-  ipcMain.handle("storage:import", importStorageState);
-  ipcMain.handle("storage:diagnostics", exportDiagnosticsPackage);
-  ipcMain.handle("storage:open-directory", () => openStorageDirectory());
-  ipcMain.handle("dialog:select-project-directory", selectProjectDirectory);
-  ipcMain.handle("dialog:select-project-file", selectProjectFile);
-  ipcMain.handle("files:list", listProjectFiles);
-  ipcMain.handle("files:read", readProjectFile);
-  ipcMain.handle("files:write", writeProjectFile);
-  ipcMain.handle("files:create-folder", createProjectFolder);
-  ipcMain.handle("files:rename", renameProjectFile);
-  ipcMain.handle("files:delete", deleteProjectFile);
-  ipcMain.handle("window:new", () => {
-    appendLogEvent("window.new");
-    createMainWindow();
-    return { ok: true };
-  });
-  ipcMain.handle("window:control", controlWindow);
-  ipcMain.handle("window:is-maximized", (event) => Boolean(getWindowFromEvent(event)?.isMaximized()));
-  ipcMain.handle("claude:status", () => {
-    const status = getClaudeCodeStatus();
-    appendLogEvent("agent.claude.status.checked", {
-      installed: Boolean(status.installed),
-      command: status.command || "",
-      version: sanitizeLogText(status.version, 80),
-      installCommand: status.installCommand || "",
-      onboardingConfigured: Boolean(status.onboarding?.configured),
-      authLoggedIn: Boolean(status.auth?.loggedIn),
-      authSource: status.auth?.source || "",
-      errorDetail: sanitizeLogText(status.versionError, 300)
-    }, status.installed ? "info" : "warn");
-    return status;
-  });
-  ipcMain.handle("codex:status", () => {
-    const status = getCodexCommandStatus();
-    appendLogEvent("agent.codex.status.checked", {
-      runnable: Boolean(status.runnable),
-      command: status.command || "",
-      requestedCommand: status.requestedCommand || "",
-      version: sanitizeLogText(status.version, 80),
-      npmUsable: Boolean(status.npm?.usable),
-      npmCommand: status.npm?.command || "",
-      authLoggedIn: Boolean(status.auth?.loggedIn),
-      authSource: status.auth?.source || "",
-      autoInstallDisabled: Boolean(status.autoInstallDisabled),
-      errorDetail: sanitizeLogText(status.errorDetail, 300)
-    }, status.runnable ? "info" : "warn");
-    return status;
-  });
-  ipcMain.handle(IPC_CHANNELS.WORLD_AGENT_RUN, handleWorldAgentRun);
-  ipcMain.handle("codebuddy:status", (_event, request = {}) => {
-    const apiKey = typeof request === "object" && request !== null ? String(request.apiKey || "").trim() : "";
-    const status = getCodeBuddyCommandStatus(getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {}));
-    appendLogEvent("agent.codebuddy.status.checked", {
-      runnable: Boolean(status.runnable),
-      command: status.command || "",
-      requestedCommand: status.requestedCommand || "",
-      version: sanitizeLogText(status.version, 80),
-      npmUsable: Boolean(status.npm?.usable),
-      npmCommand: status.npm?.command || "",
-      authLoggedIn: Boolean(status.auth?.loggedIn),
-      authSource: status.auth?.source || "",
-      autoInstallDisabled: Boolean(status.autoInstallDisabled),
-      errorDetail: sanitizeLogText(status.errorDetail, 300)
-    }, status.runnable ? "info" : "warn");
-    return status;
-  });
-  ipcMain.handle("agent:install-claude", async () => {
-    const env = getWindowsShellEnv();
-    const installCommand = `winget install ${claudeCodeWingetPackage} --silent --accept-package-agreements`;
-    try {
-      const result = childProcess.spawnSync("powershell.exe", [
-        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-        "-ExecutionPolicy", "Bypass",
-        "-Command", installCommand
-      ], { encoding: "utf8", env, timeout: 300000, windowsHide: true });
-      const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
-      const ok = result.status === 0;
-      appendLogEvent("agent.install.claude", { ok, output: sanitizeLogText(output, 500) }, ok ? "info" : "warn");
-      return { ok, output, installCommand };
-    } catch (error) {
-      appendLogEvent("agent.install.claude", { ok: false, error: serializeError(error) }, "error");
-      return { ok: false, error: error.message, installCommand };
-    }
-  });
-  ipcMain.handle("agent:install-codex", async () => {
-    const env = getWindowsShellEnv();
-    const npmCommand = getNpmCommand();
-    const command = buildPowerShellInvocation(npmCommand, ["install", "-g", codexNpmPackage]);
-    try {
-      const result = childProcess.spawnSync("powershell.exe", [
-        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-        "-ExecutionPolicy", "Bypass",
-        "-Command", command
-      ], { encoding: "utf8", env, timeout: 300000, windowsHide: true });
-      const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
-      const ok = result.status === 0;
-      appendLogEvent("agent.install.codex", { ok, output: sanitizeLogText(output, 500) }, ok ? "info" : "warn");
-      return { ok, output, installCommand: getCodexInstallCommand(npmCommand) };
-    } catch (error) {
-      appendLogEvent("agent.install.codex", { ok: false, error: serializeError(error) }, "error");
-      return { ok: false, error: error.message, installCommand: getCodexInstallCommand(npmCommand) };
-    }
-  });
-  ipcMain.handle("agent:install-codebuddy", async () => {
-    const env = getWindowsShellEnv();
-    const npmCommand = getNpmCommand();
-    const command = buildPowerShellInvocation(npmCommand, ["install", "-g", codeBuddyNpmPackage]);
-    try {
-      const result = childProcess.spawnSync("powershell.exe", [
-        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-        "-ExecutionPolicy", "Bypass",
-        "-Command", command
-      ], { encoding: "utf8", env, timeout: 300000, windowsHide: true });
-      const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
-      const ok = result.status === 0;
-      appendLogEvent("agent.install.codebuddy", { ok, output: sanitizeLogText(output, 500) }, ok ? "info" : "warn");
-      return { ok, output, installCommand: getCodeBuddyInstallCommand(npmCommand) };
-    } catch (error) {
-      appendLogEvent("agent.install.codebuddy", { ok: false, error: serializeError(error) }, "error");
-      return { ok: false, error: error.message, installCommand: getCodeBuddyInstallCommand(npmCommand) };
-    }
-  });
-  ipcMain.handle("agent:login-test", testAgentRemoteLogin);
-  ipcMain.handle(IPC_CHANNELS.TERMINAL_CREATE, createTerminalSession);
-  ipcMain.handle("terminal:input", (event, id, data, options = {}) => {
-    const session = terminalSessions.get(id);
-    if (session && typeof data === "string") {
-      try {
-        const guardResult = processTerminalPermissionGuard(event.sender, id, session, data, options);
-        if (!guardResult.ok) {
-          return false;
-        }
-        session.write(data);
-        return true;
-      } catch (error) {
-        console.warn(`Failed to write to terminal session ${id}`, error);
-        appendLogEvent("terminal.input.failed", { id, error: serializeError(error) }, "error");
-      }
-    }
-    return false;
-  });
-  ipcMain.handle("terminal:resize", (_event, id, cols, rows) => {
-    const session = terminalSessions.get(id);
-    if (session) {
-      try {
-        const resized = session.resize(cols, rows);
-        return resized !== false;
-      } catch (error) {
-        console.warn(`Failed to resize terminal session ${id}`, error);
-        appendLogEvent("terminal.resize.failed", { id, cols, rows, error: serializeError(error) }, "error");
-      }
-    }
-    return false;
-  });
-  ipcMain.handle(IPC_CHANNELS.TERMINAL_DISPOSE, (_event, id) => disposeTerminalSession(id));
-
   createMainWindow();
 
   app.on("activate", () => {
