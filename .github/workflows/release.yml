@@ -314,10 +314,24 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          notes_file="文档/CosS ${RELEASE_TAG} 发布说明.md"
+          if [[ ! -s "$notes_file" ]]; then
+            echo "Release notes are missing or empty: $notes_file" >&2
+            exit 1
+          fi
+
+          cp "$notes_file" release-notes.md
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: CosS Desktop ${{ env.RELEASE_TAG }}
+          body_path: release-notes.md
           generate_release_notes: true
           files: release-assets/*
