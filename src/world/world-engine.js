@@ -20,9 +20,48 @@
   };
   const ROLE_COLORS = [0x2d6cdf, 0x7a5ce8, 0x17a36b, 0xe0752d, 0x0891b2, 0xbe4bdb, 0x16a34a, 0x475569, 0xdc2626];
   const OBJECT_COLORS = [0xf4d35e, 0x93c5fd, 0xf0abfc, 0xfdba74, 0x86efac];
+  const ROLE_ANIMATION_FRAME_RATES = Object.freeze({ idle: 3, working: 7, door: 8, run: 10 });
+  const DEFAULT_INTERIOR_AGENT_POSITION = Object.freeze({ xRatio: 0.5, yRatio: 0.72 });
+  const INTERIOR_AGENT_POSITIONS = Object.freeze({
+    "product-manager": Object.freeze({ xRatio: 0.73, yRatio: 0.68 }),
+    "tech-lead": Object.freeze({ xRatio: 0.37, yRatio: 0.70 }),
+    "frontend-engineer": Object.freeze({ xRatio: 0.37, yRatio: 0.70 }),
+    "backend-engineer": Object.freeze({ xRatio: 0.37, yRatio: 0.70 }),
+    "qa-engineer": Object.freeze({ xRatio: 0.63, yRatio: 0.69 }),
+    "ai-agent-engineer": Object.freeze({ xRatio: 0.50, yRatio: 0.72 }),
+    "devops-engineer": Object.freeze({ xRatio: 0.50, yRatio: 0.72 }),
+    "technical-writer": Object.freeze({ xRatio: 0.50, yRatio: 0.73 }),
+    "security-engineer": Object.freeze({ xRatio: 0.50, yRatio: 0.73 })
+  });
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function getContainedRect(containerWidth, containerHeight, sourceWidth, sourceHeight) {
+    const safeSourceWidth = Math.max(1, Number(sourceWidth) || containerWidth);
+    const safeSourceHeight = Math.max(1, Number(sourceHeight) || containerHeight);
+    const scale = Math.min(containerWidth / safeSourceWidth, containerHeight / safeSourceHeight);
+    const width = safeSourceWidth * scale;
+    const height = safeSourceHeight * scale;
+    return {
+      x: (containerWidth - width) / 2,
+      y: (containerHeight - height) / 2,
+      width,
+      height
+    };
+  }
+
+  function getInteriorAgentPosition(roleId, viewportWidth, viewportHeight, sourceWidth, sourceHeight) {
+    const anchor = INTERIOR_AGENT_POSITIONS[roleId] || DEFAULT_INTERIOR_AGENT_POSITION;
+    const room = getContainedRect(viewportWidth, viewportHeight, sourceWidth, sourceHeight);
+    return {
+      x: room.x + room.width * anchor.xRatio,
+      y: room.y + room.height * anchor.yRatio,
+      xRatio: anchor.xRatio,
+      yRatio: anchor.yRatio,
+      room
+    };
   }
 
   function normalizeMap(map = {}) {
@@ -71,6 +110,36 @@
     return String(value || "").replace(/[^a-z0-9-]/gi, "-").toLowerCase();
   }
 
+  function addCanvasRoundedRectPath(ctx, x, y, width, height, radius) {
+    const safeRadius = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + safeRadius, y);
+    ctx.arcTo(x + width, y, x + width, y + height, safeRadius);
+    ctx.arcTo(x + width, y + height, x, y + height, safeRadius);
+    ctx.arcTo(x, y + height, x, y, safeRadius);
+    ctx.arcTo(x, y, x + width, y, safeRadius);
+    ctx.closePath();
+  }
+
+  function drawCanvasHintLabel(ctx, x, y, label, alpha = 0.68) {
+    ctx.save();
+    ctx.font = "12px Microsoft YaHei, sans-serif";
+    const width = Math.ceil(ctx.measureText(String(label || "")).width) + 18;
+    const height = 23;
+    addCanvasRoundedRectPath(ctx, x - width / 2, y - height / 2, width, height, 7);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = "rgba(23,32,51,0.78)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.24)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "#f8fafc";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(label || ""), x, y - 1);
+    ctx.restore();
+  }
+
   function createPhaserWorldGame(container, world, callbacks = {}) {
     const Phaser = window.Phaser;
     const size = getWorldSize(world);
@@ -85,11 +154,14 @@
         this.worldState = world;
         this.callbacks = callbacks;
         this.map = size.map;
-        this.drag = null;
+        this.cameraController = null;
+        this.terrainRenderer = null;
         this.selectedAgentId = callbacks.selectedAgentId || "";
         this.lastInteractiveClickAt = 0;
         this.agentSprites = new Map();
         this.houseSprites = new Map();
+        this.interiorAgentSprite = null;
+        this.interiorAgentNameplate = null;
       }
 
       create() {
@@ -99,12 +171,17 @@
         this.configureCamera(true);
         this.drawWorld();
         this.bindCameraControls();
+        this.events.once("shutdown", () => this.cameraController?.destroy());
         this.game.canvas.dataset.worldReady = "true";
         resolveSceneReady?.();
         this.scale.on("resize", () => {
           this.configureCamera(Boolean(this.getInteriorRoleId()));
           this.drawWorld();
         });
+      }
+
+      update(_time, delta) {
+        this.cameraController?.update(delta);
       }
 
       preload() {
@@ -165,7 +242,7 @@
               this.anims.create({
                 key,
                 frames: [1, 2, 3, 4].map((frame) => ({ key: `${prefix}-${kind}-${frame}` })),
-                frameRate: kind === "door" ? 8 : 7,
+                frameRate: ROLE_ANIMATION_FRAME_RATES[kind] || ROLE_ANIMATION_FRAME_RATES.working,
                 repeat: kind === "door" ? 0 : -1
               });
             }
@@ -176,7 +253,7 @@
               this.anims.create({
                 key,
                 frames: [1, 2, 3, 4].map((frame) => ({ key: `${prefix}-run-${direction}-${frame}` })),
-                frameRate: 10,
+                frameRate: ROLE_ANIMATION_FRAME_RATES.run,
                 repeat: -1
               });
             }
@@ -224,6 +301,7 @@
         const camera = this.cameras.main;
         const interiorRoleId = this.getInteriorRoleId();
         if (interiorRoleId) {
+          this.cameraController?.disable();
           camera.setZoom(1);
           camera.setBounds(0, 0, Math.max(1, this.scale.width), Math.max(1, this.scale.height));
           camera.setScroll(0, 0);
@@ -241,10 +319,112 @@
         camera.setZoom(zoom);
         camera.setBounds(boundsX, 0, boundsWidth, boundsHeight);
         if (focusExterior || this.viewMode?.startsWith("interior:")) {
-          const scrollX = this.map.focusX * tile - camera.width / (2 * zoom);
-          camera.setScroll(scrollX, 0);
+          camera.centerOn(this.map.focusX * tile, this.map.focusY * tile);
+        } else if (Number.isFinite(Number(this.worldState?.camera?.x)) && Number.isFinite(Number(this.worldState?.camera?.y))) {
+          camera.setScroll(Number(this.worldState.camera.x), Number(this.worldState.camera.y));
         }
         this.viewMode = "exterior";
+        this.cameraController?.enableFromCamera();
+      }
+
+      fitRoleAgentSprite(sprite, targetHeight = 0) {
+        const resolvedHeight = Number(targetHeight) > 0
+          ? Number(targetHeight)
+          : Number(sprite?.getData?.("cossAgentDisplayHeight"));
+        if (!sprite?.active || !(resolvedHeight > 0)) return;
+        if (Number(targetHeight) > 0) {
+          sprite.setData("cossAgentDisplayHeight", resolvedHeight);
+        }
+        const source = sprite.texture?.getSourceImage?.();
+        const sourceWidth = Math.max(1,
+          Number(sprite.frame?.realWidth)
+          || Number(sprite.frame?.width)
+          || Number(source?.width)
+          || resolvedHeight);
+        const sourceHeight = Math.max(1,
+          Number(sprite.frame?.realHeight)
+          || Number(sprite.frame?.height)
+          || Number(source?.height)
+          || resolvedHeight);
+        sprite.setDisplaySize(resolvedHeight * sourceWidth / sourceHeight, resolvedHeight);
+      }
+
+      bindRoleAgentSpriteSizing(sprite, targetHeight) {
+        sprite.setData("cossAgentDisplayHeight", targetHeight);
+        const refit = () => this.fitRoleAgentSprite(sprite);
+        sprite.on("animationstart", refit);
+        sprite.on("animationupdate", refit);
+        this.fitRoleAgentSprite(sprite);
+        return sprite;
+      }
+
+      createWorldHintLabel(x, y, label, options = {}) {
+        const text = this.add.text(0, -1, label, {
+          fontFamily: "Microsoft YaHei, sans-serif",
+          fontSize: options.fontSize || "12px",
+          color: "#f8fafc"
+        }).setOrigin(0.5);
+        const width = Math.ceil(text.width) + 18;
+        const height = Math.ceil(text.height) + 8;
+        const background = this.add.graphics();
+        background.fillStyle(0x000000, 0.16)
+          .fillRoundedRect(-width / 2, -height / 2 + 2, width, height, 7);
+        background.fillStyle(0x172033, 0.72)
+          .fillRoundedRect(-width / 2, -height / 2, width, height, 7);
+        background.lineStyle(1, 0xffffff, 0.2)
+          .strokeRoundedRect(-width / 2, -height / 2, width, height, 7);
+        const alpha = options.alpha ?? 0.68;
+        return this.add.container(x, y, [background, text])
+          .setScrollFactor(options.scrollFactor ?? 0)
+          .setDepth(options.depth || 21)
+          .setAlpha(alpha)
+          .setData("cossHintRestingAlpha", alpha);
+      }
+
+      setWorldHintHovered(hint, hovered) {
+        if (!hint?.active) return;
+        const restingAlpha = Number(hint.getData?.("cossHintRestingAlpha")) || 0.68;
+        hint.setAlpha(hovered ? 1 : restingAlpha);
+      }
+
+      drawAgentStatusHint(graphics, status) {
+        const color = STATUS_COLORS[status] || STATUS_COLORS.idle;
+        graphics.fillStyle(0x0f172a, 0.1).fillRoundedRect(-15, -57, 30, 21, 9);
+        graphics.fillStyle(color, 0.82).fillRoundedRect(-14, -59, 28, 20, 8);
+        graphics.lineStyle(1, 0xffffff, 0.42).strokeRoundedRect(-14, -59, 28, 20, 8);
+      }
+
+      bindAgentInteraction(target, agent, options = {}) {
+        const idleCursor = options.idleCursor || "default";
+        const hoverTarget = options.hoverTarget;
+        target.setInteractive({ useHandCursor: true });
+        target.on("pointerdown", () => {
+          this.selectedAgentId = agent.id;
+        });
+        target.on("pointerover", () => {
+          this.game.canvas.style.cursor = "pointer";
+          this.setWorldHintHovered(hoverTarget, true);
+        });
+        target.on("pointerout", () => {
+          this.game.canvas.style.cursor = idleCursor;
+          this.setWorldHintHovered(hoverTarget, false);
+        });
+        target.on("pointerupoutside", () => {
+          this.game.canvas.style.cursor = idleCursor;
+          this.setWorldHintHovered(hoverTarget, false);
+        });
+        target.on("pointerup", (pointer) => {
+          const dragged = options.checkDrag === false ? false : this.wasDragging(pointer);
+          if (dragged || document.querySelector(".modal-backdrop")) return;
+          this.selectedAgentId = agent.id;
+          this.lastInteractiveClickAt = performance.now();
+          if (options.redrawOnSelect) this.drawWorld();
+          this.callbacks.onAgentClick?.(agent);
+          if (pointer.event?.detail >= 2) {
+            this.callbacks.onAgentDoubleClick?.(agent);
+          }
+        });
+        return target;
       }
 
       drawInterior(roleId) {
@@ -253,21 +433,21 @@
         const prefix = `coss-role-${slug(roleId)}`;
         const textureKey = `${prefix}-interior`;
         const backdrop = this.add.graphics().setScrollFactor(0).setDepth(-10);
-        backdrop.fillStyle(0x172033, 1).fillRect(0, 0, width, height);
+        backdrop.fillStyle(0x000000, 1).fillRect(0, 0, width, height);
+        let sourceWidth = width;
+        let sourceHeight = height;
 
         if (this.textures.exists(textureKey)) {
           const source = this.textures.get(textureKey).getSourceImage();
-          const sourceWidth = Math.max(1, Number(source?.width) || width);
-          const sourceHeight = Math.max(1, Number(source?.height) || height);
-          const scale = Math.min(width / sourceWidth, height / sourceHeight);
-          const displayWidth = sourceWidth * scale;
-          const displayHeight = sourceHeight * scale;
-          this.add.image(width / 2, height / 2, textureKey)
+          sourceWidth = Math.max(1, Number(source?.width) || width);
+          sourceHeight = Math.max(1, Number(source?.height) || height);
+          const room = getContainedRect(width, height, sourceWidth, sourceHeight);
+          this.add.image(room.x + room.width / 2, room.y + room.height / 2, textureKey)
             .setScrollFactor(0)
             .setDepth(0)
-            .setDisplaySize(displayWidth, displayHeight);
+            .setDisplaySize(room.width, room.height);
         } else {
-          this.add.text(width / 2, height / 2, "HomeINT 资源加载失败", {
+          this.add.text(width / 2, height / 2, "房间场景加载失败，请稍后重试。", {
             fontFamily: "Microsoft YaHei, sans-serif",
             fontSize: "18px",
             color: "#ffffff"
@@ -279,18 +459,36 @@
           const kind = agent.animation === "working" ? "working" : "idle";
           const animationKey = `${prefix}-${kind}`;
           const size = clamp(height * 0.14, 76, 112);
-          const sprite = this.add.sprite(width * 0.52, height * 0.73, `${prefix}-${kind}-1`)
+          const position = getInteriorAgentPosition(roleId, width, height, sourceWidth, sourceHeight);
+          const agentX = position.x;
+          const agentY = position.y;
+          const sprite = this.add.sprite(agentX, agentY, `${prefix}-${kind}-1`)
             .setScrollFactor(0)
-            .setDepth(20)
-            .setDisplaySize(size, size);
+            .setDepth(20);
+          sprite.setData("cossInteriorAnchorXRatio", position.xRatio);
+          sprite.setData("cossInteriorAnchorYRatio", position.yRatio);
+          this.bindRoleAgentSpriteSizing(sprite, size);
           if (this.anims.exists(animationKey)) sprite.play(animationKey);
-          this.add.text(width * 0.52, height * 0.73 + size * 0.58, roleLabel(agent), {
-            fontFamily: "Microsoft YaHei, sans-serif",
-            fontSize: "13px",
-            color: "#20304a",
-            backgroundColor: "rgba(255,255,255,0.88)",
-            padding: { x: 8, y: 5 }
-          }).setOrigin(0.5).setScrollFactor(0).setDepth(21);
+          this.fitRoleAgentSprite(sprite);
+          this.interiorAgentSprite = sprite;
+          const hitZone = this.add.zone(
+            sprite.x,
+            sprite.y,
+            Math.max(88, sprite.displayWidth + 24),
+            Math.max(size + 24, sprite.displayHeight + 24)
+          ).setScrollFactor(0).setDepth(22);
+          const nameplate = this.createWorldHintLabel(
+            agentX,
+            agentY + size * 0.58,
+            roleLabel(agent),
+            { depth: 21, alpha: 0.68 }
+          );
+          this.interiorAgentNameplate = nameplate;
+          this.bindAgentInteraction(hitZone, agent, {
+            checkDrag: false,
+            idleCursor: "default",
+            hoverTarget: nameplate
+          });
         }
       }
 
@@ -298,6 +496,8 @@
         this.children.removeAll();
         this.agentSprites.clear();
         this.houseSprites.clear();
+        this.interiorAgentSprite = null;
+        this.interiorAgentNameplate = null;
         const interiorRoleId = this.getInteriorRoleId();
         if (interiorRoleId) {
           this.drawInterior(interiorRoleId);
@@ -315,6 +515,16 @@
       drawSkyBackground() {
         const textureKey = "coss-base-skyBackground";
         if (!this.textures.exists(textureKey)) return;
+        this.skySprite = this.add.image(0, 0, textureKey)
+          .setOrigin(0, 1)
+          .setScrollFactor(0)
+          .setDepth(-100);
+        this.layoutSkyBackground();
+      }
+
+      layoutSkyBackground() {
+        const textureKey = "coss-base-skyBackground";
+        if (!this.skySprite?.active || !this.textures.exists(textureKey)) return;
         const zoom = this.cameras.main.zoom || 1;
         const source = this.textures.get(textureKey).getSourceImage();
         const sourceWidth = Math.max(1, Number(source?.width) || this.scale.width);
@@ -326,66 +536,14 @@
         const fixedX = -zoomOffsetX / zoom;
         const horizonScreenY = this.map.horizonRows * this.map.tileSize * zoom;
         const fixedBottomY = (horizonScreenY - zoomOffsetY) / zoom;
-        this.add.image(0, 0, textureKey)
-          .setOrigin(0, 1)
+        this.skySprite
           .setPosition(fixedX, fixedBottomY)
-          .setScrollFactor(0)
-          .setDepth(-100)
           .setDisplaySize(displayWidth, displayHeight);
       }
 
       drawTiles() {
-        const tile = this.map.tileSize;
-        const width = this.map.width * tile;
-        const height = this.map.height * tile;
-        const groundTop = this.map.horizonRows * tile;
-        const background = this.add.graphics();
-        background.setDepth(-1).fillStyle(0x86d66e, 1).fillRect(0, groundTop, width, height - groundTop);
-        if (this.textures.exists("coss-procedural-grass")) {
-          this.add.tileSprite(0, groundTop, width, height - groundTop, "coss-procedural-grass")
-            .setOrigin(0)
-            .setDepth(0);
-        }
-        const layers = (this.worldState?.map?.tileLayers || []).filter((layer) => layer.data?.length);
-        const drawLayer = (layer) => {
-          const isPath = /path|road|stone|plaza/i.test(layer.name || "");
-          const textureFor = (gid) => {
-            if (!isPath) return "coss-base-plainGrass";
-            return {
-              1: "coss-base-stoneFlat1",
-              2: "coss-base-stoneFlat2",
-              3: "coss-base-stoneFlat3",
-              4: "coss-base-stonePathCorner"
-            }[gid] || "coss-base-stoneFlat1";
-          };
-          for (let y = 0; y < this.map.height; y += 1) {
-            for (let x = 0; x < this.map.width; x += 1) {
-              if (y < this.map.horizonRows) continue;
-              const gid = Number(layer.data[y * Number(layer.width || this.map.width) + x] || 0);
-              if (gid <= 0) continue;
-              const textureKey = textureFor(gid);
-              if (this.textures.exists(textureKey)) {
-                this.add.image(x * tile, y * tile, textureKey)
-                  .setOrigin(0)
-                  .setPosition(x * tile - 2, y * tile - 2)
-                  .setDisplaySize(tile + 4, tile + 4)
-                  .setDepth(isPath ? 1 : 0);
-              }
-            }
-          }
-        };
-        if (layers.length) {
-          layers.forEach(drawLayer);
-        } else if (!this.textures.exists("coss-procedural-grass")) {
-          for (let y = 0; y < this.map.height; y += 1) {
-            for (let x = 0; x < this.map.width; x += 1) {
-              if (y < this.map.horizonRows) continue;
-              if (this.textures.exists("coss-base-plainGrass")) {
-                this.add.image(x * tile - 2, y * tile - 2, "coss-base-plainGrass").setOrigin(0).setDisplaySize(tile + 4, tile + 4);
-              }
-            }
-          }
-        }
+        this.terrainRenderer ||= window.CossWorldTerrainRenderer?.create?.(this);
+        this.terrainRenderer?.draw(this.worldState);
       }
 
       drawMeadowObjects() {
@@ -419,14 +577,18 @@
         const y = Number(object.y) * tile;
         const width = Number(object.width || 4) * tile;
         const height = Number(object.height || 3) * tile;
-        const group = this.add.container(x, y).setDepth(y + height);
+        const depth = object.generationBand === "horizon-forest"
+          ? (this.map.horizonRows + 0.6) * tile
+          : y + height;
+        const group = this.add.container(x, y).setDepth(depth);
         const g = this.add.graphics();
         group.add(g);
+        let hintLabel = null;
 
         if (object.type === "role-house") {
-          this.drawRoleHouse(group, object, width, height);
+          hintLabel = this.drawRoleHouse(group, object, width, height);
         } else if (object.type === "landmark" || getObjectProperty(object, "assetKey")) {
-          this.drawAssetObject(group, object, width, height);
+          hintLabel = this.drawAssetObject(group, object, width, height);
         } else if (object.type === "board") {
           g.fillStyle(0x70452b, 1).fillRect(width * 0.2, height * 0.34, 8, height * 0.7).fillRect(width * 0.74, height * 0.34, 8, height * 0.7);
           g.fillStyle(0xf0c36d, 1).fillRoundedRect(0, 0, width, height * 0.72, 8);
@@ -436,11 +598,11 @@
           g.fillStyle(0xffffff, 0.16).fillRoundedRect(0, 0, width, height, 16);
           g.lineStyle(3, 0xffffff, 0.72).strokeRoundedRect(0, 0, width, height, 16);
           g.lineStyle(2, 0x0f766e, 0.36).strokeRoundedRect(8, 8, width - 16, height - 16, 12);
-          this.add.text(x + width / 2, y + height / 2, "+ 创建角色", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#0f766e" }).setOrigin(0.5);
+          this.add.text(x + width / 2, y + height / 2, "规划用地", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#0f766e" }).setOrigin(0.5);
         } else if (object.type === "house") {
-          this.drawHouse(group, object, index, width, height);
+          hintLabel = this.drawHouse(group, object, index, width, height);
         } else {
-          this.drawBuilding(group, object, index, width, height);
+          hintLabel = this.drawBuilding(group, object, index, width, height);
         }
 
         const isInteractive = Boolean(object.action || object.type === "role-house" || getObjectProperty(object, "action"));
@@ -453,8 +615,14 @@
           this.lastInteractiveClickAt = performance.now();
           this.callbacks.onObjectClick?.(object);
         });
-        zone.on("pointerover", () => this.game.canvas.style.cursor = "pointer");
-        zone.on("pointerout", () => this.game.canvas.style.cursor = "grab");
+        zone.on("pointerover", () => {
+          this.game.canvas.style.cursor = "pointer";
+          this.setWorldHintHovered(hintLabel, true);
+        });
+        zone.on("pointerout", () => {
+          this.game.canvas.style.cursor = "grab";
+          this.setWorldHintHovered(hintLabel, false);
+        });
       }
 
       drawAssetObject(group, object, width, height) {
@@ -471,14 +639,14 @@
           g.lineStyle(2, 0xffffff, 0.45).strokeRoundedRect(0, 0, width, height, 16);
         }
         if (object.action) {
-          group.add(this.add.text(width / 2, height + 12, object.name || "场景物品", {
-            fontFamily: "Microsoft YaHei, sans-serif",
-            fontSize: "12px",
-            color: "#20304a",
-            backgroundColor: "rgba(255,255,255,0.82)",
-            padding: { x: 7, y: 4 }
-          }).setOrigin(0.5));
+          const hint = this.createWorldHintLabel(width / 2, height + 12, object.name || "场景物品", {
+            scrollFactor: 1,
+            alpha: 0.66
+          });
+          group.add(hint);
+          return hint;
         }
+        return null;
       }
 
       drawRoleHouse(group, object, width, height) {
@@ -487,15 +655,25 @@
         const home = this.add.sprite(width / 2, height / 2, `${prefix}-home`)
           .setOrigin(0.5)
           .setDisplaySize(width, height);
+        home.setData("cossHouseDisplayWidth", width);
+        home.setData("cossHouseDisplayHeight", height);
+        home.on("animationupdate", () => this.fitRoleHouseSprite(home));
         group.add(home);
         this.houseSprites.set(roleId, home);
-        group.add(this.add.text(width / 2, height + 12, object.name?.replace(/-home$/, "") || "居民之家", {
-          fontFamily: "Microsoft YaHei, sans-serif",
-          fontSize: "12px",
-          color: "#20304a",
-          backgroundColor: "rgba(255,255,255,0.86)",
-          padding: { x: 7, y: 4 }
-        }).setOrigin(0.5));
+        const hint = this.createWorldHintLabel(width / 2, height + 12, object.name?.replace(/-home$/, "") || "居民之家", {
+          scrollFactor: 1,
+          alpha: 0.68
+        });
+        group.add(hint);
+        return hint;
+      }
+
+      fitRoleHouseSprite(house) {
+        const width = Number(house?.getData?.("cossHouseDisplayWidth"));
+        const height = Number(house?.getData?.("cossHouseDisplayHeight"));
+        if (house?.active && width > 0 && height > 0) {
+          house.setDisplaySize(width, height);
+        }
       }
 
       drawBuilding(group, object, index, width, height) {
@@ -506,7 +684,7 @@
         g.fillStyle(0xd8434e, 1).fillTriangle(-8, 30, width / 2, 0, width + 8, 30);
         g.fillStyle(0x172033, 0.72).fillRect(width / 2 - 9, height - 30, 18, 30);
         g.fillStyle(0xffffff, 0.8).fillRect(12, 42, 16, 16).fillRect(width - 28, 42, 16, 16);
-        this.add.text(group.x + width / 2, group.y + height + 18, object.name || "建筑", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#334155", backgroundColor: "rgba(255,255,255,0.82)", padding: { x: 7, y: 4 } }).setOrigin(0.5);
+        return this.createWorldHintLabel(group.x + width / 2, group.y + height + 18, object.name || "建筑", { alpha: 0.66 });
       }
 
       drawHouse(group, object, index, width, height) {
@@ -517,7 +695,7 @@
         g.fillStyle(0xb91c1c, 1).fillTriangle(-8, 30, width / 2, 0, width + 8, 30);
         g.fillStyle(0x7a4f2a, 1).fillRect(width / 2 - 9, height - 28, 18, 28);
         g.fillStyle(0xffffff, 0.78).fillRect(12, 38, 14, 14).fillRect(width - 26, 38, 14, 14);
-        this.add.text(group.x + width / 2, group.y + height + 18, object.name || "小屋", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#334155", backgroundColor: "rgba(255,255,255,0.82)", padding: { x: 7, y: 4 } }).setOrigin(0.5);
+        return this.createWorldHintLabel(group.x + width / 2, group.y + height + 18, object.name || "小屋", { alpha: 0.66 });
       }
 
       drawAgent(agent, index) {
@@ -540,39 +718,30 @@
             ? `${prefix}-run-${direction}`
             : `${prefix}-idle`;
         const initialTexture = `${prefix}-${agent.animation === "working" ? "working" : agent.animation === "running" ? `run-${direction}` : "idle"}-1`;
-        const sprite = this.add.sprite(0, -8, initialTexture).setOrigin(0.5).setDisplaySize(78, 78);
+        const sprite = this.add.sprite(0, -8, initialTexture).setOrigin(0.5);
+        this.bindRoleAgentSpriteSizing(sprite, 78);
         if (this.anims.exists(animation)) sprite.play(animation);
+        this.fitRoleAgentSprite(sprite);
         c.add(sprite);
-        g.fillStyle(STATUS_COLORS[status] || STATUS_COLORS.idle, 1).fillRoundedRect(-14, -58, 28, 20, 8);
-        g.lineStyle(2, 0x0f172a, 0.18).strokeRoundedRect(-14, -58, 28, 20, 8);
-        c.add(this.add.text(0, -48, STATUS_BUBBLES[status] || STATUS_BUBBLES.idle, { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "13px", fontStyle: "bold", color: status === "failed" || status === "blocked" ? "#b91c1c" : "#334155" }).setOrigin(0.5));
-        c.add(this.add.text(0, 42, roleLabel(agent), { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#20304a", backgroundColor: "rgba(255,255,255,0.9)", padding: { x: 7, y: 4 } }).setOrigin(0.5));
-        const zone = this.add.zone(0, -4, 78, 92).setInteractive({ useHandCursor: true });
+        this.drawAgentStatusHint(g, status);
+        c.add(this.add.text(0, -49, STATUS_BUBBLES[status] || STATUS_BUBBLES.idle, {
+          fontFamily: "Microsoft YaHei, sans-serif",
+          fontSize: "12px",
+          fontStyle: "bold",
+          color: status === "failed" || status === "blocked" ? "#b91c1c" : "#334155"
+        }).setOrigin(0.5).setAlpha(0.84));
+        const nameplate = this.createWorldHintLabel(0, 42, roleLabel(agent), { scrollFactor: 1, alpha: 0.68 });
+        c.add(nameplate);
+        const zone = this.add.zone(0, -4, 78, 92);
         c.add(zone);
-        zone.on("pointerup", (pointer) => {
-          if (this.wasDragging(pointer) || document.querySelector(".modal-backdrop")) {
-            return;
-          }
-          this.selectedAgentId = agent.id;
-          this.lastInteractiveClickAt = performance.now();
-          this.drawWorld();
-          this.callbacks.onAgentClick?.(agent);
+        this.bindAgentInteraction(zone, agent, { redrawOnSelect: true, idleCursor: "grab", hoverTarget: nameplate });
+        this.agentSprites.set(agent.id, {
+          container: c,
+          sprite,
+          roleId: agent.roleId,
+          movementPhase: movement.phase || "",
+          movementDirection: direction
         });
-        zone.on("pointerdown", () => this.selectedAgentId = agent.id);
-        zone.on("pointerover", () => this.game.canvas.style.cursor = "pointer");
-        zone.on("pointerout", () => this.game.canvas.style.cursor = "grab");
-        zone.on("pointerupoutside", () => this.game.canvas.style.cursor = "grab");
-        zone.on("pointerdown", (pointer) => {
-          if (pointer.getDuration && pointer.getDuration() < 320 && pointer.getDistance && pointer.getDistance() < 4 && pointer.leftButtonDown()) {
-            // Phaser emits native dblclick inconsistently inside transformed cameras, so the renderer keeps double-click optional.
-          }
-        });
-        zone.on("pointerup", (pointer) => {
-          if (pointer.event?.detail >= 2 && !document.querySelector(".modal-backdrop")) {
-            this.callbacks.onAgentDoubleClick?.(agent);
-          }
-        });
-        this.agentSprites.set(agent.id, { container: c, sprite, roleId: agent.roleId });
       }
 
       drawHud() {
@@ -581,52 +750,43 @@
         g.fillStyle(0xffffff, 0.84).fillRoundedRect(0, 0, 292, 96, 14);
         g.lineStyle(1, 0xffffff, 0.62).strokeRoundedRect(0, 0, 292, 96, 14);
         hud.add(g);
-        hud.add(this.add.text(16, 14, this.worldState?.name || "CosS World", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#172033" }));
-        hud.add(this.add.text(16, 40, `Phaser 3 · 地图 ${this.map.width}×${this.map.height} · 缩放 ${this.cameras.main.zoom.toFixed(1)}x`, { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
-        hud.add(this.add.text(16, 62, "拖拽地图 / 滚轮缩放 / 点击角色、公告栏、创建点", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
+        hud.add(this.add.text(16, 14, this.worldState?.name || "Agent 小镇", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#172033" }));
+        hud.add(this.add.text(16, 40, `地图 ${this.map.width}×${this.map.height} · 缩放 ${this.cameras.main.zoom.toFixed(1)}x`, { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
+        hud.add(this.add.text(16, 62, "拖拽移动视野 · 滚轮调整缩放 · 点击居民或建筑查看详情", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
       }
 
       bindCameraControls() {
+        const createCameraController = window.CossWorldCameraController?.create;
+        if (!createCameraController) throw new Error("World camera controller module is unavailable.");
+        this.cameraController = createCameraController(this, {
+          onChange: () => this.persistCamera(),
+          onZoom: () => this.layoutSkyBackground()
+        });
+        this.persistCamera();
         this.input.on("pointerdown", (pointer) => {
           if (this.getInteriorRoleId() || !pointer.leftButtonDown()) {
             return;
           }
-          this.drag = {
-            x: pointer.x,
-            y: pointer.y,
-            cameraX: this.cameras.main.scrollX,
-            cameraY: this.cameras.main.scrollY,
-            moved: false
-          };
+          this.cameraController.beginDrag(pointer);
           this.game.canvas.style.cursor = "grabbing";
         });
         this.input.on("pointermove", (pointer) => {
-          if (this.getInteriorRoleId() || !this.drag || !pointer.leftButtonDown()) {
+          if (this.getInteriorRoleId() || !pointer.leftButtonDown()) {
             return;
           }
-          const dx = pointer.x - this.drag.x;
-          const dy = pointer.y - this.drag.y;
-          if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-            this.drag.moved = true;
-          }
-          const camera = this.cameras.main;
-          camera.scrollX = this.drag.cameraX - dx / camera.zoom;
-          camera.scrollY = this.drag.cameraY - dy / camera.zoom;
-          this.persistCamera();
+          this.cameraController.moveDrag(pointer);
         });
         this.input.on("pointerup", (pointer) => {
+          const moved = this.cameraController.endDrag(pointer);
           if (this.getInteriorRoleId()) {
-            this.drag = null;
             this.game.canvas.style.cursor = "default";
             return;
           }
           if (document.querySelector(".modal-backdrop")) {
             return;
           }
-          const drag = this.drag;
-          this.drag = null;
           this.game.canvas.style.cursor = "grab";
-          if (drag?.moved || performance.now() - this.lastInteractiveClickAt < 80) {
+          if (moved || performance.now() - this.lastInteractiveClickAt < 80) {
             return;
           }
           const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
@@ -637,24 +797,20 @@
         });
         this.input.on("wheel", (pointer, gameObjects, deltaX, deltaY) => {
           if (this.getInteriorRoleId()) return;
-          const camera = this.cameras.main;
-          const before = camera.getWorldPoint(pointer.x, pointer.y);
-          camera.setZoom(Math.round(clamp(camera.zoom + (deltaY > 0 ? -0.1 : 0.1), 0.5, 2.5) * 10) / 10);
-          const after = camera.getWorldPoint(pointer.x, pointer.y);
-          camera.scrollX += before.x - after.x;
-          camera.scrollY += before.y - after.y;
-          this.persistCamera();
-          this.drawWorld();
+          this.cameraController.zoomAt(pointer, deltaY);
         });
       }
 
       wasDragging(pointer) {
-        return Boolean(this.drag?.moved || (pointer.getDistance && pointer.getDistance() > 4));
+        return this.cameraController?.wasDragging(pointer)
+          || Boolean(pointer.getDistance && pointer.getDistance() > 4);
       }
 
       persistCamera() {
         const camera = this.cameras.main;
-        this.callbacks.onCameraChange?.({ x: camera.scrollX, y: camera.scrollY, zoom: camera.zoom });
+        const nextCamera = { x: camera.scrollX, y: camera.scrollY, zoom: camera.zoom };
+        if (this.worldState) this.worldState.camera = nextCamera;
+        this.callbacks.onCameraChange?.(nextCamera);
       }
 
       playDoorAnimation(roleId, duration = 520) {
@@ -664,6 +820,7 @@
           return Promise.resolve();
         }
         house.play(`${prefix}-door`);
+        this.fitRoleHouseSprite(house);
         return new Promise((resolve) => {
           let settled = false;
           const finish = () => {
@@ -672,6 +829,7 @@
             if (house.active) {
               house.stop();
               house.setTexture(`${prefix}-home`);
+              this.fitRoleHouseSprite(house);
             }
             resolve();
           };
@@ -688,8 +846,15 @@
         const agent = (this.worldState?.agents || []).find((candidate) => candidate.id === agentId);
         const direction = options.direction || agent?.movement?.direction || "down";
         const prefix = `coss-role-${slug(agent?.roleId)}`;
+        item.movementPhase = options.phase || agent?.movement?.phase || "";
+        item.movementDirection = direction;
+        item.movementFromX = item.container.x / this.map.tileSize - 0.5;
+        item.movementToX = Number(target?.x);
         if (item.sprite && this.anims.exists(`${prefix}-run-${direction}`)) {
           item.sprite.play(`${prefix}-run-${direction}`);
+          // Every supplied side_run sheet faces left, so only rightward travel needs mirroring.
+          item.sprite.setFlipX(direction === "side" && destination.x > item.container.x);
+          this.fitRoleAgentSprite(item.sprite);
         }
         const tween = new Promise((resolve) => {
           let settled = false;
@@ -705,12 +870,37 @@
             y: destination.y,
             duration,
             ease: "Linear",
+            onUpdate: () => item.container.active && item.container.setDepth(item.container.y + 50),
             onComplete: finish
           });
           window.setTimeout(finish, duration + 100);
         });
-        const door = options.doorAtEnd ? tween.then(() => this.playDoorAnimation(agent?.roleId, 520)) : this.playDoorAnimation(agent?.roleId, 520);
-        return Promise.all([door, tween]).then(() => undefined);
+        if (!options.doorAtEnd) return tween;
+        const enterHome = async () => {
+          const doorDuration = Number(options.doorDuration) || 640;
+          const doorAnimation = this.playDoorAnimation(agent?.roleId, doorDuration);
+          await new Promise((resolve) => {
+            let settled = false;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
+              resolve();
+            };
+            this.time.delayedCall(doorDuration * 0.45, finish);
+            window.setTimeout(finish, doorDuration * 0.45 + 80);
+          });
+          if (item.container.active) item.container.setVisible(false);
+          if (options.commitHomeAtDoor && agent) {
+            agent.x = Number(target?.x);
+            agent.y = Number(target?.y);
+            agent.location = "home";
+            agent.movement = null;
+            agent.animation = "working";
+            agent.status = options.homeStatus || "planning";
+          }
+          await doorAnimation;
+        };
+        return tween.then(enterHome);
       }
     }
 
@@ -734,7 +924,7 @@
 
     const badge = document.createElement("div");
     badge.className = "world-engine-badge";
-    badge.textContent = "Phaser 3 World · 占位精灵";
+    badge.textContent = "Agent 小镇地图";
     container.appendChild(badge);
 
     return {
@@ -779,10 +969,57 @@
             zoom: camera.zoom,
             width: camera.width,
             height: camera.height,
-            bounds: camera.getBounds?.()
+            bounds: camera.getBounds?.(),
+            controller: scene?.cameraController?.getState?.() || null
+          } : null,
+          terrain: scene ? {
+            plainGrassPattern: scene.textures?.exists?.("coss-plain-grass-pattern") || false,
+            flowerMeadowPattern: scene.textures?.exists?.("coss-flower-meadow-pattern") || false,
+            roadBoundaryEdges: ["top", "bottom", "left", "right"]
+              .every((edge) => scene.textures?.exists?.(`coss-road-edge-${edge}`))
           } : null,
           agents: scene?.agentSprites?.size || 0,
-          houses: scene?.houseSprites?.size || 0
+          houses: scene?.houseSprites?.size || 0,
+          agentDisplays: scene ? [...scene.agentSprites.entries()].map(([agentId, item]) => {
+            const agent = (scene.worldState?.agents || []).find((candidate) => candidate.id === agentId);
+            return {
+              agentId,
+              roleId: item.roleId,
+              x: item.container.x / scene.map.tileSize - 0.5,
+              y: item.container.y / scene.map.tileSize - 0.5,
+              visible: item.container.visible,
+              textureKey: item.sprite.texture?.key || "",
+              flipX: Boolean(item.sprite.flipX),
+              movementPhase: item.movementPhase || agent?.movement?.phase || "",
+              movementDirection: item.movementDirection || agent?.movement?.direction || "",
+              movementFromX: Number(item.movementFromX),
+              movementToX: Number(item.movementToX),
+              segmentIndex: Number(agent?.movement?.segmentIndex) || 0
+            };
+          }) : [],
+          interiorAgentDisplay: scene?.interiorAgentSprite ? {
+            displayWidth: scene.interiorAgentSprite.displayWidth,
+            displayHeight: scene.interiorAgentSprite.displayHeight,
+            sourceWidth: scene.interiorAgentSprite.frame?.realWidth || scene.interiorAgentSprite.frame?.width || 0,
+            sourceHeight: scene.interiorAgentSprite.frame?.realHeight || scene.interiorAgentSprite.frame?.height || 0,
+            targetHeight: Number(scene.interiorAgentSprite.getData?.("cossAgentDisplayHeight")) || 0,
+            animationFrameRate: Number(scene.interiorAgentSprite.anims?.currentAnim?.frameRate) || 0,
+            nameplateAlpha: Number(scene.interiorAgentNameplate?.alpha) || 0,
+            roleId: String(scene.worldState?.activeInteriorRoleId || ""),
+            xRatio: Number(scene.interiorAgentSprite.getData?.("cossInteriorAnchorXRatio")),
+            yRatio: Number(scene.interiorAgentSprite.getData?.("cossInteriorAnchorYRatio")),
+            viewportXRatio: scene.interiorAgentSprite.x / Math.max(1, scene.scale.width),
+            viewportYRatio: scene.interiorAgentSprite.y / Math.max(1, scene.scale.height),
+            textureKey: scene.interiorAgentSprite.texture?.key || ""
+          } : null,
+          houseDisplays: scene ? [...(scene.houseSprites || new Map()).entries()].map(([roleId, sprite]) => ({
+            roleId,
+            displayWidth: sprite.displayWidth,
+            displayHeight: sprite.displayHeight,
+            targetWidth: Number(sprite.getData?.("cossHouseDisplayWidth")) || 0,
+            targetHeight: Number(sprite.getData?.("cossHouseDisplayHeight")) || 0,
+            textureKey: sprite.texture?.key || ""
+          })) : []
         };
       },
       destroy() {
@@ -796,10 +1033,10 @@
     const map = normalizeMap(world?.map);
     const canvas = document.createElement("canvas");
     canvas.className = "world-canvas";
-    canvas.setAttribute("aria-label", "CosS 2D 世界 Canvas");
+    canvas.setAttribute("aria-label", "CosS Agent 小镇互动地图");
     const badge = document.createElement("div");
     badge.className = "world-engine-badge";
-    badge.textContent = "Canvas Fallback · 占位精灵";
+    badge.textContent = "Agent 小镇地图 · 兼容模式";
     container.replaceChildren(canvas, badge);
     const ctx = canvas.getContext("2d");
     const state = {
@@ -814,7 +1051,9 @@
       selectedAgentId: callbacks.selectedAgentId || "",
       drag: null,
       cameraInitialized: false,
-      interiorImages: new Map()
+      interiorImages: new Map(),
+      hoveredAgentId: "",
+      hoveredInteriorAgentId: ""
     };
     const centerCamera = () => {
       state.camera.x = state.map.focusX * state.map.tileSize - state.width / (2 * state.camera.zoom);
@@ -839,6 +1078,35 @@
       }
       state.interiorImages.set(roleId, images);
       return images;
+    };
+    const getCanvasInteriorPosition = (roleId, images = getInteriorImages(roleId)) => getInteriorAgentPosition(
+      roleId,
+      state.width,
+      state.height,
+      images.room.naturalWidth || state.width,
+      images.room.naturalHeight || state.height
+    );
+    const hitInteriorAgent = (event) => {
+      const roleId = String(state.world?.activeInteriorRoleId || "");
+      const resident = (state.world?.agents || []).find((agent) => agent.roleId === roleId);
+      if (!resident || resident.location !== "home" || resident.movement) return null;
+      const rect = canvas.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const images = getInteriorImages(roleId);
+      const agentHeight = clamp(state.height * 0.14, 76, 112);
+      const agentWidth = images.agent.naturalWidth && images.agent.naturalHeight
+        ? agentHeight * images.agent.naturalWidth / images.agent.naturalHeight
+        : agentHeight;
+      const position = getCanvasInteriorPosition(roleId, images);
+      const centerX = position.x;
+      const centerY = position.y;
+      return pointerX >= centerX - Math.max(44, agentWidth / 2 + 12)
+        && pointerX <= centerX + Math.max(44, agentWidth / 2 + 12)
+        && pointerY >= centerY - agentHeight / 2 - 12
+        && pointerY <= centerY + agentHeight / 2 + 12
+        ? resident
+        : null;
     };
     const resize = () => {
       const rect = container.getBoundingClientRect();
@@ -877,20 +1145,27 @@
       ctx.fillRect(0, 0, state.width, state.height);
       const interiorRoleId = String(state.world?.activeInteriorRoleId || "");
       if (interiorRoleId) {
-        ctx.fillStyle = "#172033";
+        ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, state.width, state.height);
         const images = getInteriorImages(interiorRoleId);
+        const position = getCanvasInteriorPosition(interiorRoleId, images);
         if (images.room.complete && images.room.naturalWidth) {
-          const scale = Math.min(state.width / images.room.naturalWidth, state.height / images.room.naturalHeight);
-          const roomWidth = images.room.naturalWidth * scale;
-          const roomHeight = images.room.naturalHeight * scale;
-          ctx.drawImage(images.room, (state.width - roomWidth) / 2, (state.height - roomHeight) / 2, roomWidth, roomHeight);
+          ctx.drawImage(images.room, position.room.x, position.room.y, position.room.width, position.room.height);
         }
         const resident = (state.world?.agents || []).find((agent) => agent.roleId === interiorRoleId);
-        if (resident?.location === "home" && !resident.movement && images.agent.complete && images.agent.naturalWidth) {
-          const agentHeight = clamp(state.height * 0.14, 76, 112);
-          const agentWidth = agentHeight * images.agent.naturalWidth / images.agent.naturalHeight;
-          ctx.drawImage(images.agent, state.width * 0.52 - agentWidth / 2, state.height * 0.73 - agentHeight / 2, agentWidth, agentHeight);
+          if (resident?.location === "home" && !resident.movement && images.agent.complete && images.agent.naturalWidth) {
+            const agentHeight = clamp(state.height * 0.14, 76, 112);
+            const agentWidth = agentHeight * images.agent.naturalWidth / images.agent.naturalHeight;
+            const agentX = position.x;
+            const agentY = position.y;
+            ctx.drawImage(images.agent, agentX - agentWidth / 2, agentY - agentHeight / 2, agentWidth, agentHeight);
+            drawCanvasHintLabel(
+              ctx,
+              agentX,
+              agentY + agentHeight * 0.58,
+              roleLabel(resident),
+              state.hoveredInteriorAgentId === resident.id ? 1 : 0.68
+            );
         }
         state.raf = requestAnimationFrame(renderFrame);
         return;
@@ -920,18 +1195,28 @@
         ctx.fillRect(pos.x - 12, pos.y - 20, 24, 40);
         ctx.fillStyle = "#ffd7a8";
         ctx.fillRect(pos.x - 9, pos.y - 38, 18, 18);
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(pos.x - 44, pos.y + 26, 88, 21);
-        ctx.fillStyle = "#20304a";
-        ctx.fillText(roleLabel(agent), pos.x, pos.y + 41);
+        drawCanvasHintLabel(ctx, pos.x, pos.y + 41, roleLabel(agent), state.hoveredAgentId === agent.id ? 1 : 0.68);
       });
       ctx.restore();
       state.raf = requestAnimationFrame(renderFrame);
     };
     canvas.addEventListener("pointerdown", (event) => state.drag = { x: event.clientX, y: event.clientY, cameraX: state.camera.x, cameraY: state.camera.y, moved: false });
     canvas.addEventListener("pointermove", (event) => {
-      if (state.world?.activeInteriorRoleId) return;
-      if (!state.drag) return;
+      if (state.world?.activeInteriorRoleId) {
+        const resident = hitInteriorAgent(event);
+        state.hoveredInteriorAgentId = resident?.id || "";
+        state.hoveredAgentId = "";
+        canvas.style.cursor = resident ? "pointer" : "default";
+        return;
+      }
+      state.hoveredInteriorAgentId = "";
+      if (!state.drag) {
+        const point = toWorld(event);
+        const agent = hitAgent(point);
+        state.hoveredAgentId = agent?.id || "";
+        canvas.style.cursor = agent || hitObject(point) ? "pointer" : "grab";
+        return;
+      }
       const dx = event.clientX - state.drag.x;
       const dy = event.clientY - state.drag.y;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) state.drag.moved = true;
@@ -943,6 +1228,11 @@
     canvas.addEventListener("pointerup", (event) => {
       if (state.world?.activeInteriorRoleId) {
         state.drag = null;
+        const resident = hitInteriorAgent(event);
+        if (resident && !document.querySelector(".modal-backdrop")) {
+          state.selectedAgentId = resident.id;
+          callbacks.onAgentClick?.(resident);
+        }
         return;
       }
       if (document.querySelector(".modal-backdrop")) return;
@@ -990,10 +1280,41 @@
       moveAgent(agentId, target, options = {}) {
         const duration = Number(options.duration) || 1350;
         const agent = (state.world?.agents || []).find((candidate) => candidate.id === agentId);
-        if (agent) {
-          agent.x = Number(target?.x) || agent.x;
-          agent.y = Number(target?.y) || agent.y;
-        }
+        if (!agent) return new Promise((resolve) => window.setTimeout(resolve, duration));
+        const fromX = Number(agent.x) || 0;
+        const fromY = Number(agent.y) || 0;
+        const toX = Number.isFinite(Number(target?.x)) ? Number(target.x) : fromX;
+        const toY = Number.isFinite(Number(target?.y)) ? Number(target.y) : fromY;
+        return new Promise((resolve) => {
+          const startedAt = performance.now();
+          const step = (now) => {
+            if (state.destroyed) {
+              resolve();
+              return;
+            }
+            const progress = Math.min(1, (now - startedAt) / duration);
+            agent.x = fromX + (toX - fromX) * progress;
+            agent.y = fromY + (toY - fromY) * progress;
+            if (progress < 1) {
+              requestAnimationFrame(step);
+              return;
+            }
+            if (options.doorAtEnd) {
+              if (options.commitHomeAtDoor) {
+                agent.location = "home";
+                agent.movement = null;
+                agent.animation = "working";
+                agent.status = options.homeStatus || "planning";
+              }
+              window.setTimeout(resolve, Number(options.doorDuration) || 640);
+            } else {
+              resolve();
+            }
+          };
+          requestAnimationFrame(step);
+        });
+      },
+      playDoorAnimation(_roleId, duration = 640) {
         return new Promise((resolve) => window.setTimeout(resolve, duration));
       },
       destroy() {
@@ -1036,13 +1357,13 @@
         .then((tiledMap) => {
           const nextWorld = mergeTiledWorldDocument(world, tiledMap);
           instance.updateWorld?.(nextWorld, { selectedAgentId: callbacks?.selectedAgentId || "" });
-          instance.setMapBadge?.(`Tiled JSON · ${tiledMap.width}×${tiledMap.height}`);
+          instance.setMapBadge?.(`自定义地图 · ${tiledMap.width}×${tiledMap.height}`);
           callbacks?.onMapLoaded?.(tiledMap);
           return nextWorld;
         })
         .catch((error) => {
           console.warn("Failed to load Tiled world map; using procedural fallback.", error);
-          instance.setMapBadge?.("Procedural fallback");
+          instance.setMapBadge?.("程序化地图");
           callbacks?.onMapLoadError?.(error);
           return world;
         });

@@ -37,7 +37,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.11.0";
+    return "0.11.1";
   }
 })();
 const terminalProcessTreeSnapshotDelaysMs = [500, 2000, 5000];
@@ -67,8 +67,8 @@ const agentPermissionPolicies = {
   },
   worldFullAccess: {
     id: "worldFullAccess",
-    label: "世界 Agent 完全访问",
-    instruction: "当前 CosS 世界 Agent 权限模式：完全访问。你运行在从 0 开始的隔离世界 CLI 内核中，不复用任何项目终端会话；可直接使用终端完成角色任务。涉及真实外部发布、删除用户数据、付款、发送消息给外部人员等不可逆动作时仍需遵守系统与用户授权边界。"
+    label: "Agent 世界完全访问",
+    instruction: "当前 CosS Agent 世界权限模式为完全访问。你在独立的世界工作目录与执行会话中运行，不复用项目工作区终端；可以使用终端完成分配的任务。涉及外部发布、删除用户数据、付款或向外部人员发送消息等不可逆操作时，仍须遵守系统规则与用户授权边界。"
   }
 };
 const agentRuntime = createAgentRuntime({
@@ -2115,7 +2115,7 @@ async function handleWorldAgentRun(_event, request = {}) {
     return {
       ok: false,
       runId,
-      error: "world-agent prompt is empty",
+      error: "任务指令为空，无法启动居民协作。",
       output: "",
       rawOutput: "",
       latencyMs: Date.now() - startedAt
@@ -2123,7 +2123,7 @@ async function handleWorldAgentRun(_event, request = {}) {
   }
 
   if (shouldMockWorldAgentRun()) {
-    const output = `${roleName}：我会负责${sanitizeLogText(request.moduleSummary || "当前角色模块", 120)}。收到公告栏任务「${taskGoal || "未命名任务"}」，这是独立世界 CodeBuddy CLI 内核的占位最终聊天信息。`;
+    const output = `${roleName}：我会负责${sanitizeLogText(request.moduleSummary || "当前角色职责", 120)}。已收到公告栏任务「${taskGoal || "未命名任务"}」，将按计划推进并在群聊中同步结果。`;
     appendLogEvent("world-agent.run.mocked", { worldId, taskId, roleId, runId, cwd, latencyMs: Date.now() - startedAt });
     return {
       ok: true,
@@ -2140,7 +2140,7 @@ async function handleWorldAgentRun(_event, request = {}) {
   const apiKey = String(request.codeBuddyApiKey || "").trim();
   const env = getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {});
   if (!getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY")) {
-    const error = "未配置 CodeBuddy API Key。请在设置中填写 CodeBuddy API Key，或通过环境变量 CODEBUDDY_API_KEY 提供。";
+    const error = "尚未配置 CodeBuddy Code API Key。请前往「设置 > 智能体设置」完成配置，或通过环境变量 CODEBUDDY_API_KEY 提供。";
     appendLogEvent("world-agent.run.missing-key", { worldId, taskId, roleId, runId, cwd }, "warn");
     return {
       ok: false,
@@ -2236,7 +2236,7 @@ async function handleWorldAgentRun(_event, request = {}) {
         output,
         // 返回清洗后的 rawOutput：去掉 ANSI 码，保留最近 12000 字符
         // 如果清洗后为空但原始数据非空，说明全是 ANSI 码，保留原始数据的最后部分以便调试
-        rawOutput: cleanedRaw.slice(-12000) || (rawOutput.trim() ? `[终端输出均为ANSI码，原始长度:${rawOutput.length}] ${rawOutput.slice(-500)}` : ""),
+        rawOutput: cleanedRaw.slice(-12000) || (rawOutput.trim() ? `[执行日志仅包含 ANSI 控制序列；原始长度：${rawOutput.length}] ${rawOutput.slice(-500)}` : ""),
         command: launch.command || launch.file,
         launchMethod: launch.launchMethod,
         latencyMs: Date.now() - startedAt
@@ -2259,7 +2259,7 @@ async function handleWorldAgentRun(_event, request = {}) {
         child.onData((data) => appendOutput(data));
         child.onExit(({ exitCode }) => {
           const ok = exitCode === 0 || Boolean(rawOutput.trim());
-          finish(ok, `exit-${exitCode ?? "unknown"}`, ok ? "" : `CodeBuddy CLI exited with ${exitCode ?? "unknown"}.`);
+          finish(ok, `exit-${exitCode ?? "unknown"}`, ok ? "" : `CodeBuddy Code 执行进程异常退出（退出码：${exitCode ?? "未知"}）。`);
         });
         if (!isNonInteractive) {
           child.write(`${prompt}\r`);
@@ -2275,7 +2275,7 @@ async function handleWorldAgentRun(_event, request = {}) {
         child.on("error", (error) => finish(false, "spawn-error", error.message));
         child.on("exit", (code) => {
           const ok = code === 0 || Boolean(rawOutput.trim());
-          finish(ok, `exit-${code ?? "unknown"}`, ok ? "" : `CodeBuddy CLI exited with ${code ?? "unknown"}.`);
+          finish(ok, `exit-${code ?? "unknown"}`, ok ? "" : `CodeBuddy Code 执行进程异常退出（退出码：${code ?? "未知"}）。`);
         });
         if (!isNonInteractive) {
           child.stdin?.write(`${prompt}\n`);

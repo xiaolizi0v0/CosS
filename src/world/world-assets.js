@@ -16,6 +16,8 @@
   const BASE_ASSETS = Object.freeze({
     skyBackground: "skyBG.png",
     plainGrass: "base/plain_grass_tile.png",
+    grassPinkFlower: "base/grass_pink_flower.png",
+    grassWhiteDaisy: "base/grass_white_daisy.png",
     grassStone1: "base/grass_stone_tile_1.png",
     grassStone2: "base/grass_stone_tile_2.png",
     grassStoneCorner: "base/grass_stone_tile_corner.png",
@@ -54,6 +56,7 @@
     if (!asset) return null;
     const path = (folder, file) => url(`${asset.folder}/${folder}/${file}.png`);
     return {
+      portrait: url(`${asset.folder}/${asset.file}.png`),
       home: url(`${asset.folder}/${asset.file}Home.png`),
       interior: url(`${asset.folder}/HomeINT.png`),
       idle: [1, 2, 3, 4].map((frame) => path("Idle", frame)),

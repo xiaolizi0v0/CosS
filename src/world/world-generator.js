@@ -7,7 +7,7 @@
     root.CossWorldGenerator = api;
   }
 })(typeof window !== "undefined" ? window : globalThis, function createWorldGenerator() {
-  const GENERATION_VERSION = "procedural-v2";
+  const GENERATION_VERSION = "procedural-v5";
   const DEFAULT_MAP = Object.freeze({
     key: "default-meadow",
     width: 88,
@@ -37,6 +37,12 @@
     { assetKey: "flowerBox", width: 1.35, height: 0.72, weight: 15 },
     { assetKey: "lamp", width: 0.7, height: 1.65, weight: 5 },
     { assetKey: "bench", width: 1.55, height: 0.8, weight: 5 }
+  ]);
+  const HORIZON_TREE_TYPES = Object.freeze([
+    { assetKey: "treeSmall", width: 1.45, height: 1.85, weight: 28 },
+    { assetKey: "tree", width: 1.75, height: 2.18, weight: 26 },
+    { assetKey: "oak", width: 1.9, height: 2.3, weight: 22 },
+    { assetKey: "pine", width: 1.35, height: 2.05, weight: 10 }
   ]);
 
   function clamp(value, min, max) {
@@ -165,6 +171,27 @@
     };
   }
 
+  function createMeadowLayer(width, height, horizonRows, seed) {
+    const data = new Array(width * height).fill(0);
+    const seedHash = hashString(`${seed}:flower-meadow`);
+    for (let y = horizonRows; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const variant = hashString(`${seedHash}:${x}:${y}`) % 20;
+        data[y * width + x] = variant === 0 ? 1 : (variant <= 2 ? 2 : 0);
+      }
+    }
+    return {
+      id: 0,
+      name: "Flower Meadow",
+      type: "tilelayer",
+      width,
+      height,
+      visible: true,
+      opacity: 1,
+      data
+    };
+  }
+
   function intersects(a, b, padding = 0) {
     return a.x < b.x + b.width + padding
       && a.x + a.width + padding > b.x
@@ -197,6 +224,16 @@
     return DECORATION_TYPES[0];
   }
 
+  function weightedItem(random, items) {
+    const total = items.reduce((sum, item) => sum + item.weight, 0);
+    let pick = random() * total;
+    for (const item of items) {
+      pick -= item.weight;
+      if (pick <= 0) return item;
+    }
+    return items[0];
+  }
+
   function assetObject(id, name, assetKey, x, y, width, height, action = "") {
     return {
       id,
@@ -209,6 +246,41 @@
       ...(action ? { action } : {}),
       properties: [{ name: "assetKey", value: assetKey }]
     };
+  }
+
+  function createHorizonForest({ seed, map }) {
+    const random = createRandom(`${seed}:horizon-forest`);
+    const objects = [];
+    const minX = Math.max(0, map.cameraSafeInsetX - 5);
+    const maxX = Math.min(map.width, map.width - map.cameraSafeInsetX + 5);
+    const rows = [
+      { y: map.horizonRows - 1.03, size: 0.82, step: 0.72 },
+      { y: map.horizonRows - 0.67, size: 1, step: 1.12 }
+    ];
+
+    rows.forEach((row, rowIndex) => {
+      let x = minX - 1 + random() * 0.8 + rowIndex * 0.55;
+      while (x < maxX) {
+        const type = weightedItem(random, HORIZON_TREE_TYPES);
+        const width = type.width * row.size;
+        const height = type.height * row.size;
+        const y = row.y - height * 0.08 + (random() - 0.5) * 0.24;
+        const object = assetObject(
+          `horizon-tree-${rowIndex + 1}-${objects.length + 1}`,
+          "",
+          type.assetKey,
+          Math.round(x * 20) / 20,
+          Math.round(y * 20) / 20,
+          Math.round(width * 20) / 20,
+          Math.round(height * 20) / 20
+        );
+        object.generationBand = "horizon-forest";
+        object.horizonRow = rowIndex + 1;
+        objects.push(object);
+        x += Math.max(0.72, width * row.step) + random() * 0.24;
+      }
+    });
+    return objects;
   }
 
   function createDecorations({ random, map, roadLayer, reserved, focusX }) {
@@ -273,8 +345,9 @@
       centerX: Math.round(map.focusX),
       centerY: 10
     };
+    const meadowLayer = createMeadowLayer(map.width, map.height, map.horizonRows, seed);
     const roadLayer = createRoadLayer(map.width, map.height, seed, houses, plaza);
-    map.tileLayers = [roadLayer];
+    map.tileLayers = [meadowLayer, roadLayer];
 
     const homePositions = {};
     const houseObjects = houses.map((house, index) => {
@@ -315,7 +388,8 @@
       assetObject("village-lamp-left", "", "lampTall", map.focusX - 6, 11.4, 0.75, 1.8),
       assetObject("village-lamp-right", "", "lampTall", map.focusX + 5.1, 11.4, 0.75, 1.8)
     ];
-    const reserved = [...houseObjects, ...landmarks].map((object) => ({
+    const horizonForest = createHorizonForest({ seed, map });
+    const reserved = [...houseObjects, ...landmarks, ...horizonForest].map((object) => ({
       x: Number(object.x),
       y: Number(object.y),
       width: Number(object.width),
@@ -333,7 +407,7 @@
       generation: GENERATION_VERSION,
       seed,
       map,
-      objects: [...houseObjects, ...landmarks, ...decorations],
+      objects: [...horizonForest, ...houseObjects, ...landmarks, ...decorations],
       homePositions
     };
   }

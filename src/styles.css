@@ -848,7 +848,7 @@ body.sidebar-resizing {
 }
 
 .world-workspace.world-interior-workspace {
-  background: #172033;
+  background: #000000;
 }
 
 .world-home-back {
@@ -1056,14 +1056,66 @@ body.sidebar-resizing {
   background: #f8fbff;
 }
 
-.world-member-picker-row > div {
-  display: grid;
-  gap: 3px;
+.world-member-picker-identity {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.world-member-picker-row span {
+.world-member-picker-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.world-member-picker-copy span {
   color: #66738b;
   font-size: 12px;
+}
+
+.world-member-picker-row > button {
+  flex-shrink: 0;
+}
+
+.world-role-avatar {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid rgba(91, 113, 143, 0.2);
+  background: linear-gradient(145deg, #edf4ff, #dce9f8);
+  box-shadow: 0 4px 12px rgba(31, 55, 86, 0.12);
+}
+
+.world-role-avatar img {
+  position: absolute;
+  top: -2%;
+  left: 50%;
+  width: 135%;
+  max-width: none;
+  height: auto;
+  transform: translateX(-50%);
+  image-rendering: pixelated;
+  user-select: none;
+  pointer-events: none;
+}
+
+.world-role-avatar-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: #fff;
+  background: #0f766e;
+  font-weight: 700;
+}
+
+.world-member-picker-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
 }
 
 .world-chat-close-button {
@@ -1175,7 +1227,7 @@ body.sidebar-resizing {
 
 .world-chat-message {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 38px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
 }
@@ -1186,11 +1238,14 @@ body.sidebar-resizing {
 }
 
 .world-chat-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.world-chat-avatar.is-system {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
   color: #fff;
   background: #0f766e;
   font-size: 13px;
@@ -1242,6 +1297,83 @@ body.sidebar-resizing {
   max-height: 85vh;
   resize: both;
   overflow: auto;
+}
+
+.world-agent-profile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.world-agent-profile-avatar {
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+}
+
+.world-agent-profile-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.world-agent-profile-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.world-agent-profile-title-row h2 {
+  margin: 0;
+}
+
+.world-agent-profile-copy > p {
+  margin: 4px 0 3px;
+}
+
+.world-agent-chat-membership {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.world-agent-chat-membership::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  content: "";
+}
+
+.world-agent-chat-membership.is-member {
+  border-color: #a7e4bd;
+  color: #15723b;
+  background: #ecfdf3;
+}
+
+.world-agent-chat-membership.is-member::before {
+  background: #22b45f;
+  box-shadow: 0 0 0 3px rgba(34, 180, 95, 0.12);
+}
+
+.world-agent-chat-membership.is-not-member {
+  border-color: #d8e0ea;
+  color: #66748b;
+  background: #f7f9fc;
+}
+
+.world-agent-chat-membership.is-not-member::before {
+  background: #94a3b8;
+}
+
+.world-agent-chat-membership-detail {
+  color: #7a8799;
+  font-size: 11px;
 }
 
 .world-agent-kernel-summary {

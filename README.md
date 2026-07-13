@@ -1,10 +1,10 @@
 <p align="center">
   <img src="./src/Logo.png" alt="CosS Logo" style="width: 80px; vertical-align: middle;">
 </p>
-<h1 align="center">CosS Desktop v0.10</h1>
+<h1 align="center">CosS Desktop v0.11.1</h1>
 <p align="center">
   <img src="https://img.shields.io/github/languages/code-size/xiaolizi0v0/CosS" alt="code size"/>
-  <img src="https://img.shields.io/badge/Electron-35.1.2-brightgreen" alt="Electron"/>
+  <img src="https://img.shields.io/badge/Electron-31.7.7-brightgreen" alt="Electron"/>
   <img src="https://img.shields.io/badge/MCP-1.0.0-blue" alt="MCP"/>
   <img src="https://img.shields.io/github/languages/count/xiaolizi0v0/CosS" alt="languages"/>
   <img src="https://img.shields.io/github/last-commit/xiaolizi0v0/CosS" alt="last commit"/><br>
@@ -16,12 +16,13 @@
 
 **Code Orchestration System** — 一个基于 MCP 协议的 AI 多智能体协作工作区。
 
-CosS 提供了一个类桌面环境，让多个 AI 智能体角色（产品经理、技术负责人、前后端工程师、QA 等）通过**中央线性工作流内核（Kernel）**协作完成软件开发任务。所有智能体通过 **Model Context Protocol (MCP)** 接入系统，遵循统一的步骤认领、租约、锁和审批机制。
+CosS 提供类桌面工作区与交互式 Agent 世界，让产品经理、技术负责人、工程师、测试等 AI 智能体通过**中央线性工作流内核（Kernel）**协作完成软件开发任务。所有智能体通过 **Model Context Protocol (MCP)** 接入系统，遵循统一的步骤认领、租约、锁和审批机制。
 
 ## 核心特性
 
 - **类桌面工作区** — 左侧项目栏创建/切换项目，每个项目拥有独立的工作区
 - **多智能体协作** — 支持产品经理、技术负责人、前后端工程师、QA 工程师等 9 种角色
+- **Agent 世界** — 9 位居民拥有独立住宅与房间，可加入世界群聊并通过公告栏领取任务
 - **线性工作流内核** — LLM Planner 自动将用户目标分解为线性步骤，按序分派给对应角色
 - **MCP 协议接入** — 智能体通过标准 MCP 工具接口（共 16 个工具）参与协作
 - **角色终端注入** — 支持 Claude Code、CodeBuddy Code 作为智能体后端，自动注入角色提示词
@@ -43,8 +44,9 @@ npm.cmd start
 
 项目内置 GitHub Actions Release 工作流：
 
-- 推送到 `main` 或提交 PR 时：执行 preflight，并行打包各平台产物，作为 workflow artifacts 保存（不发布 Release）
-- 推送 `v*` 标签或手动运行 `Release` workflow 并填写 `tag` 时：并行打包并发布 GitHub Release Assets
+- 提交 PR 时：执行 Agent 世界模块校验，并行打包各平台产物，作为 workflow artifacts 保存（不发布 Release）
+- 推送 `v*` 标签时：执行同样的模块校验与多平台打包，并发布 GitHub Release Assets
+- 手动运行 `Release` workflow 时：填写 `tag` 可发布 Release；留空则只生成构建产物
 
 Release Assets 使用 electron-builder 生成安装包，包含：
 
@@ -56,8 +58,8 @@ Release Assets 使用 electron-builder 生成安装包，包含：
 - `checksums.txt` — SHA-256 校验和
 
 ```powershell
-git tag v0.11.0
-git push origin v0.11.0
+git tag v0.11.1
+git push origin v0.11.1
 ```
 
 ## 系统架构

@@ -30,7 +30,7 @@ const PRODUCT_DOCS_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/hel
 const PRODUCT_PRIVACY_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/privacy.md";
 const PRODUCT_LICENSE_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/license.md";
 
-const APP_VERSION = "v0.11.0";
+const APP_VERSION = "v0.11.1";
 const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const appStore = window.COSS_STORE.createAppStore(structuredClone(defaultState), {
@@ -2691,7 +2691,7 @@ function ensureAgentSessionShape(win, project = getProject()) {
     taskId: taskContext.taskId,
     subtaskId: taskContext.subtaskId,
     sessionName: win.agentSession?.sessionName || `CosS-${project?.name || "Project"}-${role.name}-${provider}`,
-    promptTemplateVersion: "v0.11.0",
+    promptTemplateVersion: "v0.11.1",
     createdAt,
     lastStartedAt: win.agentSession?.lastStartedAt || "",
     resumeCount: Number.isFinite(Number(win.agentSession?.resumeCount)) ? Number(win.agentSession.resumeCount) : 0,
@@ -7886,11 +7886,11 @@ function renderSidebar(project) {
         <span class="nav-icon">${icon("globe")}</span>
         <span class="project-name">${escapeHtml(item.name)}</span>
       </button>
-      <button class="project-delete" title="${escapeHtml(t("world.delete.tooltip", "删除世界"))}" data-action="show-delete-world" data-world-id="${escapeHtml(item.id)}">×</button>
+      <button class="project-delete" title="${escapeHtml(t("world.delete.tooltip", "从列表移除"))}" data-action="show-delete-world" data-world-id="${escapeHtml(item.id)}">×</button>
     </div>
   `).join("") : "";
 
-  const listTitle = showingWorlds ? t("nav.worlds", "世界") : t("nav.projects", "项目");
+  const listTitle = showingWorlds ? t("nav.worlds", "Agent 世界") : t("nav.projects", "项目");
   const plusAction = showingWorlds ? "show-create-world" : "show-create-project";
 
   return `
@@ -7907,7 +7907,7 @@ function renderSidebar(project) {
         <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>${escapeHtml(t("nav.newTask", "新建任务"))}</button>
         <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>${escapeHtml(t("nav.messages", "消息"))}</button>
         <button class="nav-item ${!showingWorlds ? "active" : ""}" data-action="show-project-list"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
-        <button class="nav-item ${showingWorlds ? "active" : ""}" data-action="show-world-list"><span class="nav-icon">${icon("globe")}</span>${escapeHtml(t("nav.worlds", "世界"))}</button>
+        <button class="nav-item ${showingWorlds ? "active" : ""}" data-action="show-world-list"><span class="nav-icon">${icon("globe")}</span>${escapeHtml(t("nav.worlds", "Agent 世界"))}</button>
       </nav>
       <div class="section-title">
         <span>${escapeHtml(listTitle)} (${(showingWorlds ? state.worlds : state.projects).length})</span>
@@ -7965,21 +7965,21 @@ function renderWorkspace(project) {
     const interiorRole = world?.activeInteriorRoleId
       ? ROLE_TEMPLATES.find((role) => role.id === world.activeInteriorRoleId)
       : null;
-    const worldHeading = interiorRole ? `${trRoleName(interiorRole)}之家` : world?.name;
+    const worldHeading = interiorRole ? t("world.home.interiorTitle", "{{role}}之家", { role: trRoleName(interiorRole) }) : world?.name;
     const worldSubtitle = interiorRole
-      ? `${world?.name || ""} · HomeINT · ${trRoleName(interiorRole)}当前位于自己的房间`
-      : (world ? `${world.path || ""} · ${t("world.home.subtitle", "2D Agent 世界 MVP2.0")} · ${t("world.home.agentCount", "{{count}} 个角色 Agent", { count: agents.length })}` : "");
+      ? t("world.home.interiorStatus", "{{world}} · {{role}}正在房间内", { world: world?.name || "", role: trRoleName(interiorRole) })
+      : (world ? `${t("world.home.subtitle", "Agent 协作世界")} · ${t("world.home.agentCount", "{{count}} 位居民", { count: agents.length })}` : "");
     return `
       <section class="workspace world-workspace ${interiorRole ? "world-interior-workspace" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}" data-render-world-id="${world ? escapeHtml(world.id) : ""}" data-world-view-mode="${interiorRole ? escapeHtml(interiorRole.id) : "exterior"}" data-sidebar-collapsed="${String(Boolean(sidebarCollapsed))}">
         ${sidebarCollapsed ? `<button class="sidebar-floating-toggle sidebar-toggle-button" title="${escapeHtml(t("nav.showSidebar", "显示侧边栏"))}" data-action="toggle-sidebar">${icon("sidebar")}</button>` : ""}
         <div class="workspace-topbar">
           <div class="project-heading">
             <h1 class="workspace-title">${world ? escapeHtml(worldHeading) : escapeHtml(t("world.noWorld", "未选择世界"))}</h1>
-            <div class="workspace-subtitle">${world ? escapeHtml(worldSubtitle) : escapeHtml(t("world.createToStart", "创建世界后进入 2D Agent 世界"))}</div>
+            <div class="workspace-subtitle">${world ? escapeHtml(worldSubtitle) : escapeHtml(t("world.createToStart", "创建一个 Agent 世界，开始组建你的协作小镇"))}</div>
           </div>
           <div class="workspace-actions">
-            ${interiorRole ? `<button class="secondary-button world-home-back" data-action="leave-world-home">← 返回小镇</button>` : ""}
-            ${world ? `<button class="secondary-button" data-action="show-world-chat">${icon("assistant")}${escapeHtml(t("world.chat.title", "群聊"))}<span class="button-badge">${chatCount}</span></button><button class="secondary-button" data-action="show-world-task-publisher">${icon("plus")}${escapeHtml(t("world.task.publish", "发布任务"))}</button>` : ""}
+            ${interiorRole ? `<button class="secondary-button world-home-back" data-action="leave-world-home">${escapeHtml(t("world.home.back", "← 返回小镇"))}</button>` : ""}
+            ${world ? `<button class="secondary-button" data-action="show-world-chat">${icon("assistant")}${escapeHtml(t("world.chat.title", "世界群聊"))}<span class="button-badge">${chatCount}</span></button><button class="secondary-button" data-action="show-world-task-publisher">${icon("plus")}${escapeHtml(t("world.task.publish", "发布任务"))}</button>` : ""}
             <button class="secondary-button" data-action="show-create-world">${icon("plus")}${escapeHtml(t("world.create.title", "新建世界"))}</button>
           </div>
         </div>
@@ -7987,10 +7987,10 @@ function renderWorkspace(project) {
         <div class="world-stage" data-world-id="${escapeHtml(world.id)}">
           <div class="world-canvas-shell" data-world-canvas>
             <div class="world-engine-placeholder">
-              <div class="pixel-map" role="img" aria-label="${escapeHtml(t("world.home.aria", "世界主页，像素小人代表角色 Agent"))}">
+              <div class="pixel-map" role="img" aria-label="${escapeHtml(t("world.home.aria", "Agent 小镇互动地图"))}">
                 <div class="world-empty-intro">
-                  <strong>${escapeHtml(t("world.home.title", "世界主页"))}</strong>
-                  <span>${escapeHtml(t("world.home.desc", "这是世界概念的 MVP：一个 2D 卡通像素场景，角色 Agent 以像素小人形式常驻在世界中。"))}</span>
+                  <strong>${escapeHtml(t("world.home.title", "正在准备世界地图"))}</strong>
+                  <span>${escapeHtml(t("world.home.desc", "地图加载完成后，你可以查看居民、进入房间并通过公告栏发布任务。"))}</span>
                 </div>
               </div>
             </div>
@@ -7999,8 +7999,8 @@ function renderWorkspace(project) {
         ` : `
         <div class="world-stage empty">
           <div class="empty-state">
-            <h2>${escapeHtml(t("world.empty.title", "创建一个世界开始"))}</h2>
-            <p>${escapeHtml(t("world.empty.desc", "世界会保存自己的名称和文件夹，并展示角色 Agent 的 2D 像素主页。"))}</p>
+            <h2>${escapeHtml(t("world.empty.title", "创建你的第一个 Agent 世界"))}</h2>
+            <p>${escapeHtml(t("world.empty.desc", "每个世界拥有独立的居民阵容、群聊、公告栏任务和数据目录。"))}</p>
             <button class="primary-button" data-action="show-create-world">${icon("plus")}${escapeHtml(t("world.create.title", "新建世界"))}</button>
           </div>
         </div>

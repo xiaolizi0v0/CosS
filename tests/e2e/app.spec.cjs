@@ -195,12 +195,12 @@ function formatExpectedProjectCreatedTime(value) {
   }).format(date);
 }
 
-test("v0.11.0 boots into the Kernel workspace shell", async () => {
+test("v0.11.1 boots into the Kernel workspace shell", async () => {
   const { app, page } = await launchApp();
 
   try {
     await expect(page.locator(".brand")).toContainText("CosS");
-    await expect(page.locator(".brand-version")).toHaveText("v0.11.0");
+    await expect(page.locator(".brand-version")).toHaveText("v0.11.1");
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator(".workspace-title")).toHaveText("E2E Project");
 
@@ -213,7 +213,8 @@ test("v0.11.0 boots into the Kernel workspace shell", async () => {
   }
 });
 
-test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
+test("v0.11.1 Agent world renders canvas and group chat task flow", async () => {
+  test.setTimeout(45000);
   const createdAt = "2026-01-01T00:00:00.000Z";
   const { app, page, userDataDir } = await launchApp({}, {}, {
     activeSidebarSection: "worlds",
@@ -249,11 +250,55 @@ test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
         && debug?.childCount > 0
         && debug?.houses === 9
         && debug?.agents === 0
+        && debug?.camera?.controller?.mode === "camera-follow-target"
+        && debug?.camera?.controller?.worldObjectsMoved === false
+        && debug?.terrain?.plainGrassPattern === true
+        && debug?.terrain?.flowerMeadowPattern === true
+        && debug?.terrain?.roadBoundaryEdges === true
         && world?.map?.width === 88
         && world?.map?.height === 64
+        && world?.map?.generation === "procedural-v5"
+        && world?.objects?.filter((object) => object.generationBand === "horizon-forest").length >= 90
         && world?.agents?.length === 9
         && world.agents.every((agent) => agent.location === "home" && !agent.movement);
     }), { timeout: 10000 }).toBe(true);
+
+    await page.evaluate(() => {
+      window.__cossDoorSizeTest = window.CossWorldEngineInstance.playDoorAnimation("backend-engineer", 900);
+    });
+    await page.waitForTimeout(120);
+    const animatedHouse = await page.evaluate(() => window.CossWorldEngineInstance
+      .getDebugState()
+      .houseDisplays
+      .find((house) => house.roleId === "backend-engineer"));
+    expect(animatedHouse.textureKey).toContain("-door-");
+    expect(animatedHouse.displayWidth).toBeCloseTo(animatedHouse.targetWidth, 3);
+    expect(animatedHouse.displayHeight).toBeCloseTo(animatedHouse.targetHeight, 3);
+    await page.evaluate(() => window.__cossDoorSizeTest);
+    const restoredHouse = await page.evaluate(() => window.CossWorldEngineInstance
+      .getDebugState()
+      .houseDisplays
+      .find((house) => house.roleId === "backend-engineer"));
+    expect(restoredHouse.textureKey).toContain("-home");
+    expect(restoredHouse.displayWidth).toBeCloseTo(restoredHouse.targetWidth, 3);
+    expect(restoredHouse.displayHeight).toBeCloseTo(restoredHouse.targetHeight, 3);
+
+    const canvas = page.locator("[data-world-canvas] canvas");
+    const canvasBox = await canvas.boundingBox();
+    const cameraBeforeDrag = await page.evaluate(() => ({
+      targetX: window.CossWorldEngineInstance?.getDebugState?.().camera?.controller?.targetX,
+      objects: window.getWorld?.().objects.map(({ id, x, y }) => ({ id, x, y }))
+    }));
+    await page.mouse.move(canvasBox.x + canvasBox.width * 0.55, canvasBox.y + canvasBox.height * 0.55);
+    await page.mouse.down();
+    await page.mouse.move(canvasBox.x + canvasBox.width * 0.45, canvasBox.y + canvasBox.height * 0.55, { steps: 5 });
+    await page.mouse.up();
+    const cameraAfterDrag = await page.evaluate(() => ({
+      targetX: window.CossWorldEngineInstance?.getDebugState?.().camera?.controller?.targetX,
+      objects: window.getWorld?.().objects.map(({ id, x, y }) => ({ id, x, y }))
+    }));
+    expect(cameraAfterDrag.targetX).toBeGreaterThan(cameraBeforeDrag.targetX);
+    expect(cameraAfterDrag.objects).toEqual(cameraBeforeDrag.objects);
 
     await page.evaluate(async () => {
       await window.handleWorldObjectAction({
@@ -268,8 +313,42 @@ test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
     await expect(page.locator("[data-world-canvas] canvas")).toHaveAttribute("data-world-ready", "true", { timeout: 10000 });
     await expect.poll(() => page.evaluate(() => {
       const debug = window.CossWorldEngineInstance?.getDebugState?.();
-      return debug?.sceneStatus === 5 && debug?.childCount > 0 && debug?.viewMode === "interior:product-manager";
+      const resident = debug?.interiorAgentDisplay;
+      const displayRatio = resident?.displayWidth / resident?.displayHeight;
+      const sourceRatio = resident?.sourceWidth / resident?.sourceHeight;
+      return debug?.sceneStatus === 5
+        && debug?.childCount > 0
+        && debug?.viewMode === "interior:product-manager"
+        && resident?.targetHeight === resident?.displayHeight
+        && resident?.animationFrameRate === 3
+        && resident?.nameplateAlpha === 0.68
+        && resident?.xRatio === 0.73
+        && resident?.yRatio === 0.68
+        && Math.abs(displayRatio - sourceRatio) < 0.001
+        && displayRatio < 0.75;
     }), { timeout: 10000 }).toBe(true);
+    const interiorCanvasBox = await canvas.boundingBox();
+    const interiorAgentPosition = await page.evaluate(() => {
+      const resident = window.CossWorldEngineInstance?.getDebugState?.().interiorAgentDisplay;
+      return { x: resident?.viewportXRatio, y: resident?.viewportYRatio };
+    });
+    await page.mouse.move(
+      interiorCanvasBox.x + interiorCanvasBox.width * interiorAgentPosition.x,
+      interiorCanvasBox.y + interiorCanvasBox.height * interiorAgentPosition.y
+    );
+    await expect.poll(() => page.evaluate(() => window.CossWorldEngineInstance
+      ?.getDebugState?.()
+      ?.interiorAgentDisplay
+      ?.nameplateAlpha)).toBe(1);
+    await page.mouse.click(
+      interiorCanvasBox.x + interiorCanvasBox.width * interiorAgentPosition.x,
+      interiorCanvasBox.y + interiorCanvasBox.height * interiorAgentPosition.y
+    );
+    await expect(page.locator(".world-agent-run-modal")).toBeVisible();
+    await expect(page.locator(".world-agent-run-modal h2")).toContainText("产品经理");
+    await expect(page.locator('.world-agent-run-modal [data-world-chat-member="true"]')).toContainText("已加入群聊");
+    await expect(page.locator('.world-agent-run-modal [data-role-avatar="product-manager"] img')).toHaveAttribute("src", /ProductManager\/ProductManager\.png$/);
+    await page.locator('.world-agent-run-modal [data-action="close-modal"]').click();
     await page.locator('[data-action="leave-world-home"]').click();
     await expect(page.locator(".workspace-title")).toHaveText("E2E World");
     await expect(page.locator("[data-world-canvas] canvas")).toHaveAttribute("data-world-ready", "true", { timeout: 10000 });
@@ -278,12 +357,92 @@ test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
       return debug?.sceneStatus === 5 && debug?.viewMode === "exterior" && debug?.houses === 9;
     }), { timeout: 10000 }).toBe(true);
 
+    await page.evaluate(() => {
+      window.__cossSideRunSamples = [];
+      window.__cossSideRunSampleTimer = window.setInterval(() => {
+        const resident = window.CossWorldEngineInstance
+          ?.getDebugState?.()
+          ?.agentDisplays
+          ?.find((item) => item.roleId === "product-manager");
+        if (resident?.movementDirection === "side") {
+          window.__cossSideRunSamples.push({
+            phase: resident.movementPhase,
+            flipX: resident.flipX
+          });
+        }
+      }, 20);
+    });
     await page.locator('[data-action="show-world-task-publisher"]').click();
     await page.locator("#worldTaskGoal").fill("Build the world task loop.");
     await page.locator('[data-action="publish-world-task"]').click();
 
+    await expect(page.locator(".world-chat-modal")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => {
+      const debug = window.CossWorldEngineInstance?.getDebugState?.();
+      const house = debug?.houseDisplays?.find((item) => item.roleId === "product-manager");
+      return debug?.agents === 0 && house?.textureKey?.includes("-door-");
+    }), { timeout: 5000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const debug = window.CossWorldEngineInstance?.getDebugState?.();
+      const resident = debug?.agentDisplays?.find((item) => item.roleId === "product-manager");
+      return resident?.visible === true
+        && resident?.movementPhase === "to-board"
+        && resident?.textureKey?.includes("-run-");
+    }), { timeout: 5000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const world = window.getWorld?.();
+      const resident = world?.agents?.find((agent) => agent.roleId === "product-manager");
+      const board = world?.objects?.find((object) => object.id === "announcement-board");
+      return resident?.location === "announcement-board"
+        && !resident?.movement
+        && resident.y >= Number(board?.y) + Number(board?.height) - 0.2
+        && resident.y <= Number(board?.y) + Number(board?.height);
+    }), { timeout: 10000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const resident = window.getWorld?.().agents?.find((agent) => agent.roleId === "product-manager");
+      return resident?.location === "home" && !resident?.movement;
+    }), { timeout: 20000 }).toBe(true);
+    const sideRunSamples = await page.evaluate(() => {
+      window.clearInterval(window.__cossSideRunSampleTimer);
+      return window.__cossSideRunSamples;
+    });
+    expect(sideRunSamples).toContainEqual({ phase: "to-board", flipX: false });
+    expect(sideRunSamples).toContainEqual({ phase: "return-home", flipX: true });
+    await expect.poll(() => {
+      const currentState = JSON.parse(fs.readFileSync(path.join(userDataDir, stateFileName), "utf8"));
+      const currentWorld = currentState.worlds.find((item) => item.id === "world-e2e");
+      const resident = currentWorld?.agents?.find((agent) => agent.roleId === "product-manager");
+      return resident?.location === "home" && !resident?.movement;
+    }, { timeout: 5000 }).toBe(true);
+
+    await page.evaluate(async () => {
+      await window.handleWorldObjectAction({
+        type: "role-house",
+        roleId: "product-manager",
+        action: "enter-world-home"
+      });
+    });
+    await expect.poll(() => page.evaluate(() => {
+      const debug = window.CossWorldEngineInstance?.getDebugState?.();
+      return debug?.viewMode === "interior:product-manager" && Boolean(debug?.interiorAgentDisplay);
+    }), { timeout: 10000 }).toBe(true);
+    await page.locator('[data-action="leave-world-home"]').click();
+    await expect(page.locator(".workspace-title")).toHaveText("E2E World");
+
+    await expect.poll(() => {
+      const currentState = JSON.parse(fs.readFileSync(path.join(userDataDir, stateFileName), "utf8"));
+      const currentWorld = currentState.worlds.find((item) => item.id === "world-e2e");
+      return currentWorld?.chatMessages?.some((message) => message.type === "role-message") || false;
+    }, { timeout: 15000 }).toBe(true);
+    await page.locator('.workspace-actions [data-action="show-world-chat"]').click();
     await expect(page.locator(".world-chat-modal")).toContainText("Build the world task loop.");
     await expect(page.locator(".world-chat-modal")).toContainText("我会负责", { timeout: 10000 });
+    await expect(page.locator('.world-chat-message.agent [data-role-avatar="product-manager"] img').first()).toHaveAttribute("src", /ProductManager\/ProductManager\.png$/);
+    await page.locator('[data-action="show-world-member-picker"]').click();
+    await expect(page.locator(".world-member-picker-avatar img")).toHaveCount(9);
+    await expect(page.locator('.world-member-picker-row[data-role-id="devops-engineer"]')).toHaveAttribute("data-chat-member", "false");
+    await expect(page.locator('.world-member-picker-row[data-role-id="devops-engineer"] [data-role-avatar="devops-engineer"] img')).toHaveAttribute("src", /DevOpsEngineer\/DevOpsEngineer\.png$/);
+    await page.locator('.world-member-picker-modal [data-action="close-modal"]').click();
 
     await expect.poll(() => {
       const currentState = JSON.parse(fs.readFileSync(path.join(userDataDir, stateFileName), "utf8"));
@@ -296,14 +455,123 @@ test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
     const run = world.agents[0].kernel.runs[0];
     expect(world.tasks).toHaveLength(1);
     expect(world.chatMessages.some((message) => message.type === "role-message")).toBe(true);
-    expect(run.input).toContain("不要使用 CosS 项目主页");
-    expect(run.output).toContain("独立世界 CodeBuddy CLI");
+    expect(run.input).toContain("当前任务独立于项目工作区");
+    expect(run.output).toContain("将按计划推进并在群聊中同步结果");
   } finally {
     await app.close();
   }
 });
 
-test("v0.11.0 project list shows project creation time", async () => {
+test("world execution prompt and system handoffs stay inside current chat members", async () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const { app, page } = await launchApp({}, {}, {
+    activeSidebarSection: "worlds",
+    activeWorldId: "world-prompt-scope",
+    worlds: [{
+      id: "world-prompt-scope",
+      name: "Prompt Scope World",
+      path: process.cwd(),
+      createdAt,
+      lastOpenedAt: createdAt,
+      map: { key: "default-meadow", width: 64, height: 64, tileSize: 32 },
+      agents: [{ id: "world-agent-product-manager", roleId: "product-manager", x: 16, y: 30, status: "idle" }],
+      chatMemberRoleIds: ["product-manager", "frontend-engineer", "qa-engineer"],
+      objects: [],
+      tasks: [],
+      chatMessages: []
+    }]
+  });
+  try {
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 10000 });
+    const result = await page.evaluate(async () => {
+      const world = window.getWorld();
+      const agent = world.agents.find((item) => item.roleId === "product-manager");
+      const task = { id: "task-prompt-scope", goal: "验证群聊提示词范围" };
+      world.tasks = [task];
+      const prompt = window.buildWorldAgentExecutionPrompt(world, task, agent, {
+        fromRoleId: "frontend-engineer",
+        content: "完成当前模块"
+      });
+      await window.processWorldAgentOutput(
+        world.id,
+        task.id,
+        agent.id,
+        "世界群聊最终消息：@tech-lead, 请继续处理。"
+      );
+      await window.processWorldAgentOutput(
+        world.id,
+        task.id,
+        agent.id,
+        "世界群聊最终消息：@ghost-role, 请继续处理。"
+      );
+      return {
+        prompt,
+        systemMessages: world.chatMessages.filter((message) => message.roleId === "system").map((message) => message.content),
+        queuedItems: world.agentMessageQueue?.length || 0
+      };
+    });
+    expect(result.prompt).toContain("当前群聊其他成员：@frontend-engineer（前端工程师）、@qa-engineer（测试工程师）");
+    expect(result.prompt).not.toContain("@tech-lead");
+    expect(result.prompt).not.toContain("@backend-engineer");
+    expect(result.systemMessages).toContain("居民 @tech-lead 尚未加入当前群聊，本次任务未转发。请先在群聊右上角点击「加入成员」，再重新发布任务。");
+    expect(result.systemMessages).toContain("未找到角色 @ghost-role，本次任务未转发。请确认角色 ID，并且仅 @当前群聊成员。");
+    expect(result.systemMessages.join("\n")).not.toContain("角色创建点");
+    expect(result.queuedItems).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("all HomeINT residents use scene-specific safe floor positions", async () => {
+  test.setTimeout(60000);
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const expectedPositions = {
+    "product-manager": { x: 0.73, y: 0.68 },
+    "tech-lead": { x: 0.37, y: 0.70 },
+    "frontend-engineer": { x: 0.37, y: 0.70 },
+    "backend-engineer": { x: 0.37, y: 0.70 },
+    "qa-engineer": { x: 0.63, y: 0.69 },
+    "ai-agent-engineer": { x: 0.50, y: 0.72 },
+    "devops-engineer": { x: 0.50, y: 0.72 },
+    "technical-writer": { x: 0.50, y: 0.73 },
+    "security-engineer": { x: 0.50, y: 0.73 }
+  };
+  const { app, page } = await launchApp({}, {}, {
+    activeSidebarSection: "worlds",
+    activeWorldId: "world-interior-positions",
+    worlds: [{
+      id: "world-interior-positions",
+      name: "Interior Position World",
+      path: process.cwd(),
+      createdAt,
+      lastOpenedAt: createdAt,
+      map: { key: "default-meadow", width: 64, height: 64, tileSize: 32 },
+      agents: [],
+      objects: [],
+      tasks: [],
+      chatMessages: []
+    }]
+  });
+  try {
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 10000 });
+    for (const [roleId, expected] of Object.entries(expectedPositions)) {
+      await page.evaluate((nextRoleId) => window.enterWorldHome(nextRoleId), roleId);
+      await expect(page.locator("[data-world-canvas] canvas")).toHaveAttribute("data-world-ready", "true", { timeout: 10000 });
+      await expect.poll(() => page.evaluate(() => {
+        const resident = window.CossWorldEngineInstance?.getDebugState?.().interiorAgentDisplay;
+        return resident ? { roleId: resident.roleId, x: resident.xRatio, y: resident.yRatio } : null;
+      }), { timeout: 10000 }).toEqual({ roleId, ...expected });
+      await page.evaluate(() => window.leaveWorldHome());
+      await expect.poll(() => page.evaluate(() => window.CossWorldEngineInstance?.getDebugState?.().viewMode), {
+        timeout: 10000
+      }).toBe("exterior");
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("v0.11.1 project list shows project creation time", async () => {
   const createdAt = "2026-02-03T04:05:00.000Z";
   const { app, page } = await launchApp({
     id: "project-created-time",
@@ -322,7 +590,7 @@ test("v0.11.0 project list shows project creation time", async () => {
   }
 });
 
-test("v0.11.0 project memory summarizes existing project work from settings", async () => {
+test("v0.11.1 project memory summarizes existing project work from settings", async () => {
   const createdAt = "2026-01-01T02:10:00.000Z";
   const { app, page, userDataDir } = await launchApp({
     tasks: [
@@ -405,7 +673,7 @@ test("v0.11.0 project memory summarizes existing project work from settings", as
   }
 });
 
-test("v0.11.0 deleted projects stay deleted after restart", async () => {
+test("v0.11.1 deleted projects stay deleted after restart", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-delete-project-"));
   const projectDirA = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-project-a-"));
   const projectDirB = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-project-b-"));
@@ -457,7 +725,7 @@ test("v0.11.0 deleted projects stay deleted after restart", async () => {
   }
 });
 
-test("v0.11.0 renderer task actions write Kernel phases and events", async () => {
+test("v0.11.1 renderer task actions write Kernel phases and events", async () => {
   const createdAt = "2026-01-01T01:00:00.000Z";
   const { app, page, userDataDir } = await launchApp({
     windows: [
@@ -544,7 +812,7 @@ test("v0.11.0 renderer task actions write Kernel phases and events", async () =>
   }
 });
 
-test("v0.11.0 Kernel Planner keeps the complete linear workflow from the model", async () => {
+test("v0.11.1 Kernel Planner keeps the complete linear workflow from the model", async () => {
   const mockPlan = {
     summary: "Plan a complete login workflow.",
     neededAgentRoleIds: ["product-manager", "tech-lead", "frontend-engineer"],
@@ -606,7 +874,7 @@ test("v0.11.0 Kernel Planner keeps the complete linear workflow from the model",
   }
 });
 
-test("v0.11.0 confirming a Kernel plan auto-starts Agent injection", async () => {
+test("v0.11.1 confirming a Kernel plan auto-starts Agent injection", async () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-auto-inject-project-"));
   const mockPlan = {
     summary: "Build a small game web collection.",
@@ -682,7 +950,7 @@ test("v0.11.0 confirming a Kernel plan auto-starts Agent injection", async () =>
   }
 });
 
-test("v0.11.0 task list only shows execute button for the current Kernel step", async () => {
+test("v0.11.1 task list only shows execute button for the current Kernel step", async () => {
   const createdAt = "2026-01-01T02:10:00.000Z";
   const subtasks = [
     ["subtask-current-1", "product-manager", "Define requirements", "done", [], true],
@@ -723,10 +991,10 @@ test("v0.11.0 task list only shows execute button for the current Kernel step", 
         },
         subtasks,
         orchestrator: {
-          version: "0.11.0",
+          version: "0.11.1",
           mode: "central-orchestrator",
           owner: "CosS Kernel",
-          kernel: { version: "0.11.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
+          kernel: { version: "0.11.1", architecture: "durable-workflow-kernel", leaseMs: 300000 },
           sharedState: { currentStep: "step-3", artifacts: [], decisions: [], constraints: [] },
           locks: [],
           approvals: [],
@@ -782,7 +1050,7 @@ test("v0.11.0 task list only shows execute button for the current Kernel step", 
   }
 });
 
-test("v0.11.0 project MCP config exposes Kernel tools", async () => {
+test("v0.11.1 project MCP config exposes Kernel tools", async () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-mcp-config-"));
   const { app, page } = await launchApp({ path: projectDir });
 
@@ -794,7 +1062,7 @@ test("v0.11.0 project MCP config exposes Kernel tools", async () => {
 
     expect(result.ok).toBe(true);
     const cossConfig = JSON.parse(fs.readFileSync(path.join(projectDir, ".coss", "mcp", "coss-mcp.json"), "utf8"));
-    expect(cossConfig.appVersion).toBe("0.11.0");
+    expect(cossConfig.appVersion).toBe("0.11.1");
     expect(cossConfig.tools).toEqual([
       "coss_get_context",
       "coss_list_roles",
@@ -826,7 +1094,7 @@ test("v0.11.0 project MCP config exposes Kernel tools", async () => {
   }
 });
 
-test("v0.11.0 MCP server exposes Kernel workflow tools", async () => {
+test("v0.11.1 MCP server exposes Kernel workflow tools", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-tools-"));
   writeState(userDataDir, createInitialState(process.cwd()));
 
@@ -850,7 +1118,7 @@ test("v0.11.0 MCP server exposes Kernel workflow tools", async () => {
   }
 });
 
-test("v0.11.0 MCP submit result refreshes project memory context", async () => {
+test("v0.11.1 MCP submit result refreshes project memory context", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-memory-mcp-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-memory-mcp-project-"));
   const createdAt = "2026-01-01T02:10:00.000Z";
@@ -929,7 +1197,7 @@ test("v0.11.0 MCP submit result refreshes project memory context", async () => {
   expect(savedState.projects[0].memory.summary).toContain("docs/memory-prd.md");
 });
 
-test("v0.11.0 Kernel keeps stable step ids for legacy subtasks without ids", async () => {
+test("v0.11.1 Kernel keeps stable step ids for legacy subtasks without ids", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-stable-steps-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-stable-steps-project-"));
   const createdAt = "2026-01-01T02:10:00.000Z";
@@ -999,7 +1267,7 @@ test("v0.11.0 Kernel keeps stable step ids for legacy subtasks without ids", asy
   expect(savedTask.orchestrator.steps[0].id).toBe(firstClaim.stepId);
 });
 
-test("v0.11.0 Kernel dispatches preplanned dependent steps after prerequisites complete", async () => {
+test("v0.11.1 Kernel dispatches preplanned dependent steps after prerequisites complete", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-preplanned-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-preplanned-project-"));
   const createdAt = "2026-01-01T02:00:00.000Z";
@@ -1113,7 +1381,7 @@ test("v0.11.0 Kernel dispatches preplanned dependent steps after prerequisites c
   ))).toBe(true);
 });
 
-test("v0.11.0 renderer auto-injects the next Kernel step after MCP completion", async () => {
+test("v0.11.1 renderer auto-injects the next Kernel step after MCP completion", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-sequence-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-sequence-project-"));
   const createdAt = "2026-01-01T02:20:00.000Z";
@@ -1270,7 +1538,7 @@ test("v0.11.0 renderer auto-injects the next Kernel step after MCP completion", 
   }
 });
 
-test("v0.11.0 renderer does not replay completed Kernel dispatches after relaunch", async () => {
+test("v0.11.1 renderer does not replay completed Kernel dispatches after relaunch", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-completed-relaunch-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-completed-relaunch-project-"));
   const createdAt = "2026-01-01T02:40:00.000Z";
@@ -1330,10 +1598,10 @@ test("v0.11.0 renderer does not replay completed Kernel dispatches after relaunc
           }
         ],
         orchestrator: {
-          version: "0.11.0",
+          version: "0.11.1",
           mode: "central-orchestrator",
           owner: "CosS Kernel",
-          kernel: { version: "0.11.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
+          kernel: { version: "0.11.1", architecture: "durable-workflow-kernel", leaseMs: 300000 },
           policy: { directAgentMessaging: false, durableWorkflow: true, stepLeases: true },
           sharedState: { currentStep: "step-completed-pm", artifacts: [], decisions: [], constraints: [] },
           locks: [],
@@ -1421,7 +1689,7 @@ test("v0.11.0 renderer does not replay completed Kernel dispatches after relaunc
   }
 });
 
-test("v0.11.0 renderer stale saves preserve MCP-dispatched downstream steps", async () => {
+test("v0.11.1 renderer stale saves preserve MCP-dispatched downstream steps", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-merge-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-merge-project-"));
   const createdAt = "2026-01-01T02:00:00.000Z";
@@ -1544,7 +1812,7 @@ test("v0.11.0 renderer stale saves preserve MCP-dispatched downstream steps", as
   await app.close();
 });
 
-test("v0.11.0 renderer repairs ready idle steps that lost dispatch messages", async () => {
+test("v0.11.1 renderer repairs ready idle steps that lost dispatch messages", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-repair-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v010-repair-project-"));
   const createdAt = "2026-01-01T02:30:00.000Z";
@@ -1595,10 +1863,10 @@ test("v0.11.0 renderer repairs ready idle steps that lost dispatch messages", as
           }
         ],
         orchestrator: {
-          version: "0.11.0",
+          version: "0.11.1",
           mode: "central-orchestrator",
           owner: "CosS Kernel",
-          kernel: { version: "0.11.0", architecture: "durable-workflow-kernel", leaseMs: 300000 },
+          kernel: { version: "0.11.1", architecture: "durable-workflow-kernel", leaseMs: 300000 },
           policy: { directAgentMessaging: false, durableWorkflow: true, stepLeases: true },
           sharedState: { currentStep: "step-repair-pm", artifacts: [], decisions: [], constraints: [] },
           locks: [],
@@ -1698,7 +1966,7 @@ test("v0.11.0 renderer repairs ready idle steps that lost dispatch messages", as
   await app.close();
 });
 
-test("v0.11.0 Kernel owns leases, dispatch, capability sandbox, structured results, and locks", async () => {
+test("v0.11.1 Kernel owns leases, dispatch, capability sandbox, structured results, and locks", async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-orchestrator-"));
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "coss-v091-project-"));
   const createdAt = "2026-01-01T03:00:00.000Z";
@@ -1775,7 +2043,7 @@ test("v0.11.0 Kernel owns leases, dispatch, capability sandbox, structured resul
   });
   expect(board.ok).toBe(true);
   expect(board.orchestrator.mode).toBe("central-orchestrator");
-  expect(board.orchestrator.version).toBe("0.11.0");
+  expect(board.orchestrator.version).toBe("0.11.1");
   expect(board.orchestrator.kernel.architecture).toBe("durable-workflow-kernel");
   expect(board.orchestrator.policy.eventSourcing).toBe(true);
   expect(board.orchestrator.policy.stepLeases).toBe(true);

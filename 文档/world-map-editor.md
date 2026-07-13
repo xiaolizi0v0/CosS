@@ -12,6 +12,8 @@ src/world/
 ├── tiled-map-loader.js       # Tiled JSON 解析器
 ├── world-assets.js           # 角色、HomeINT、OpenDoor、基础物件资源映射
 ├── world-generator.js        # 默认世界的道路、住宅和绿化生成算法
+├── world-terrain-renderer.js # 草地合成、花草覆盖和道路边界渲染
+├── world-camera-controller.js # 独立镜头目标、拖拽、键盘移动和缩放
 └── world-engine.js           # Phaser / Canvas 场景运行时
 ```
 
@@ -21,6 +23,9 @@ src/world/
 
 - 生成 9 个住宅槽位和角色到住宅的固定绑定；
 - 用正交路由算法连接住宅、中央广场和公告栏；
+- 用 `plain_grass_tile.png` 合成无边框草地，并按种子稀疏覆盖 `grass_pink_flower.png` 与 `grass_white_daisy.png`；
+- 根据道路格四邻域自动裁切并组合 `grass_stone_tile_1.png`、`grass_stone_tile_2.png` 的上下左右边界；
+- 在天空与草地交界处生成两层错位林带，树冠跨过地平线且按深度保持在住宅后方；
 - 用带碰撞检测的种子随机算法散布树木、花坛、路灯和长椅；
 - 为镜头保留左右各 14 格、底部 14 格的不可达安全边距，用户平移或缩放时看不到地图边界；
 - 输出每位居民的 `homeX/homeY`，作为离家和回家动画的唯一目标点。
@@ -65,6 +70,7 @@ src/world/
 ## 运行时策略
 
 - Phaser 可用时使用 Phaser 场景。
+- 地图对象始终保持世界坐标不变；拖拽、方向键和滚轮只更新 `world-camera-controller.js` 的 Phaser Camera 跟随目标。
 - Phaser 或 Tiled JSON 加载失败时保留程序化地图 fallback。
 - 地图文件只描述空间和对象，不直接执行命令，也不改变 Agent 权限边界。
 - 新世界默认使用 `world-generator.js`，且 `world.map.tiledUrl` 为空；自定义世界可填写 `tiledUrl` 载入 Tiled JSON。

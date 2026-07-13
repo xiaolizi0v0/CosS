@@ -1,5 +1,5 @@
 const STATE_SCHEMA_VERSION = 2;
-const PROJECT_STATE_VERSION = "0.11.0";
+const PROJECT_STATE_VERSION = "0.11.1";
 const TASK_STATUSES = Object.freeze(["planned", "running", "done"]);
 const SUBTASK_STATUSES = Object.freeze(["idle", "running", "done"]);
 const KERNEL_PHASES = Object.freeze(["idle", "running", "done"]);
