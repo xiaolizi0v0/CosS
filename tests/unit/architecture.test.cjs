@@ -11,6 +11,7 @@ const { createAgentRuntime } = require("../../src/main/services/agent-runtime.cj
 const { createTerminalService } = require("../../src/main/services/terminal-service.cjs");
 const { createProjectFileService } = require("../../src/main/services/project-file-service.cjs");
 const { createMcpConfigService } = require("../../src/main/services/mcp-config-service.cjs");
+const worldGenerator = require("../../src/world/world-generator.js");
 
 test("IPC contracts keep the public state channels stable", () => {
   assert.equal(IPC_CHANNELS.STATE_LOAD, "state:load");
@@ -134,7 +135,64 @@ test("default world map follows the Tiled object and tile layer contract", () =>
   const map = JSON.parse(fs.readFileSync(path.join(__dirname, "../../src/world/maps/default-meadow.json"), "utf8"));
   const tileLayer = map.layers.find((layer) => layer.type === "tilelayer");
   const objectLayer = map.layers.find((layer) => layer.type === "objectgroup");
-  assert.equal(map.tilewidth, 32);
+  assert.equal(map.tilewidth, 80);
   assert.equal(tileLayer.data.length, map.width * map.height);
+  assert.equal(map.layers.find((layer) => layer.name === "Stone Paths").data.length, map.width * map.height);
   assert.equal(objectLayer.objects.find((item) => item.name === "announcement-board").properties[0].value, "publish-world-task");
+  const roleHouses = objectLayer.objects.filter((item) => item.type === "role-house");
+  assert.equal(roleHouses.length, 9);
+  assert.equal(roleHouses.every((item) => item.properties.some((property) => property.name === "roleId")), true);
+  assert.equal(roleHouses[0].width, 6 * map.tilewidth);
+  assert.equal(roleHouses.find((item) => item.name === "tech-lead-home").x, 9 * map.tilewidth);
+});
+
+test("procedural world generator creates a deterministic boundary-safe village", () => {
+  const first = worldGenerator.generateWorldLayout({ seed: "unit-world" });
+  const second = worldGenerator.generateWorldLayout({ seed: "unit-world" });
+  assert.deepEqual(first, second);
+  assert.equal(first.map.generation, worldGenerator.version);
+  assert.equal(first.map.width, 88);
+  assert.equal(first.map.height, 64);
+  assert.equal(first.map.tiledUrl, "");
+  assert.ok(first.map.cameraSafeInsetX >= 14);
+  assert.ok(first.map.cameraSafeInsetBottom >= 14);
+  assert.equal(first.map.tileLayers[0].data.length, first.map.width * first.map.height);
+  assert.ok(first.map.tileLayers[0].data.filter(Boolean).length > 150);
+  const houses = first.objects.filter((object) => object.type === "role-house");
+  assert.equal(houses.length, 9);
+  assert.equal(Object.keys(first.homePositions).length, 9);
+  assert.equal(houses.every((house) => house.action === "enter-world-home"), true);
+  assert.equal(houses.every((house) => {
+    const home = first.homePositions[house.roleId];
+    return home.x > house.x
+      && home.x < house.x + house.width
+      && home.y > house.y
+      && home.y < house.y + house.height;
+  }), true);
+});
+
+test("every world resident provides HomeINT and four OpenDoor frames", () => {
+  const assetRoot = path.join(__dirname, "../../src/world/imge");
+  const roleFolders = [
+    "ProductManager",
+    "TechnicalLead",
+    "Front-endEngineer",
+    "BackendEngineer",
+    "TestEngineer",
+    "AI-AgentEngineer",
+    "DevOpsEngineer",
+    "TechnicalDocumentationEngineer",
+    "SecurityEngineer"
+  ];
+  roleFolders.forEach((folder) => {
+    const roleRoot = path.join(assetRoot, folder);
+    assert.equal(fs.existsSync(path.join(roleRoot, "HomeINT.png")), true, `${folder} is missing HomeINT.png`);
+    const openDoorFolder = fs.readdirSync(roleRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && /HomeOp(?:e|en)Door$/i.test(entry.name));
+    assert.ok(openDoorFolder, `${folder} is missing its OpenDoor directory`);
+    assert.deepEqual(
+      fs.readdirSync(path.join(roleRoot, openDoorFolder.name)).filter((name) => /\.png$/i.test(name)).sort(),
+      ["1.png", "2.png", "3.png", "4.png"]
+    );
+  });
 });

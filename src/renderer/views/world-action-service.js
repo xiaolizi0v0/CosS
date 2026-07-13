@@ -4,6 +4,9 @@
     updateWorldChatModal,
     showWorldTaskPublisherModal,
     showWorldAgentActionModal,
+    showWorldMemberPickerModal,
+    addWorldChatMember,
+    removeWorldChatMember,
     setWorldTaskStatus,
     translate,
     publishWorldTask,
@@ -17,11 +20,28 @@
     selectWorld,
     showDeleteWorldModal,
     deleteWorld,
-    chooseWorldDirectoryFromModal
+    chooseWorldDirectoryFromModal,
+    leaveWorldHome
   } = {}) {
     function handle(action, target) {
+      if (action === "leave-world-home") {
+        leaveWorldHome?.();
+        return true;
+      }
       if (action === "show-world-chat") {
         showWorldChatModal?.();
+        return true;
+      }
+      if (action === "show-world-member-picker") {
+        showWorldMemberPickerModal?.();
+        return true;
+      }
+      if (action === "add-world-chat-member") {
+        addWorldChatMember?.(target.dataset.roleId);
+        return true;
+      }
+      if (action === "remove-world-chat-member") {
+        removeWorldChatMember?.(target.dataset.roleId);
         return true;
       }
       if (action === "scroll-to-bottom") {

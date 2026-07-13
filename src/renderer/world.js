@@ -12,7 +12,8 @@
 // ===== 第 1 段：buildWorldAgentPrompt（聊天提示词）=====
 function buildWorldAgentPrompt(world, task, agent, phase, round) {
   const role = getRole(agent.roleId);
-  const otherAgents = (world.agents || []).filter((a) => a.id !== agent.id);
+  const activeMemberIds = new Set(getWorldChatMembers(world).map((member) => member.id));
+  const otherAgents = (world.agents || []).filter((a) => a.id !== agent.id && activeMemberIds.has(a.id));
   const otherAgentsInfo = otherAgents.length ? otherAgents.map((a) => {
     const r = getRole(a.roleId);
     return `- @${r.id}（${trRoleName(r)}）`;
@@ -322,6 +323,91 @@ function finalizeWorldTask(worldId, taskId) {
   refreshWorldUiAfterStateChange(taskId);
 }
 
+function getWorldAnnouncementBoardPosition(world) {
+  const board = (world?.objects || []).find((object) => object.action === "publish-world-task" || object.id === "announcement-board");
+  return {
+    x: Number(board?.x) + Number(board?.width || 3) / 2 || 31,
+    y: Number(board?.y) + Number(board?.height || 2) / 2 || 30
+  };
+}
+
+function getWorldAgentHomePosition(agent) {
+  return {
+    x: Number.isFinite(Number(agent?.homeX)) ? Number(agent.homeX) : Number(agent?.x || 0),
+    y: Number.isFinite(Number(agent?.homeY)) ? Number(agent.homeY) : Number(agent?.y || 0)
+  };
+}
+
+function getWorldMovementDirection(from, to) {
+  const dx = Number(to.x) - Number(from.x);
+  const dy = Number(to.y) - Number(from.y);
+  if (Math.abs(dx) > Math.abs(dy)) return "side";
+  return dy < 0 ? "up" : "down";
+}
+
+async function moveWorldAgents(world, agents, targetFactory, location, options = {}) {
+  const motions = agents.map((agent) => {
+    const from = { x: Number(agent.x || 0), y: Number(agent.y || 0) };
+    const target = targetFactory(agent);
+    agent.movement = {
+      phase: options.phase || "moving",
+      fromX: from.x,
+      fromY: from.y,
+      toX: target.x,
+      toY: target.y,
+      direction: getWorldMovementDirection(from, target)
+    };
+    agent.animation = "running";
+    agent.status = options.status || "running";
+    return { agent, from, target };
+  });
+  if (!motions.length) return;
+  saveState();
+  let engine = window.CossWorldEngineInstance;
+  if (!engine) {
+    render();
+    engine = window.CossWorldEngineInstance;
+  }
+  if (engine?.ready) await engine.ready.catch(() => {});
+  engine?.updateWorld?.(world);
+  await Promise.all(motions.map(({ agent, target }) => (
+    engine?.moveAgent
+      ? engine.moveAgent(agent.id, target, { duration: options.duration || 1350, direction: agent.movement.direction, doorAtEnd: Boolean(options.doorAtEnd) })
+      : new Promise((resolve) => window.setTimeout(resolve, options.duration || 1350))
+  )));
+
+  motions.forEach(({ agent, target }) => {
+    agent.x = target.x;
+    agent.y = target.y;
+    agent.location = location;
+    agent.movement = null;
+    agent.animation = location === "home" ? "working" : "idle";
+    agent.status = location === "home" ? (options.homeStatus || "planning") : (options.boardStatus || "planning");
+  });
+  saveState();
+  engine?.updateWorld?.(world);
+}
+
+async function moveWorldAgentsToBoard(world, agents) {
+  const board = getWorldAnnouncementBoardPosition(world);
+  return moveWorldAgents(world, agents, () => board, "announcement-board", {
+    phase: "to-board",
+    status: "running",
+    boardStatus: "planning",
+    duration: 700
+  });
+}
+
+async function moveWorldAgentsHome(world, agents) {
+  return moveWorldAgents(world, agents, (agent) => getWorldAgentHomePosition(agent), "home", {
+    phase: "return-home",
+    status: "running",
+    homeStatus: "planning",
+    duration: 700,
+    doorAtEnd: true
+  });
+}
+
 // ===== 第 7 段：重构 runWorldTaskConversation（队列驱动 + 并行）=====
 async function runWorldTaskConversation(worldId, taskId) {
   const world = getWorldById(worldId);
@@ -333,8 +419,14 @@ async function runWorldTaskConversation(worldId, taskId) {
   // 初始化消息队列
   world.agentMessageQueue = [];
 
-  // 阶段1：模块认领（所有 Agent 并行发言）
-  const agentIds = (world.agents || []).map((agent) => agent.id);
+  // 阶段1：只有群聊成员从各自家中出门，前往公告栏领取模块。
+  const chatMembers = getWorldChatMembers(world);
+  if (!chatMembers.length) {
+    finalizeWorldTask(worldId, taskId);
+    return;
+  }
+  await moveWorldAgentsToBoard(world, chatMembers);
+  const agentIds = chatMembers.map((agent) => agent.id);
   const claimResults = await Promise.all(
     agentIds.map((agentId) => runWorldAgentTurn(worldId, taskId, agentId, "module-claim", 1))
   );
@@ -345,7 +437,10 @@ async function runWorldTaskConversation(worldId, taskId) {
     }
   }
 
-  // 阶段2：队列并行处理循环
+  // 阶段2：领取完成后全部回到自己的家，再开始执行工作。
+  await moveWorldAgentsHome(world, chatMembers);
+
+  // 阶段3：队列并行处理循环
   let maxIterations = 50;
   let iteration = 0;
 
@@ -357,7 +452,7 @@ async function runWorldTaskConversation(worldId, taskId) {
     const agentPendingMap = new Map();
     for (const item of pendingItems) {
       const targetAgentId = item.toAgentId;
-      if (targetAgentId && !agentPendingMap.has(targetAgentId)) {
+      if (targetAgentId && agentIds.includes(targetAgentId) && !agentPendingMap.has(targetAgentId)) {
         agentPendingMap.set(targetAgentId, item);
       }
     }
@@ -609,7 +704,15 @@ function createWorldTaskConversation(world, task, createdAt) {
 
 function refreshWorldUiAfterStateChange(taskId = "") {
   saveState();
-  render();
+  const world = getWorld();
+  const engine = window.CossWorldEngineInstance;
+  if (state.activeSidebarSection === "worlds" && world && engine?.updateWorld) {
+    engine.updateWorld(world);
+    const badge = document.querySelector('[data-action="show-world-chat"] .button-badge');
+    if (badge) badge.textContent = String(world.chatMessages?.length || 0);
+  } else {
+    render();
+  }
   const chatModal = document.querySelector(".world-chat-modal");
   if (chatModal) {
     updateWorldChatModal(chatModal.dataset.worldChatTaskId || taskId || "");
@@ -680,6 +783,7 @@ function showWorldChatModal(taskId = "") {
   // 提取所有 task 和 role 用于筛选下拉
   const tasks = (world.tasks || []).slice(0, 20);
   const agents = (world.agents || []);
+  const chatMembers = getWorldChatMembers(world);
   const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
 
   const messages = (world.chatMessages || []).filter((message) => {
@@ -715,8 +819,9 @@ function showWorldChatModal(taskId = "") {
       <div class="world-chat-titlebar">
         <div class="world-chat-titlebar-title">
           <h2>${escapeHtml(t("world.chat.title", "世界群聊"))}</h2>
-          <p>${escapeHtml(t("world.chat.desc", "这里以微信群聊样式展示角色 Agent 交流记录。"))}</p>
+          <p>${escapeHtml(t("world.chat.desc", "这里以微信群聊样式展示角色 Agent 交流记录。"))} · ${chatMembers.length}/${agents.length} 位居民已入群</p>
         </div>
+        <button class="secondary-button" data-action="show-world-member-picker">加入成员</button>
         <button class="world-chat-close-button" type="button" data-action="close-modal" aria-label="${escapeHtml(t("common.close", "关闭"))}">×</button>
       </div>
       <div class="world-chat-filter-bar">
@@ -766,7 +871,8 @@ function publishWorldTask(goal) {
   world.tasks ||= [];
   world.tasks.unshift(task);
   world.chatMessages ||= [];
-  if (!(world.agents || []).length) {
+  const chatMembers = getWorldChatMembers(world);
+  if (!chatMembers.length) {
     addWorldChatMessage(world, {
       type: "announcement",
       roleId: "system",
@@ -778,7 +884,7 @@ function publishWorldTask(goal) {
       type: "system",
       roleId: "system",
       taskId: task.id,
-      content: t("world.task.noAgent", "当前世界还没有角色，请先到地图中的「角色创建点」左键创建 Agent。"),
+      content: "当前公告栏任务没有执行者：请先在世界群聊右上角点击「加入成员」，选择至少一位居民。",
       createdAt
     });
   } else {
@@ -788,7 +894,7 @@ function publishWorldTask(goal) {
   saveState();
   render();
   showWorldChatModal(task.id);
-  if ((world.agents || []).length) {
+  if (chatMembers.length) {
     runWorldTaskConversation(world.id, task.id).catch((error) => {
       const failedWorld = getWorldById(world.id);
       const failedTask = failedWorld?.tasks?.find((item) => item.id === task.id);
@@ -808,6 +914,96 @@ function publishWorldTask(goal) {
   }
 }
 
+function createDefaultWorldResident(role, index, homePosition = null) {
+  const position = homePosition || WORLD_AGENT_POSITIONS[index % WORLD_AGENT_POSITIONS.length];
+  return {
+    id: uid("world-agent"),
+    roleId: role.id,
+    name: role.name,
+    status: "idle",
+    animation: "idle",
+    location: "home",
+    x: position.x,
+    y: position.y,
+    homeX: position.x,
+    homeY: position.y,
+    movement: null,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function getWorldObjectRoleId(object) {
+  if (object?.roleId) return String(object.roleId);
+  const roleProperty = Array.isArray(object?.properties)
+    ? object.properties.find((property) => property?.name === "roleId")
+    : null;
+  return String(roleProperty?.value || "");
+}
+
+function getGeneratedWorldHomePositions(objects = []) {
+  return Object.fromEntries(objects
+    .filter((object) => object?.type === "role-house" && getWorldObjectRoleId(object))
+    .map((object) => [getWorldObjectRoleId(object), {
+      x: Number(object.x) + Number(object.width || 6) / 2 - 0.5,
+      y: Number(object.y) + Number(object.height || 4) - 0.5
+    }]));
+}
+
+function getWorldChatMemberRoleIds(world) {
+  return Array.isArray(world?.chatMemberRoleIds) ? world.chatMemberRoleIds : [];
+}
+
+function getWorldChatMembers(world) {
+  const memberRoleIds = new Set(getWorldChatMemberRoleIds(world));
+  return (world?.agents || []).filter((agent) => memberRoleIds.has(agent.roleId));
+}
+
+function addWorldChatMember(roleId) {
+  const world = getWorld();
+  const agent = (world?.agents || []).find((item) => item.roleId === roleId);
+  if (!world || !agent) return;
+  world.chatMemberRoleIds ||= [];
+  if (!world.chatMemberRoleIds.includes(roleId)) world.chatMemberRoleIds.push(roleId);
+  closeModal();
+  saveState();
+  render();
+}
+
+function removeWorldChatMember(roleId) {
+  const world = getWorld();
+  if (!world) return;
+  world.chatMemberRoleIds = getWorldChatMemberRoleIds(world).filter((id) => id !== roleId);
+  closeModal();
+  saveState();
+  render();
+}
+
+function showWorldMemberPickerModal() {
+  const world = getWorld();
+  if (!world) return;
+  const active = new Set(getWorldChatMemberRoleIds(world));
+  const rows = (world.agents || []).map((agent) => {
+    const role = getRole(agent.roleId);
+    const isMember = active.has(agent.roleId);
+    return `
+      <div class="world-member-picker-row">
+        <div><strong>${escapeHtml(trRoleName(role))}</strong><span>${escapeHtml(isMember ? "当前群聊成员" : "世界居民 · 尚未入群")}</span></div>
+        ${isMember
+          ? `<button class="secondary-button" data-action="remove-world-chat-member" data-role-id="${escapeHtml(agent.roleId)}">移出群聊</button>`
+          : `<button class="primary-button" data-action="add-world-chat-member" data-role-id="${escapeHtml(agent.roleId)}">加入成员</button>`}
+      </div>
+    `;
+  }).join("");
+  renderModal(`
+    <div class="modal world-member-picker-modal">
+      <h2>加入世界居民</h2>
+      <p>只有加入当前世界群聊的居民，才会在公告栏任务发布后出门、领取任务并执行工作。</p>
+      <div class="world-member-picker-list">${rows || `<div class="message-empty">暂无世界居民</div>`}</div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">完成</button></div>
+    </div>
+  `);
+}
+
 function createWorldAgent(roleId, x, y) {
   const world = getWorld();
   const role = ROLE_TEMPLATES.find((item) => item.id === roleId);
@@ -820,8 +1016,12 @@ function createWorldAgent(roleId, x, y) {
     name: role.name,
     status: "idle",
     animation: "idle",
+    location: "home",
     x: position.x,
     y: position.y,
+    homeX: position.x,
+    homeY: position.y,
+    movement: null,
     createdAt: new Date().toISOString()
   };
   world.agents ||= [];
@@ -839,26 +1039,86 @@ function ensureWorldShape(world) {
   world.createdAt = world.createdAt || new Date().toISOString();
   world.lastOpenedAt = world.lastOpenedAt || world.createdAt;
   world.terrain = world.terrain || "pixel-meadow";
-  world.objects = Array.isArray(world.objects) ? world.objects : WORLD_DEFAULT_OBJECTS;
+  world.objects = Array.isArray(world.objects) ? world.objects : [];
+  const hadAgents = Array.isArray(world.agents) && world.agents.length > 0;
+  const hadChatMembers = Array.isArray(world.chatMemberRoleIds);
   world.agents = Array.isArray(world.agents) ? world.agents : [];
+  const legacyAgentRoleIds = world.agents.map((agent) => agent.roleId);
   world.chatMessages = Array.isArray(world.chatMessages) ? world.chatMessages : [];
   world.tasks = Array.isArray(world.tasks) ? world.tasks : [];
-  world.map = {
-    key: "default-meadow",
-    width: 64,
-    height: 64,
-    tileSize: 32,
-    tiledUrl: "./world/maps/default-meadow.json",
-    ...(world.map || {})
+  const previousMap = world.map || {};
+  const generator = window.CossWorldGenerator;
+  const isDefaultMap = !previousMap.key || previousMap.key === WORLD_MAP_DEFAULT.key;
+  const existingRoleHouseCount = world.objects.filter((object) => object?.type === "role-house").length;
+  const needsGeneratedLayout = isDefaultMap && (
+    previousMap.generation !== generator?.version
+    || existingRoleHouseCount !== ROLE_TEMPLATES.length
+    || !Array.isArray(previousMap.tileLayers)
+  );
+  if (needsGeneratedLayout && generator?.generateWorldLayout) {
+    const generated = generator.generateWorldLayout({
+      seed: world.id,
+      roles: ROLE_TEMPLATES.map((role) => ({ id: role.id, name: role.name }))
+    });
+    world.map = generated.map;
+    world.objects = generated.objects;
+    world.camera = { x: 0, y: 0, zoom: 0.5 };
+  } else if (isDefaultMap) {
+    world.map = {
+      ...WORLD_MAP_DEFAULT,
+      horizonRows: 4,
+      focusX: WORLD_MAP_DEFAULT.width / 2,
+      focusY: 10.5,
+      cameraSafeInsetX: 14,
+      cameraSafeInsetBottom: 14,
+      tiledUrl: "",
+      ...previousMap
+    };
+    if (!world.objects.length) world.objects = WORLD_DEFAULT_OBJECTS;
+  } else {
+    world.map = { ...WORLD_MAP_DEFAULT, ...previousMap };
+  }
+  world.camera = {
+    x: Number.isFinite(Number(world.camera?.x)) ? Number(world.camera.x) : 0,
+    y: Number.isFinite(Number(world.camera?.y)) ? Number(world.camera.y) : 0,
+    zoom: Number.isFinite(Number(world.camera?.zoom)) ? Number(world.camera.zoom) : 0.5
   };
-  world.agents = world.agents.filter((agent) => ROLE_TEMPLATES.some((role) => role.id === agent.roleId)).map((existing, index) => {
+  const homePositions = getGeneratedWorldHomePositions(world.objects);
+  const normalizedAgents = world.agents.filter((agent) => ROLE_TEMPLATES.some((role) => role.id === agent.roleId)).map((existing, index) => {
     const position = WORLD_AGENT_POSITIONS[index % WORLD_AGENT_POSITIONS.length];
+    const generatedHome = homePositions[existing.roleId];
+    const homeX = Number.isFinite(Number(generatedHome?.x))
+      ? Number(generatedHome.x)
+      : (Number.isFinite(Number(existing.homeX)) ? Number(existing.homeX) : position.x);
+    const homeY = Number.isFinite(Number(generatedHome?.y))
+      ? Number(generatedHome.y)
+      : (Number.isFinite(Number(existing.homeY)) ? Number(existing.homeY) : position.y);
+    const location = existing.location || "home";
+    const isAtHome = location === "home" && !existing.movement;
     return {
       ...existing,
-      x: existing.x || position.x,
-      y: existing.y || position.y
+      x: isAtHome ? homeX : (Number.isFinite(Number(existing.x)) ? Number(existing.x) : homeX),
+      y: isAtHome ? homeY : (Number.isFinite(Number(existing.y)) ? Number(existing.y) : homeY),
+      homeX,
+      homeY,
+      location,
+      movement: existing.movement || null,
+      animation: existing.animation || "idle"
     };
   });
+  ROLE_TEMPLATES.forEach((role, index) => {
+    if (!normalizedAgents.some((agent) => agent.roleId === role.id)) {
+      normalizedAgents.push(createDefaultWorldResident(role, index, homePositions[role.id]));
+    }
+  });
+  world.agents = normalizedAgents;
+  world.activeInteriorRoleId = ROLE_TEMPLATES.some((role) => role.id === world.activeInteriorRoleId)
+    ? world.activeInteriorRoleId
+    : "";
+  const legacyMemberIds = hadChatMembers
+    ? world.chatMemberRoleIds
+    : (hadAgents ? legacyAgentRoleIds : []);
+  world.chatMemberRoleIds = Array.from(new Set((legacyMemberIds || []).filter((roleId) => normalizedAgents.some((agent) => agent.roleId === roleId))));
   return world;
 }
 
@@ -1093,7 +1353,17 @@ function showWorldAgentActionModal(roleId) {
   `);
 }
 
-function handleWorldObjectAction(object) {
+async function handleWorldObjectAction(object) {
+  const roleId = getWorldObjectRoleId(object);
+  if ((object.action === "enter-world-home" || object.type === "role-house") && roleId) {
+    try {
+      await window.CossWorldEngineInstance?.playDoorAnimation?.(roleId, 520);
+    } catch {
+      // Entering the room must still work if an animation frame cannot be loaded.
+    }
+    enterWorldHome(roleId);
+    return;
+  }
   if (object.action === "publish-world-task") {
     showWorldTaskPublisherModal();
     return;
@@ -1106,7 +1376,23 @@ function handleWorldObjectAction(object) {
     showCreateWorldAgentModal(Number(object.x) + 2, Number(object.y) + 4);
     return;
   }
-  if (object.action === "open-agent-house" && object.roleId) {
-    showWorldAgentActionModal(object.roleId);
+  if (object.action === "open-agent-house" && roleId) {
+    showWorldAgentActionModal(roleId);
   }
+}
+
+function enterWorldHome(roleId) {
+  const world = getWorld();
+  if (!world || !ROLE_TEMPLATES.some((role) => role.id === roleId)) return;
+  world.activeInteriorRoleId = roleId;
+  saveState();
+  render();
+}
+
+function leaveWorldHome() {
+  const world = getWorld();
+  if (!world || !world.activeInteriorRoleId) return;
+  world.activeInteriorRoleId = "";
+  saveState();
+  render();
 }

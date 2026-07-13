@@ -237,18 +237,53 @@ test("v0.11.0 world MVP2 renders canvas and group chat task flow", async () => {
       }
     ]
   });
-
   try {
     await expect(page.locator(".app-shell")).toBeVisible({ timeout: 10000 });
     await expect(page.locator(".workspace-title")).toHaveText("E2E World");
     await expect(page.locator("[data-world-canvas] canvas")).toBeVisible();
+    await expect(page.locator("[data-world-canvas] canvas")).toHaveAttribute("data-world-ready", "true", { timeout: 10000 });
+    await expect.poll(() => page.evaluate(() => {
+      const debug = window.CossWorldEngineInstance?.getDebugState?.();
+      const world = window.getWorld?.();
+      return debug?.sceneStatus === 5
+        && debug?.childCount > 0
+        && debug?.houses === 9
+        && debug?.agents === 0
+        && world?.map?.width === 88
+        && world?.map?.height === 64
+        && world?.agents?.length === 9
+        && world.agents.every((agent) => agent.location === "home" && !agent.movement);
+    }), { timeout: 10000 }).toBe(true);
+
+    await page.evaluate(async () => {
+      await window.handleWorldObjectAction({
+        type: "role-house",
+        roleId: "product-manager",
+        action: "enter-world-home"
+      });
+    });
+    await expect(page.locator(".workspace-title")).toContainText("产品经理之家");
+    await expect(page.locator('[data-action="leave-world-home"]')).toBeVisible();
+    await expect(page.locator("[data-world-canvas] canvas")).toBeVisible();
+    await expect(page.locator("[data-world-canvas] canvas")).toHaveAttribute("data-world-ready", "true", { timeout: 10000 });
+    await expect.poll(() => page.evaluate(() => {
+      const debug = window.CossWorldEngineInstance?.getDebugState?.();
+      return debug?.sceneStatus === 5 && debug?.childCount > 0 && debug?.viewMode === "interior:product-manager";
+    }), { timeout: 10000 }).toBe(true);
+    await page.locator('[data-action="leave-world-home"]').click();
+    await expect(page.locator(".workspace-title")).toHaveText("E2E World");
+    await expect(page.locator("[data-world-canvas] canvas")).toHaveAttribute("data-world-ready", "true", { timeout: 10000 });
+    await expect.poll(() => page.evaluate(() => {
+      const debug = window.CossWorldEngineInstance?.getDebugState?.();
+      return debug?.sceneStatus === 5 && debug?.viewMode === "exterior" && debug?.houses === 9;
+    }), { timeout: 10000 }).toBe(true);
 
     await page.locator('[data-action="show-world-task-publisher"]').click();
     await page.locator("#worldTaskGoal").fill("Build the world task loop.");
     await page.locator('[data-action="publish-world-task"]').click();
 
     await expect(page.locator(".world-chat-modal")).toContainText("Build the world task loop.");
-    await expect(page.locator(".world-chat-modal")).toContainText("我会负责");
+    await expect(page.locator(".world-chat-modal")).toContainText("我会负责", { timeout: 10000 });
 
     await expect.poll(() => {
       const currentState = JSON.parse(fs.readFileSync(path.join(userDataDir, stateFileName), "utf8"));

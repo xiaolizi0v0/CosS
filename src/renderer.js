@@ -549,6 +549,9 @@ const worldActionService = window.COSS_WORLD_ACTION_SERVICE.createWorldActionSer
   updateWorldChatModal,
   showWorldTaskPublisherModal,
   showWorldAgentActionModal,
+  showWorldMemberPickerModal,
+  addWorldChatMember,
+  removeWorldChatMember,
   setWorldTaskStatus,
   translate: t,
   publishWorldTask,
@@ -562,7 +565,8 @@ const worldActionService = window.COSS_WORLD_ACTION_SERVICE.createWorldActionSer
   selectWorld,
   showDeleteWorldModal,
   deleteWorld,
-  chooseWorldDirectoryFromModal
+  chooseWorldDirectoryFromModal,
+  leaveWorldHome
 });
 const appMenuActionService = window.COSS_APP_MENU_ACTION_SERVICE.createAppMenuActionService({
   showCreateProjectModal,
@@ -732,17 +736,17 @@ function uid(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-const WORLD_MAP_DEFAULT = { key: "default-meadow", width: 64, height: 64, tileSize: 32 };
+const WORLD_MAP_DEFAULT = { key: "default-meadow", width: 88, height: 64, tileSize: 80 };
 const WORLD_AGENT_POSITIONS = [
-  { x: 12, y: 15 }, { x: 25, y: 20 }, { x: 40, y: 15 },
-  { x: 15, y: 30 }, { x: 32, y: 32 }, { x: 50, y: 28 },
-  { x: 20, y: 45 }, { x: 35, y: 48 }, { x: 48, y: 45 },
-  { x: 28, y: 38 }
+  { x: 34.5, y: 4.7 }, { x: 43.5, y: 4.7 }, { x: 52.5, y: 4.7 },
+  { x: 25.5, y: 11.1 }, { x: 61.5, y: 11.1 },
+  { x: 30, y: 20.5 }, { x: 39, y: 20.5 }, { x: 48, y: 20.5 }, { x: 57, y: 20.5 }
 ];
 const WORLD_DEFAULT_OBJECTS = [
-  { id: "announcement-board", type: "board", name: "公告栏", x: 30, y: 29, width: 3, height: 2, action: "publish-world-task" },
-  { id: "chat-square", type: "building", name: "群聊屋", x: 20, y: 18, width: 4, height: 3, action: "open-world-chat" },
-  { id: "spawn-plaza", type: "plot", name: "角色创建点", x: 42, y: 26, width: 5, height: 4, action: "create-world-agent" }
+  { id: "announcement-board", type: "board", name: "公告栏", x: 0, y: 4.5, width: 5, height: 3, action: "publish-world-task", properties: [{ name: "assetKey", value: "noticeBoard" }] },
+  { id: "world-fountain", type: "landmark", name: "中央喷泉", x: 8, y: 5, width: 7, height: 5, properties: [{ name: "assetKey", value: "fountain" }] },
+  { id: "fruit-market", type: "landmark", name: "果蔬集市", x: 16, y: 5.5, width: 4, height: 3, properties: [{ name: "assetKey", value: "fruitStand" }] },
+  { id: "chat-square", type: "landmark", name: "世界群聊", x: 20.5, y: 5.5, width: 2.5, height: 2.5, action: "open-world-chat", properties: [{ name: "assetKey", value: "chalkboard" }] }
 ];
 const WORLD_AGENT_STATUSES = new Set(["idle", "planning", "running", "waiting", "done", "blocked", "failed"]);
 
@@ -7720,6 +7724,23 @@ function render() {
   document.documentElement.lang = getAppLanguage();
   document.documentElement.dir = getAppLanguage() === "ar-SA" ? "rtl" : "ltr";
   const project = getProject();
+  const activeWorld = getWorld();
+  const existingWorldWorkspace = document.querySelector(".world-workspace[data-render-world-id]");
+  const requestedWorldMode = activeWorld?.activeInteriorRoleId || "exterior";
+  const canRefreshWorldIncrementally = startupConfigurationReady
+    && state.activeSidebarSection === "worlds"
+    && worldEngineInstance
+    && existingWorldWorkspace?.dataset.renderWorldId === activeWorld?.id
+    && existingWorldWorkspace?.dataset.worldViewMode === requestedWorldMode
+    && existingWorldWorkspace?.dataset.sidebarCollapsed === String(Boolean(sidebarCollapsed))
+    && !contextMenu
+    && !roleMenu;
+  if (canRefreshWorldIncrementally) {
+    worldEngineInstance.updateWorld(activeWorld);
+    const chatBadge = existingWorldWorkspace.querySelector('[data-action="show-world-chat"] .button-badge');
+    if (chatBadge) chatBadge.textContent = String(activeWorld.chatMessages?.length || 0);
+    return;
+  }
   const sidebarContent = sidebarCollapsed ? "" : `${renderSidebar(project)}<div class="sidebar-resizer" data-sidebar-resizer title="${escapeHtml(t("sidebar.resizer.title", "拖动调整侧边栏宽度"))}"></div>`;
   captureTaskListScrollState();
   hydratedBrowserViews.clear();
@@ -7727,6 +7748,7 @@ function render() {
   // innerHTML 会销毁所有 DOM（包括 Phaser canvas），必须先销毁引擎实例
   if (worldEngineInstance) {
     worldEngineInstance.destroy();
+    if (window.CossWorldEngineInstance === worldEngineInstance) window.CossWorldEngineInstance = null;
     worldEngineInstance = null;
   }
 
@@ -7753,8 +7775,10 @@ function render() {
 }
 
 let worldEngineInstance = null;
+let startupConfigurationReady = false;
 
 function mountWorldEngineIfNeeded() {
+  if (!startupConfigurationReady) return;
   const shell = document.querySelector(".world-canvas-shell");
   const currentWorldId = shell?.closest("[data-world-id]")?.dataset?.worldId;
   const world = currentWorldId ? getWorldById(currentWorldId) : null;
@@ -7762,6 +7786,7 @@ function mountWorldEngineIfNeeded() {
   if (!shell || !world) {
     if (worldEngineInstance) {
       worldEngineInstance.destroy();
+      if (window.CossWorldEngineInstance === worldEngineInstance) window.CossWorldEngineInstance = null;
       worldEngineInstance = null;
     }
     return;
@@ -7802,6 +7827,7 @@ function mountWorldEngineIfNeeded() {
         // Camera change callback
       }
     });
+    window.CossWorldEngineInstance = worldEngineInstance;
   }
 }
 
@@ -7936,15 +7962,23 @@ function renderWorkspace(project) {
   if (state.activeSidebarSection === "worlds") {
     const agents = world?.agents || [];
     const chatCount = world?.chatMessages?.length || 0;
+    const interiorRole = world?.activeInteriorRoleId
+      ? ROLE_TEMPLATES.find((role) => role.id === world.activeInteriorRoleId)
+      : null;
+    const worldHeading = interiorRole ? `${trRoleName(interiorRole)}之家` : world?.name;
+    const worldSubtitle = interiorRole
+      ? `${world?.name || ""} · HomeINT · ${trRoleName(interiorRole)}当前位于自己的房间`
+      : (world ? `${world.path || ""} · ${t("world.home.subtitle", "2D Agent 世界 MVP2.0")} · ${t("world.home.agentCount", "{{count}} 个角色 Agent", { count: agents.length })}` : "");
     return `
-      <section class="workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}">
+      <section class="workspace world-workspace ${interiorRole ? "world-interior-workspace" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}" data-render-world-id="${world ? escapeHtml(world.id) : ""}" data-world-view-mode="${interiorRole ? escapeHtml(interiorRole.id) : "exterior"}" data-sidebar-collapsed="${String(Boolean(sidebarCollapsed))}">
         ${sidebarCollapsed ? `<button class="sidebar-floating-toggle sidebar-toggle-button" title="${escapeHtml(t("nav.showSidebar", "显示侧边栏"))}" data-action="toggle-sidebar">${icon("sidebar")}</button>` : ""}
         <div class="workspace-topbar">
           <div class="project-heading">
-            <h1 class="workspace-title">${world ? escapeHtml(world.name) : escapeHtml(t("world.noWorld", "未选择世界"))}</h1>
-            <div class="workspace-subtitle">${world ? `${escapeHtml(world.path || "")} · ${escapeHtml(t("world.home.subtitle", "2D Agent 世界 MVP2.0"))} · ${escapeHtml(t("world.home.agentCount", "{{count}} 个角色 Agent", { count: agents.length }))}` : escapeHtml(t("world.createToStart", "创建世界后进入 2D Agent 世界"))}</div>
+            <h1 class="workspace-title">${world ? escapeHtml(worldHeading) : escapeHtml(t("world.noWorld", "未选择世界"))}</h1>
+            <div class="workspace-subtitle">${world ? escapeHtml(worldSubtitle) : escapeHtml(t("world.createToStart", "创建世界后进入 2D Agent 世界"))}</div>
           </div>
           <div class="workspace-actions">
+            ${interiorRole ? `<button class="secondary-button world-home-back" data-action="leave-world-home">← 返回小镇</button>` : ""}
             ${world ? `<button class="secondary-button" data-action="show-world-chat">${icon("assistant")}${escapeHtml(t("world.chat.title", "群聊"))}<span class="button-badge">${chatCount}</span></button><button class="secondary-button" data-action="show-world-task-publisher">${icon("plus")}${escapeHtml(t("world.task.publish", "发布任务"))}</button>` : ""}
             <button class="secondary-button" data-action="show-create-world">${icon("plus")}${escapeHtml(t("world.create.title", "新建世界"))}</button>
           </div>
@@ -9924,10 +9958,11 @@ async function runStartupConfigurationLoad() {
   }
 
   setAppLoadingStep(t("app.loading.desktop", "正在准备桌面..."));
+  startupConfigurationReady = true;
   render();
   startExternalStateRefresh();
   startPendingKernelAutoWorkflowPump();
-  if (state.activeProjectId) {
+  if (state.activeProjectId && state.activeSidebarSection !== "worlds") {
     bootWorkspace(state.activeProjectId);
   }
   setTimeout(() => {
@@ -9942,6 +9977,7 @@ runStartupConfigurationLoad().catch((error) => {
   console.error("Failed to load CosS startup configuration", error);
   setAppLoadingStep(t("app.loading.failed", "启动配置加载失败：{{error}}", { error: error.message }));
   setTimeout(() => {
+    startupConfigurationReady = true;
     render();
   }, 900);
 });
