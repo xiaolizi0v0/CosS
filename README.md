@@ -148,6 +148,7 @@ CosS 通过 MCP 协议暴露以下工具供 AI 智能体使用：
 - **测试**: Playwright (E2E)
 - **本地化**: i18next (12 种语言)
 - **智能体后端**: Claude Code / CodeBuddy Code / OpenAI Codex
+- **世界场景**: Phaser 3 + Tiled JSON 地图
 
 ## 项目结构
 
@@ -166,6 +167,7 @@ CosS/
 │   │   ├── windowing/           # 窗口和桌面管理
 │   │   └── views/               # 视图契约和工作区内容渲染
 │   ├── shared/                  # IPC 与状态契约
+│   ├── world/                   # Phaser 世界引擎、Tiled 加载器和地图资源
 │   ├── main/
 │   │   ├── services/            # 主进程系统服务
 │   │   └── ipc/                 # IPC 注册适配器
@@ -205,6 +207,7 @@ CosS/
 - [帮助文档](docs/help.md)
 - [许可证](docs/license.md) — CC BY-NC-SA 4.0
 - [隐私声明](docs/privacy.md)
+- [世界地图编辑](文档/world-map-editor.md)
 
 ## 许可证
 ### 第三方依赖

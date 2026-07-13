@@ -129,3 +129,12 @@ test("MCP config service builds a portable server entry outside main.cjs", () =>
   assert.equal(entry.type, "stdio");
   assert.equal(entry.env.COSS_MCP_PROJECT_ID, "project-1");
 });
+
+test("default world map follows the Tiled object and tile layer contract", () => {
+  const map = JSON.parse(fs.readFileSync(path.join(__dirname, "../../src/world/maps/default-meadow.json"), "utf8"));
+  const tileLayer = map.layers.find((layer) => layer.type === "tilelayer");
+  const objectLayer = map.layers.find((layer) => layer.type === "objectgroup");
+  assert.equal(map.tilewidth, 32);
+  assert.equal(tileLayer.data.length, map.width * map.height);
+  assert.equal(objectLayer.objects.find((item) => item.name === "announcement-board").properties[0].value, "publish-world-task");
+});

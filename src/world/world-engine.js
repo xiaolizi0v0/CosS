@@ -82,6 +82,13 @@
         this.bindCameraControls();
       }
 
+      preload() {
+        this.load.spritesheet("coss-meadow-tiles", "./world/maps/meadow-tiles.svg", {
+          frameWidth: 32,
+          frameHeight: 32
+        });
+      }
+
       createPlaceholderTextures() {
         const tile = this.map.tileSize;
         const grass = this.add.graphics();
@@ -106,10 +113,30 @@
 
       drawTiles() {
         const graphics = this.add.graphics();
-        graphics.fillStyle(0x89d978, 1).fillRect(0, 0, size.width, size.height);
-        for (let y = 0; y < this.map.height; y += 1) {
-          for (let x = 0; x < this.map.width; x += 1) {
-            this.add.image(x * this.map.tileSize, y * this.map.tileSize, (x + y) % 2 === 0 ? "coss-grass-a" : "coss-grass-b").setOrigin(0);
+        const tileLayer = this.worldState?.map?.tileLayers?.find((layer) => layer.data?.length);
+        if (tileLayer) {
+          const tile = this.map.tileSize;
+          const width = this.map.width * tile;
+          const height = this.map.height * tile;
+          graphics.fillStyle(0x89d978, 1).fillRect(0, 0, width, height);
+          const hasTileset = this.textures.exists("coss-meadow-tiles");
+          for (let y = 0; y < this.map.height; y += 1) {
+            for (let x = 0; x < this.map.width; x += 1) {
+              const gid = Number(tileLayer.data[y * tileLayer.width + x] || 0);
+              if (gid <= 0) continue;
+              if (hasTileset && gid <= 2) {
+                this.add.image(x * tile, y * tile, "coss-meadow-tiles", gid - 1).setOrigin(0);
+              } else {
+                graphics.fillStyle(gid % 2 === 0 ? 0x7ece69 : 0x89d978, 1).fillRect(x * tile, y * tile, tile, tile);
+              }
+            }
+          }
+        } else {
+          graphics.fillStyle(0x89d978, 1).fillRect(0, 0, this.map.width * this.map.tileSize, this.map.height * this.map.tileSize);
+          for (let y = 0; y < this.map.height; y += 1) {
+            for (let x = 0; x < this.map.width; x += 1) {
+              this.add.image(x * this.map.tileSize, y * this.map.tileSize, (x + y) % 2 === 0 ? "coss-grass-a" : "coss-grass-b").setOrigin(0);
+            }
           }
         }
         const grid = this.add.graphics();
@@ -351,6 +378,9 @@
           scene.drawWorld?.();
         }
       },
+      setMapBadge(text) {
+        badge.textContent = text;
+      },
       destroy() {
         game.destroy(true);
         container.replaceChildren();
@@ -477,6 +507,9 @@
         state.map = normalizeMap(nextWorld?.map);
         state.selectedAgentId = options.selectedAgentId || state.selectedAgentId;
       },
+      setMapBadge(text) {
+        badge.textContent = text;
+      },
       destroy() {
         state.destroyed = true;
         cancelAnimationFrame(state.raf);
@@ -486,12 +519,48 @@
     };
   }
 
+  function mergeTiledWorldDocument(world, tiledMap) {
+    if (!world || !tiledMap) {
+      return world;
+    }
+    return {
+      ...world,
+        map: {
+        ...(world.map || {}),
+        key: tiledMap.key,
+        width: tiledMap.width,
+        height: tiledMap.height,
+        tileSize: tiledMap.tileSize,
+        tileLayers: tiledMap.tileLayers
+      },
+      objects: tiledMap.objects.length ? tiledMap.objects : world.objects
+    };
+  }
+
   window.CossWorldEngine = {
     mountWorldGame(container, world, callbacks) {
-      if (window.Phaser?.Game) {
-        return createPhaserWorldGame(container, world, callbacks);
+      const instance = window.Phaser?.Game
+        ? createPhaserWorldGame(container, world, callbacks)
+        : createCanvasFallbackWorldGame(container, world, callbacks);
+      const tiledUrl = world?.map?.tiledUrl || "";
+      if (!tiledUrl || !window.CossTiledMapLoader?.load) {
+        return instance;
       }
-      return createCanvasFallbackWorldGame(container, world, callbacks);
+      instance.ready = window.CossTiledMapLoader.load(tiledUrl)
+        .then((tiledMap) => {
+          const nextWorld = mergeTiledWorldDocument(world, tiledMap);
+          instance.updateWorld?.(nextWorld, { selectedAgentId: callbacks?.selectedAgentId || "" });
+          instance.setMapBadge?.(`Tiled JSON · ${tiledMap.width}×${tiledMap.height}`);
+          callbacks?.onMapLoaded?.(tiledMap);
+          return nextWorld;
+        })
+        .catch((error) => {
+          console.warn("Failed to load Tiled world map; using procedural fallback.", error);
+          instance.setMapBadge?.("Procedural fallback");
+          callbacks?.onMapLoadError?.(error);
+          return world;
+        });
+      return instance;
     }
   };
 })();
