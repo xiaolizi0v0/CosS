@@ -14,6 +14,7 @@
     setTaskListFilters,
     setSelectedTaskListTaskId,
     render,
+    syncLanguage,
     updateFeedbackCounters,
     updateAccountDisplayName,
     updateAccountAvatarFromFile,
@@ -153,7 +154,9 @@
         }
         if (target.id === "appLanguageSelect") {
           const currentState = getState?.();
-          if (currentState?.settings) currentState.settings.language = languageOptions.some((item) => item.id === target.value) ? target.value : "zh-CN";
+          const nextLanguage = languageOptions.some((item) => item.id === target.value) ? target.value : "zh-CN";
+          if (currentState?.settings) currentState.settings.language = nextLanguage;
+          syncLanguage?.(nextLanguage);
           saveState?.();
           render?.();
           showSettingsModal?.();

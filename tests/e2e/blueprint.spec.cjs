@@ -107,7 +107,7 @@ async function launchBlueprintApp() {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
-  await expect(page.locator(".blueprint-workspace")).toBeVisible();
+  await expect(page.locator(".blueprint-workspace")).toBeVisible({ timeout: 15000 });
   return { app, page, userDataDir };
 }
 
@@ -228,6 +228,21 @@ test("v0.12.0 blueprint controls and selected node remain usable", async () => {
   }
 });
 
+test("v0.12.0 blueprint UI rerenders translated labels when language changes", async () => {
+  const { app, page } = await launchBlueprintApp();
+  try {
+    await expect(page.locator(".blueprint-panel-heading").first()).toContainText("节点库");
+    await page.locator('[data-action="show-settings"]').click();
+    await expect(page.locator("#appLanguageSelect")).toBeVisible();
+    await page.locator("#appLanguageSelect").selectOption("en-US");
+    await expect(page.locator(".blueprint-stage-toolbar")).toContainText("Workflow canvas");
+    await expect(page.locator(".blueprint-panel-heading").first()).toContainText("Node library");
+    await expect(page.locator('[data-action="show-generate-blueprint"]')).toContainText("Generate from task");
+  } finally {
+    await app.close();
+  }
+});
+
 test("v0.12.0 blueprint can restore the collapsed application sidebar", async () => {
   const { app, page, userDataDir } = await launchBlueprintApp();
   try {
@@ -249,6 +264,62 @@ test("v0.12.0 blueprint can restore the collapsed application sidebar", async ()
     await restoreButton.click();
     await expect(page.locator(".sidebar")).toBeVisible();
     await expect(restoreButton).toHaveCount(0);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("v0.12.0 blueprint can generate a task graph from a natural-language goal", async () => {
+  const { app, page, userDataDir } = await launchBlueprintApp();
+  try {
+    await page.locator('[data-action="show-generate-blueprint"]').click();
+    await expect(page.locator(".blueprint-generate-modal")).toBeVisible();
+    await page.locator("#generateBlueprintGoal").fill("读取 package.json，运行测试并生成项目报告");
+    await page.locator("#generateBlueprintInputPath").fill("package.json");
+    await page.locator("#generateBlueprintOutputPath").fill("blueprint-output.md");
+    await page.locator('[data-action="generate-blueprint"]').click();
+    await expect(page.locator(".blueprint-generate-modal")).toHaveCount(0);
+    await expect(page.locator(".blueprint-node")).toHaveCount(11);
+    const generated = await page.locator(".blueprint-node").evaluateAll((nodes) => nodes.map((node) => ({ type: node.dataset.blueprintNodeId, title: node.querySelector("strong")?.textContent || "" })));
+    expect(generated.map((item) => item.title)).toEqual(expect.arrayContaining(["读取项目文件", "执行检查命令", "完成核心任务", "检查结果质量", "生成任务交付物", "登记交付物"]));
+    await page.locator('.blueprint-node').filter({ hasText: "读取项目文件" }).locator(".blueprint-node-main").click();
+    await expect(page.locator('[data-blueprint-field="instruction"]')).toHaveCount(0);
+    await expect(page.locator('[data-blueprint-config-field="content"]')).toHaveCount(0);
+    await page.locator('.blueprint-node').filter({ hasText: "生成任务交付物" }).locator(".blueprint-node-main").click();
+    await expect(page.locator('[data-blueprint-field="instruction"]')).toHaveCount(0);
+    await expect(page.locator('[data-blueprint-config-field="content"]').locator("xpath=..")).toContainText("写入内容模板");
+    await page.locator('.blueprint-node').filter({ hasText: "完成核心任务" }).locator(".blueprint-node-main").click();
+    await expect(page.locator('[data-blueprint-field="instruction"]')).toHaveCount(1);
+    await expect(page.locator('[data-blueprint-field="instruction"]').locator("xpath=..")).toContainText("执行指令");
+    await expect(page.locator('[data-blueprint-field="instruction"]')).not.toHaveValue(/读取 package\.json/);
+    await expect(page.locator(".blueprint-edge")).toHaveCount(18);
+    await expect(page.locator(".blueprint-validation-pill.ok")).toBeVisible();
+    const saved = await page.evaluate(async () => {
+      const state = await window.cossAPI.loadState();
+      const blueprint = state.blueprints[0];
+      return { description: blueprint.description, dataEdges: blueprint.edges.filter((edge) => edge.kind === "data").length, flowEdges: blueprint.edges.filter((edge) => edge.kind !== "data").length };
+    });
+    expect(saved.description).toContain("读取 package.json");
+    expect(saved.dataEdges).toBe(8);
+    expect(saved.flowEdges).toBe(10);
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("v0.12.0 blueprint task generator folder picker updates its workspace", async () => {
+  const { app, page, userDataDir } = await launchBlueprintApp();
+  try {
+    await page.locator('[data-action="show-generate-blueprint"]').click();
+    await app.evaluate(({ dialog }) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: ["D:\\BlueprintWorkspace"] });
+    });
+    await page.locator('.blueprint-generate-modal [data-action="choose-blueprint-directory"]').click();
+    await expect(page.locator("#generateBlueprintPath")).toHaveValue("D:\\BlueprintWorkspace");
+    await expect(page.locator("#generateBlueprintStatus")).toHaveText("已选择工作目录。");
+    await expect(page.locator("#generateBlueprintStatus")).toHaveClass(/ready/);
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -620,6 +691,40 @@ test("v0.12.0 blueprint execution persists completed nodes and renders active an
     const runningRow = page.locator(".blueprint-run-node.running");
     await expect(runningRow).toHaveCount(1);
     await expect(runningRow).toHaveCSS("animation-name", "blueprint-run-row-flow");
+  } finally {
+    await app.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("v0.12.0 blueprint task records can be deleted and persist after reload", async () => {
+  const { app, page, userDataDir } = await launchBlueprintApp();
+  try {
+    for (const goal of ["待删除任务", "保留任务"]) {
+      await page.locator('[data-action="show-blueprint-task"]').click();
+      await page.locator("#blueprintTaskGoal").fill(goal);
+      await page.locator('[data-action="create-blueprint-task"]').click();
+      await expect(page.locator(".blueprint-run-modal")).toBeVisible();
+      await page.locator('.blueprint-run-modal [data-action="close-modal"]').click();
+    }
+
+    await page.locator('[data-action="show-blueprint-tasks"]').click();
+    await expect(page.locator(".blueprint-task-row")).toHaveCount(2);
+    await page.locator('.blueprint-task-row [data-action="show-delete-blueprint-task"]').first().click();
+    await expect(page.locator('[data-action="confirm-delete-blueprint-task"]')).toBeVisible();
+    await page.locator('[data-action="confirm-delete-blueprint-task"]').click();
+    await expect(page.locator(".blueprint-task-row")).toHaveCount(1);
+
+    const persistedTaskGoals = await page.evaluate(async () => {
+      const saved = await window.cossAPI.loadState();
+      return saved.blueprints[0].tasks.map((task) => task.goal);
+    });
+    expect(persistedTaskGoals).toEqual(["待删除任务"]);
+
+    await page.reload();
+    await expect(page.locator(".blueprint-workspace")).toBeVisible({ timeout: 15000 });
+    await page.locator('[data-action="show-blueprint-tasks"]').click();
+    await expect(page.locator(".blueprint-task-row")).toHaveCount(1);
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });

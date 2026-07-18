@@ -2195,7 +2195,9 @@ async function handleBlueprintAgentRun(_event, request = {}) {
   const provider = ["claude", "codex", "codebuddy"].includes(request.provider) ? request.provider : "codebuddy";
   const prompt = String(request.prompt || "").trim().slice(0, 60000);
   const cwd = normalizeCwd(request.cwd || process.cwd());
-  const timeoutMs = Math.min(900000, Math.max(5000, Number(request.timeoutMs) || 300000));
+  // Agent 节点通常会执行多轮推理、工具调用和文件修改，5 分钟不足以完成较大的任务。
+  // 默认提高到 15 分钟，同时保留 15 分钟上限，避免单个子进程无限期占用主进程。
+  const timeoutMs = Math.min(900000, Math.max(5000, Number(request.timeoutMs) || 900000));
   const runId = sanitizeLogText(request.runId || randomUUID(), 80);
   if (!prompt) return { ok: false, provider, runId, error: "Agent 指令为空。", output: "", latencyMs: 0 };
   let launch;

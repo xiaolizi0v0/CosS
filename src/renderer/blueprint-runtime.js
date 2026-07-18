@@ -182,6 +182,15 @@
       };
     }
 
+    function getHumanPendingMessage(node) {
+      const config = node.config || {};
+      if (node.type === "human-input") return config.question || node.instruction || node.description || "请提供输入。";
+      if (node.type === "approval") return config.approvalMessage || node.instruction || node.description || "请审批后继续。";
+      if (node.type === "review-edit") return config.reviewInstructions || node.instruction || node.description || "请审阅并编辑结果。";
+      if (node.type === "deliverable-gate") return config.checklist || node.instruction || node.description || "请检查交付物。";
+      return node.instruction || node.description || "等待用户处理。";
+    }
+
     function renderTemplate(template, scope) {
       return String(template || "").replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, path) => {
         const value = getPath(scope, path);
@@ -526,7 +535,7 @@
           if (HUMAN_NODE_TYPES.has(node.type)) {
             run.status = "waiting";
             task.status = "waiting";
-            task.pending = { type: node.type, nodeId: node.id, message: node.instruction || node.description || "等待用户处理。" };
+            task.pending = { type: node.type, nodeId: node.id, message: getHumanPendingMessage(node) };
             addEvent(task, "node.waiting", node, task.pending);
             await notify(blueprint, task, "node-waiting");
             break;
