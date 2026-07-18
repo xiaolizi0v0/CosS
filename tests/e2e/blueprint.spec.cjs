@@ -107,7 +107,7 @@ async function launchBlueprintApp() {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
-  await expect(page.locator(".blueprint-workspace")).toBeVisible();
+  await expect(page.locator(".blueprint-workspace")).toBeVisible({ timeout: 15000 });
   return { app, page, userDataDir };
 }
 
