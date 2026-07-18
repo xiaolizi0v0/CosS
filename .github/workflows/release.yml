@@ -48,8 +48,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate Agent world module
-        run: npm run test:world
+      - name: Validate Blueprint module
+        run: npm run test:blueprint:syntax && npm run test:blueprint
 
   build:
     name: Package ${{ matrix.label }}

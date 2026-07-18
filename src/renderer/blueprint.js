@@ -143,6 +143,14 @@
     "deliverable-gate": [["checklist", "验收清单", "textarea"], ["requireAll", "必须全部通过", "checkbox"]],
     "error-catch": [["errorTypes", "捕获错误类型", "text"], ["exposeError", "输出错误详情", "checkbox"]]
   };
+  const EXECUTION_INSTRUCTION_NODE_TYPES = new Set(["agent-task", "context-lens", "knowledge-retrieve", "evaluator", "synthesizer"]);
+
+  function renderInstructionEditor(node, esc, text = (_key, fallback) => fallback) {
+    if (!EXECUTION_INSTRUCTION_NODE_TYPES.has(node.type)) return "";
+    const label = node.type === "evaluator" ? text("field.evaluationInstruction", "评价指令") : text("field.executionInstruction", "执行指令");
+    const placeholder = node.type === "evaluator" ? text("field.evaluationInstructionPlaceholder", "描述评价标准和评分方式") : text("field.executionInstructionPlaceholder", "描述该节点需要完成什么");
+    return `<div class="field"><label>${esc(label)}</label><textarea class="blueprint-instruction" data-blueprint-field="instruction" placeholder="${esc(placeholder)}">${esc(node.instruction)}</textarea></div>`;
+  }
 
   function createNode(type, createId, index = 0) {
     const definition = TYPE_MAP[type] || TYPE_MAP["agent-task"];
@@ -195,6 +203,129 @@
     return blueprint;
   }
 
+  function generateBlueprintFromTask(draft = {}, createId) {
+    const goal = String(draft.goal || "").trim() || "完成用户任务";
+    const lower = goal.toLowerCase();
+    const hasFileInput = /(文件|目录|项目|package\.json|readme|读取|分析代码|代码库)/i.test(goal);
+    const hasBrowser = /(网页|网站|网址|浏览器|搜索网页|在线资料|http)/i.test(goal);
+    const hasCommand = /(命令|运行|执行|构建|编译|测试|npm|pnpm|yarn|git)/i.test(goal);
+    const hasReview = /(检查|验证|评估|审核|质量|验收|测试)/i.test(goal);
+    const hasOutput = /(生成|写入|保存|导出|报告|文档|文件|交付)/i.test(goal) || Boolean(draft.outputPath);
+    const needsApproval = draft.allowSideEffects !== false && (hasCommand || hasOutput || (hasBrowser && /(点击|填写|提交|登录)/i.test(goal)));
+    const blueprint = createBlueprint(draft.name || `任务蓝图 · ${goal.slice(0, 18)}`, draft.workspace || draft.path || "", createId);
+    blueprint.description = String(draft.description || `根据任务自动生成：${goal}`);
+    blueprint.generation = {
+      source: "rule-engine",
+      goal,
+      mode: String(draft.mode || "review"),
+      capabilities: { hasFileInput, hasBrowser, hasCommand, hasReview, hasOutput, needsApproval },
+      generatedAt: new Date().toISOString()
+    };
+    blueprint.nodes = [];
+    blueprint.edges = [];
+    blueprint.tasks = [];
+    blueprint.variables = [];
+    blueprint.groups = [];
+    blueprint.ui.selectedNodeId = "";
+    blueprint.ui.selectedNodeIds = [];
+    blueprint.ui.selectedEdgeId = "";
+    const addNode = (type, name, instruction = "", config = {}) => {
+      const node = createNode(type, createId, blueprint.nodes.length);
+      node.name = name;
+      node.description = `${name}：${goal}`;
+      node.instruction = instruction;
+      node.config = { ...node.config, ...config };
+      blueprint.nodes.push(node);
+      return node;
+    };
+    const addFlow = (from, to, label = "") => {
+      if (!from || !to) return null;
+      const fromPort = getDefaultPortId(from, "output", "flow");
+      const toPort = getDefaultPortId(to, "input", "flow");
+      const edge = { id: createId("bp-edge"), from: from.id, to: to.id, fromPort, toPort, kind: "flow", label };
+      blueprint.edges.push(edge);
+      return edge;
+    };
+    const addData = (from, fromPort, to, toPort) => {
+      if (!from || !to) return null;
+      const edge = { id: createId("bp-edge"), from: from.id, to: to.id, fromPort, toPort, kind: "data", label: "" };
+      blueprint.edges.push(edge);
+      return edge;
+    };
+
+    const start = addNode("task-start", "任务开始", "接收用户任务目标。");
+    const planner = addNode("planner", "拆解执行计划", "将用户目标拆解为可执行步骤。", { planningMode: "linear", maxSteps: 8 });
+    addFlow(start, planner);
+    let previous = planner;
+    const contextSources = [];
+    if (hasFileInput) {
+      const file = addNode("file", "读取项目文件", "读取任务所需的项目文件。", { operation: "read", path: draft.inputPath || (lower.includes("package.json") ? "package.json" : "README.md") });
+      addFlow(previous, file);
+      previous = file;
+      contextSources.push({ node: file, port: "file" });
+    }
+    if (hasBrowser) {
+      const browser = addNode("browser", "收集网页资料", "提取任务所需的网页信息。", { url: draft.url || "https://example.com", mode: "extract-text", maxChars: 12000 });
+      addFlow(previous, browser);
+      previous = browser;
+      contextSources.push({ node: browser, port: "content" });
+    }
+    if (hasCommand) {
+      const shell = addNode("shell", "执行检查命令", "执行与任务相关的检查命令。", { command: draft.command || (/(测试|test)/i.test(goal) ? "npm test" : "git status --short"), workingDirectory: "" });
+      if (needsApproval) {
+        const approval = addNode("approval", "确认执行命令", "执行命令前请确认副作用和工作目录。", { approvalMessage: "即将执行蓝图生成的检查命令，请确认。", approvers: "用户" });
+        addFlow(previous, approval);
+        addFlow(approval, shell);
+      } else addFlow(previous, shell);
+      previous = shell;
+      contextSources.push({ node: shell, port: "stdout" });
+    }
+    const agent = addNode("agent-task", "完成核心任务", "根据上游计划和上下文完成节点职责，输出可验证的结果。", {
+      provider: "inherit",
+      permissionMode: draft.allowSideEffects === false ? "read-only" : "confirm",
+      roleId: "assistant"
+    });
+    addFlow(previous, agent);
+    addData(start, "goal", planner, "goal");
+    addData(planner, "plan", agent, "context");
+    contextSources.forEach((source) => addData(source.node, source.port, agent, "context"));
+    previous = agent;
+    if (hasReview) {
+      const evaluator = addNode("evaluator", "检查结果质量", "按任务目标检查上游结果是否完整、准确、可交付。", { provider: "inherit", criteria: "结果必须覆盖任务目标，并包含可验证的完成证据。", passScore: 80 });
+      addFlow(previous, evaluator);
+      addData(agent, "result", evaluator, "candidate");
+      previous = evaluator;
+    }
+    let artifactSource = agent;
+    if (hasOutput) {
+      if (needsApproval) {
+        const approval = addNode("approval", "确认交付操作", "写入或导出交付物前请确认目标路径。", { approvalMessage: "即将生成或写入交付物，请确认。", approvers: "用户" });
+        addFlow(previous, approval);
+        previous = approval;
+      }
+      const writer = addNode("file", "生成任务交付物", "", { operation: "write", path: draft.outputPath || "blueprint-output.md", content: "{{input.output}}" });
+      addFlow(previous, writer);
+      addData(agent, "result", writer, "content");
+      previous = writer;
+      artifactSource = writer;
+      const artifact = addNode("artifact", "登记交付物", "登记生成的文件或报告。", { artifactType: draft.outputType || "file", source: draft.outputPath || "blueprint-output.md" });
+      addFlow(previous, artifact);
+      addData(writer, "file", artifact, "source");
+      previous = artifact;
+      addData(artifact, "artifact", null, "result");
+    }
+    const finish = addNode("task-finish", "任务完成", "汇总并报告任务结果。", { completionMessage: "自动生成的蓝图已完成任务。", outputMapping: "{{input}}" });
+    addFlow(previous, finish);
+    if (!hasOutput) addData(artifactSource, "result", finish, "result");
+    else {
+      const artifactNode = blueprint.nodes.find((node) => node.type === "artifact");
+      if (artifactNode) addData(artifactNode, "artifact", finish, "result");
+    }
+    autoLayout(blueprint);
+    ensureBlueprintShape(blueprint);
+    return blueprint;
+  }
+
   function ensureBlueprintShape(blueprint) {
     if (!blueprint || typeof blueprint !== "object") return null;
     blueprint.id = String(blueprint.id || "");
@@ -238,6 +369,17 @@
       node.instruction = String(node.instruction || "");
       node.config = node.config && typeof node.config === "object" ? node.config : {};
     });
+    const generatedGoal = String(blueprint.generation?.goal || "").trim();
+    if (blueprint.generation?.source === "rule-engine" && generatedGoal) {
+      const legacyInstruction = "完成以下目标：" + generatedGoal + "\n结合所有上游输入，输出可验证的结果。";
+      const normalizeGeneratedAgentInstruction = (node) => {
+        if (node?.type === "agent-task" && String(node.instruction || "").trim() === legacyInstruction) {
+          node.instruction = "根据上游计划和上下文完成节点职责，输出可验证的结果。";
+        }
+      };
+      blueprint.nodes.forEach(normalizeGeneratedAgentInstruction);
+      blueprint.tasks.forEach((task) => task.definition?.nodes?.forEach(normalizeGeneratedAgentInstruction));
+    }
     const ids = new Set(blueprint.nodes.map((node) => node.id));
     blueprint.ui.selectedNodeIds = blueprint.ui.selectedNodeIds.filter((nodeId) => ids.has(nodeId));
     if (blueprint.ui.selectedNodeId && !ids.has(blueprint.ui.selectedNodeId)) blueprint.ui.selectedNodeId = "";
@@ -359,23 +501,36 @@
   function createRenderer({ escapeHtml, icon, translate } = {}) {
     const esc = escapeHtml || ((value) => String(value));
     const tr = translate || ((_key, fallback) => fallback);
+    const text = (key, fallback, values = {}) => tr(`blueprint.${key}`, fallback, values);
+    const categoryLabel = (category) => text(`category.${category.id}`, category.label);
+    const nodeDefinition = (definition) => ({
+      ...definition,
+      name: text(`node.${definition.id}.name`, definition.name),
+      description: text(`node.${definition.id}.description`, definition.description),
+      verb: text(`node.${definition.id}.verb`, definition.verb)
+    });
+    const portLabel = (port) => text(`port.${port.id}`, port.label);
+    const propertyLabel = (key, label) => text(`property.${key}`, label);
+    const displayNodeName = (node, definition) => node.name === definition.name
+      ? nodeDefinition(definition).name
+      : node.name;
 
     function renderPalette(blueprint) {
       const category = blueprint.ui.paletteCategory || "all";
       const visible = category === "all" ? NODE_TYPES : NODE_TYPES.filter((item) => item.category === category);
       return `
         <aside class="blueprint-palette">
-          <div class="blueprint-panel-heading"><strong>节点库</strong><span>${visible.length} 个</span></div>
-          <label class="blueprint-search"><span>⌕</span><input data-blueprint-search placeholder="搜索节点" /></label>
+          <div class="blueprint-panel-heading"><strong>${esc(text("palette.title", "节点库"))}</strong><span>${visible.length} ${esc(text("count.nodes", "个"))}</span></div>
+          <label class="blueprint-search"><span>⌕</span><input data-blueprint-search placeholder="${esc(text("palette.search", "搜索节点"))}" /></label>
           <div class="blueprint-category-tabs">
-            <button class="${category === "all" ? "active" : ""}" data-action="set-blueprint-category" data-category="all">全部</button>
-            ${NODE_CATEGORIES.map((item) => `<button class="${category === item.id ? "active" : ""}" data-action="set-blueprint-category" data-category="${item.id}">${esc(item.label)}</button>`).join("")}
+            <button class="${category === "all" ? "active" : ""}" data-action="set-blueprint-category" data-category="all">${esc(text("category.all", "全部"))}</button>
+            ${NODE_CATEGORIES.map((item) => `<button class="${category === item.id ? "active" : ""}" data-action="set-blueprint-category" data-category="${item.id}">${esc(categoryLabel(item))}</button>`).join("")}
           </div>
           <div class="blueprint-node-library">
             ${visible.map((item) => `
-              <button class="blueprint-library-item" data-action="add-blueprint-node" data-node-type="${item.id}" data-blueprint-node-search="${esc((item.name + " " + item.description).toLowerCase())}">
-                <span class="blueprint-library-icon" style="--node-color:${CATEGORY_MAP[item.category].color}">${esc(item.verb.slice(0, 1))}</span>
-                <span><strong>${esc(item.name)}</strong><small>${esc(item.description)}</small></span>
+              <button class="blueprint-library-item" data-action="add-blueprint-node" data-node-type="${item.id}" data-blueprint-node-search="${esc((item.name + " " + item.description + " " + nodeDefinition(item).name + " " + nodeDefinition(item).description).toLowerCase())}">
+                <span class="blueprint-library-icon" style="--node-color:${CATEGORY_MAP[item.category].color}">${esc(nodeDefinition(item).verb.slice(0, 1))}</span>
+                <span><strong>${esc(nodeDefinition(item).name)}</strong><small>${esc(nodeDefinition(item).description)}</small></span>
                 <b>＋</b>
               </button>
             `).join("")}
@@ -397,31 +552,31 @@
       return `
         <section class="blueprint-stage">
           <div class="blueprint-stage-toolbar">
-            <span><strong>流程画布</strong> · ${blueprint.nodes.length} 个节点 · ${blueprint.edges.length} 条连接</span>
+            <span><strong>${esc(text("graph.title", "流程画布"))}</strong> · ${blueprint.nodes.length} ${esc(text("count.nodes", "个节点"))} · ${blueprint.edges.length} ${esc(text("count.edges", "条连接"))}</span>
             <div class="blueprint-toolbar-actions">
               <span class="blueprint-toolbar-group">
                 <button class="secondary-button compact" data-action="undo-blueprint" title="撤销 (Ctrl+Z)">↶</button>
                 <button class="secondary-button compact" data-action="redo-blueprint" title="重做 (Ctrl+Y)">↷</button>
-                <button class="secondary-button compact" data-action="copy-blueprint-selection" title="复制 (Ctrl+C)">复制</button>
-                <button class="secondary-button compact" data-action="paste-blueprint-selection" title="粘贴 (Ctrl+V)">粘贴</button>
-                <button class="secondary-button compact" data-action="duplicate-blueprint-selection" title="重复 (Ctrl+D)">重复</button>
+                <button class="secondary-button compact" data-action="copy-blueprint-selection" title="${esc(text("toolbar.copy.title", "复制 (Ctrl+C)"))}">${esc(text("toolbar.copy", "复制"))}</button>
+                <button class="secondary-button compact" data-action="paste-blueprint-selection" title="${esc(text("toolbar.paste.title", "粘贴 (Ctrl+V)"))}">${esc(text("toolbar.paste", "粘贴"))}</button>
+                <button class="secondary-button compact" data-action="duplicate-blueprint-selection" title="${esc(text("toolbar.duplicate.title", "重复 (Ctrl+D)"))}">${esc(text("toolbar.duplicate", "重复"))}</button>
               </span>
               <span class="blueprint-toolbar-group">
-                <button class="secondary-button compact" data-action="zoom-out-blueprint" title="缩小">−</button>
-                <button class="secondary-button compact blueprint-zoom-value" data-action="reset-blueprint-zoom" title="重置为 100%">${Math.round(zoom * 100)}%</button>
-                <button class="secondary-button compact" data-action="zoom-in-blueprint" title="放大">＋</button>
-                <button class="secondary-button compact" data-action="fit-blueprint-view" title="适应全部节点">适应</button>
-                <button class="secondary-button compact ${blueprint.ui.panMode ? "active" : ""}" data-action="toggle-blueprint-pan" title="拖动画布 (Space)">平移</button>
-                <button class="secondary-button compact ${blueprint.ui.snapToGrid ? "active" : ""}" data-action="toggle-blueprint-snap" title="拖动时吸附到 24px 网格">吸附</button>
+                <button class="secondary-button compact" data-action="zoom-out-blueprint" title="${esc(text("toolbar.zoomOut", "缩小"))}">−</button>
+                <button class="secondary-button compact blueprint-zoom-value" data-action="reset-blueprint-zoom" title="${esc(text("toolbar.resetZoom", "重置为 100%"))}">${Math.round(zoom * 100)}%</button>
+                <button class="secondary-button compact" data-action="zoom-in-blueprint" title="${esc(text("toolbar.zoomIn", "放大"))}">＋</button>
+                <button class="secondary-button compact" data-action="fit-blueprint-view" title="${esc(text("toolbar.fit", "适应全部节点"))}">${esc(text("toolbar.fitShort", "适应"))}</button>
+                <button class="secondary-button compact ${blueprint.ui.panMode ? "active" : ""}" data-action="toggle-blueprint-pan" title="${esc(text("toolbar.pan.title", "拖动画布 (Space)"))}">${esc(text("toolbar.pan", "平移"))}</button>
+                <button class="secondary-button compact ${blueprint.ui.snapToGrid ? "active" : ""}" data-action="toggle-blueprint-snap" title="${esc(text("toolbar.snap.title", "拖动时吸附到 24px 网格"))}">${esc(text("toolbar.snap", "吸附"))}</button>
               </span>
               <span class="blueprint-toolbar-group">
-                <button class="secondary-button compact" data-action="align-blueprint-left" title="左对齐所选节点">左齐</button>
-                <button class="secondary-button compact" data-action="distribute-blueprint-horizontal" title="横向均匀分布">横分</button>
-                <button class="secondary-button compact" data-action="group-blueprint-selection" title="把所选节点建立分组">分组</button>
+                <button class="secondary-button compact" data-action="align-blueprint-left" title="${esc(text("toolbar.alignLeft.title", "左对齐所选节点"))}">${esc(text("toolbar.alignLeft", "左齐"))}</button>
+                <button class="secondary-button compact" data-action="distribute-blueprint-horizontal" title="${esc(text("toolbar.distributeHorizontal.title", "横向均匀分布"))}">${esc(text("toolbar.distributeHorizontal", "横分"))}</button>
+                <button class="secondary-button compact" data-action="group-blueprint-selection" title="${esc(text("toolbar.group.title", "把所选节点建立分组"))}">${esc(text("toolbar.group", "分组"))}</button>
               </span>
-              ${blueprint.ui.pendingFromNodeId ? `<button class="secondary-button compact" data-action="cancel-blueprint-edge">取消连线</button>` : ""}
-              <button class="secondary-button compact" data-action="delete-blueprint-selection">删除所选</button>
-              <button class="secondary-button compact" data-action="auto-layout-blueprint">自动整理</button>
+              ${blueprint.ui.pendingFromNodeId ? `<button class="secondary-button compact" data-action="cancel-blueprint-edge">${esc(text("toolbar.cancelLink", "取消连线"))}</button>` : ""}
+              <button class="secondary-button compact" data-action="delete-blueprint-selection">${esc(text("toolbar.deleteSelection", "删除所选"))}</button>
+              <button class="secondary-button compact" data-action="auto-layout-blueprint">${esc(text("toolbar.autoLayout", "自动整理"))}</button>
             </div>
           </div>
           <div class="blueprint-canvas-viewport" data-blueprint-viewport>
@@ -453,39 +608,44 @@
               ${blueprint.groups.map((group) => {
                 const bounds = getGroupBounds(blueprint, group);
                 return `<section class="blueprint-group ${group.collapsed ? "collapsed" : ""}" style="left:${bounds.x}px;top:${bounds.y}px;width:${group.collapsed ? 220 : bounds.width}px;height:${group.collapsed ? 62 : bounds.height}px;--group-color:${esc(group.color)}" data-blueprint-group-id="${esc(group.id)}">
-                  <button class="blueprint-group-header" data-action="toggle-blueprint-group" data-group-id="${esc(group.id)}"><strong>${esc(group.name)}</strong><span>${group.nodeIds.length} 个节点 · ${group.collapsed ? "展开" : "折叠"}</span></button>
+                  <button class="blueprint-group-header" data-action="toggle-blueprint-group" data-group-id="${esc(group.id)}"><strong>${esc(group.name)}</strong><span>${group.nodeIds.length} ${esc(text("count.nodes", "个节点"))} · ${esc(text(group.collapsed ? "group.expand" : "group.collapse", group.collapsed ? "展开" : "折叠"))}</span></button>
                 </section>`;
               }).join("")}
               ${blueprint.nodes.map((node) => {
                 if (collapsedNodeIds.has(node.id)) return "";
                 const definition = TYPE_MAP[node.type];
                 const category = CATEGORY_MAP[definition.category];
+                const localizedDefinition = nodeDefinition(definition);
+                const localizedCategory = categoryLabel(category);
+                const nodeTitle = displayNodeName(node, definition);
                 const ports = getNodePorts(node);
                 const incoming = blueprint.edges.filter((edge) => edge.to === node.id).length;
                 const outgoing = blueprint.edges.filter((edge) => edge.from === node.id).length;
                 return `
                   <article class="blueprint-node ${selectedNodeIds.has(node.id) ? "selected" : ""} ${node.enabled ? "" : "disabled"} run-${activeTask?.nodeRuns?.[node.id]?.status || "idle"}" style="left:${node.x}px;top:${node.y}px;height:${getNodeHeight(node)}px;--node-color:${category.color}" data-blueprint-node-id="${esc(node.id)}">
                     <button class="blueprint-node-main" data-action="select-blueprint-node" data-node-id="${esc(node.id)}">
-                      <span class="blueprint-node-type">${esc(category.label)} · ${esc(definition.name)}</span>
-                      <strong>${esc(node.name)}</strong>
-                      <small>${activeTask ? `运行：${esc(activeTask.nodeRuns?.[node.id]?.status || "idle")}` : `收 ${incoming} · 发 ${outgoing}`}</small>
+                      <span class="blueprint-node-type">${esc(localizedCategory)} · ${esc(localizedDefinition.name)}</span>
+                      <strong>${esc(nodeTitle)}</strong>
+                      <small>${activeTask ? `${esc(text("status.runningPrefix", "运行："))}${esc(text(`status.${activeTask.nodeRuns?.[node.id]?.status || "idle"}`, activeTask.nodeRuns?.[node.id]?.status || "idle"))}` : `${esc(text("status.incoming", "收"))} ${incoming} · ${esc(text("status.outgoing", "发"))} ${outgoing}`}</small>
                     </button>
                     ${ports.inputs.map((port, index) => {
                       const connected = blueprint.edges.some((edge) => edge.to === node.id && (edge.toPort || getDefaultPortId(node, "input", "flow")) === port.id);
-                      return `<div class="blueprint-pin-row input" style="top:${64 + index * 23}px"><button class="blueprint-port input type-${esc(port.dataType)} ${connected ? "connected" : "unconnected"}" style="--port-color:${PORT_TYPE_COLORS[port.dataType] || PORT_TYPE_COLORS.any}" data-action="complete-blueprint-edge" data-node-id="${esc(node.id)}" data-port-id="${esc(port.id)}" data-port-type="${esc(port.dataType)}" title="${esc(port.label)} · ${connected ? "已连接" : "未连接"}输入"></button><span>${esc(port.label)}</span></div>`;
+                      const label = portLabel(port);
+                      return `<div class="blueprint-pin-row input" style="top:${64 + index * 23}px"><button class="blueprint-port input type-${esc(port.dataType)} ${connected ? "connected" : "unconnected"}" style="--port-color:${PORT_TYPE_COLORS[port.dataType] || PORT_TYPE_COLORS.any}" data-action="complete-blueprint-edge" data-node-id="${esc(node.id)}" data-port-id="${esc(port.id)}" data-port-type="${esc(port.dataType)}" title="${esc(label)} · ${esc(text(connected ? "port.connectedInput" : "port.unconnectedInput", connected ? "已连接输入" : "未连接输入"))}"></button><span>${esc(label)}</span></div>`;
                     }).join("")}
                     ${ports.outputs.map((port, index) => {
                       const connected = blueprint.edges.some((edge) => edge.from === node.id && (edge.fromPort || getDefaultPortId(node, "output", "flow")) === port.id);
-                      return `<div class="blueprint-pin-row output" style="top:${64 + index * 23}px"><span>${esc(port.label)}</span><button class="blueprint-port output type-${esc(port.dataType)} ${connected ? "connected" : "unconnected"} ${blueprint.ui.pendingFromNodeId === node.id && blueprint.ui.pendingFromPortId === port.id ? "pending" : ""}" style="--port-color:${PORT_TYPE_COLORS[port.dataType] || PORT_TYPE_COLORS.any}" data-action="begin-blueprint-edge" data-node-id="${esc(node.id)}" data-port-id="${esc(port.id)}" data-port-type="${esc(port.dataType)}" title="${esc(port.label)} · ${connected ? "已连接" : "未连接"}输出，可拖拽创建连接"></button></div>`;
+                      const label = portLabel(port);
+                      return `<div class="blueprint-pin-row output" style="top:${64 + index * 23}px"><span>${esc(label)}</span><button class="blueprint-port output type-${esc(port.dataType)} ${connected ? "connected" : "unconnected"} ${blueprint.ui.pendingFromNodeId === node.id && blueprint.ui.pendingFromPortId === port.id ? "pending" : ""}" style="--port-color:${PORT_TYPE_COLORS[port.dataType] || PORT_TYPE_COLORS.any}" data-action="begin-blueprint-edge" data-node-id="${esc(node.id)}" data-port-id="${esc(port.id)}" data-port-type="${esc(port.dataType)}" title="${esc(label)} · ${esc(text(connected ? "port.connectedOutput" : "port.unconnectedOutput", connected ? "已连接输出" : "未连接输出"))}，${esc(text("port.dragHint", "可拖拽创建连接"))}"></button></div>`;
                     }).join("")}
                   </article>
                 `;
               }).join("")}
-              ${blueprint.nodes.length ? "" : `<div class="blueprint-canvas-empty"><strong>把节点添加到画布</strong><span>从左侧节点库选择一个节点开始。</span></div>`}
+              ${blueprint.nodes.length ? "" : `<div class="blueprint-canvas-empty"><strong>${esc(text("canvas.empty.title", "把节点添加到画布"))}</strong><span>${esc(text("canvas.empty.desc", "从左侧节点库选择一个节点开始。"))}</span></div>`}
             </div>
           </div>
           <div class="blueprint-minimap" data-blueprint-minimap title="点击定位画布">
-            <svg viewBox="0 0 ${size.width} ${size.height}" preserveAspectRatio="none">
+            <svg viewBox="0 0 ${size.width} ${size.height}" preserveAspectRatio="none" aria-label="${esc(text("minimap.title", "画布小地图"))}">
               ${blueprint.nodes.map((node) => `<rect x="${node.x}" y="${node.y}" width="208" height="${getNodeHeight(node)}" class="${selectedNodeIds.has(node.id) ? "selected" : ""}"></rect>`).join("")}
               <rect class="blueprint-minimap-viewport" data-blueprint-minimap-viewport x="0" y="0" width="1" height="1"></rect>
             </svg>
@@ -500,13 +660,13 @@
       if (selectedNodeIds.length > 1) {
         return `
           <aside class="blueprint-inspector blueprint-multi-inspector">
-            <div class="blueprint-panel-heading"><strong>多选节点</strong><span>${selectedNodeIds.length} 个</span></div>
-            <div class="blueprint-empty-hint"><b>◇</b><strong>已选择 ${selectedNodeIds.length} 个节点</strong><span>可以整体拖动、复制、重复或删除所选节点。</span></div>
-            <div class="blueprint-multi-actions"><button class="secondary-button" data-action="align-blueprint-left">左对齐</button><button class="secondary-button" data-action="align-blueprint-top">顶对齐</button><button class="secondary-button" data-action="distribute-blueprint-horizontal">横向分布</button><button class="secondary-button" data-action="distribute-blueprint-vertical">纵向分布</button></div>
-            <button class="secondary-button full" data-action="group-blueprint-selection">建立节点分组</button>
-            <button class="secondary-button full" data-action="copy-blueprint-selection">复制所选</button>
-            <button class="secondary-button full" data-action="duplicate-blueprint-selection">重复所选</button>
-            <button class="secondary-button danger full" data-action="delete-blueprint-selection">删除所选</button>
+            <div class="blueprint-panel-heading"><strong>${esc(text("inspector.multi", "多选节点"))}</strong><span>${selectedNodeIds.length} ${esc(text("count.items", "个"))}</span></div>
+            <div class="blueprint-empty-hint"><b>◇</b><strong>${esc(text("inspector.selected", "已选择 {{count}} 个节点", { count: selectedNodeIds.length }))}</strong><span>${esc(text("inspector.multiHint", "可以整体拖动、复制、重复或删除所选节点。"))}</span></div>
+            <div class="blueprint-multi-actions"><button class="secondary-button" data-action="align-blueprint-left">${esc(text("align.left", "左对齐"))}</button><button class="secondary-button" data-action="align-blueprint-top">${esc(text("align.top", "顶对齐"))}</button><button class="secondary-button" data-action="distribute-blueprint-horizontal">${esc(text("distribute.horizontal", "横向分布"))}</button><button class="secondary-button" data-action="distribute-blueprint-vertical">${esc(text("distribute.vertical", "纵向分布"))}</button></div>
+            <button class="secondary-button full" data-action="group-blueprint-selection">${esc(text("group.create", "建立节点分组"))}</button>
+            <button class="secondary-button full" data-action="copy-blueprint-selection">${esc(text("selection.copy", "复制所选"))}</button>
+            <button class="secondary-button full" data-action="duplicate-blueprint-selection">${esc(text("selection.duplicate", "重复所选"))}</button>
+            <button class="secondary-button danger full" data-action="delete-blueprint-selection">${esc(text("selection.delete", "删除所选"))}</button>
           </aside>
         `;
       }
@@ -514,31 +674,43 @@
       const edge = blueprint.edges.find((item) => item.id === blueprint.ui.selectedEdgeId);
       if (node) {
         const definition = TYPE_MAP[node.type];
-        const propertyFields = (NODE_PROPERTY_SCHEMAS[node.type] || []).map(([key, label, fieldType, options]) => {
+        const visiblePropertySchema = (NODE_PROPERTY_SCHEMAS[node.type] || []).filter(([key]) => {
+          if (node.type === "file") {
+            if (key === "content") return ["write", "append"].includes(node.config.operation || "read");
+            if (key === "toPath") return node.config.operation === "move";
+          }
+          if (node.type === "browser") {
+            if (key === "selector") return ["extract-selector"].includes(node.config.mode || "extract-text");
+            if (key === "actions") return node.config.mode === "actions";
+          }
+          return true;
+        });
+        const propertyFields = visiblePropertySchema.map(([key, label, fieldType, options]) => {
           const value = node.config[key] ?? "";
-          if (fieldType === "select") return `<div class="field"><label>${esc(label)}</label><select data-blueprint-config-field="${esc(key)}">${String(options || "").split("|").map((option) => `<option value="${esc(option)}" ${String(value) === option ? "selected" : ""}>${esc(option)}</option>`).join("")}</select></div>`;
-          if (fieldType === "node-select") return `<div class="field"><label>${esc(label)}</label><select data-blueprint-config-field="${esc(key)}"><option value="">请选择节点</option>${blueprint.nodes.filter((candidate) => candidate.id !== node.id).map((candidate) => `<option value="${esc(candidate.id)}" ${String(value) === candidate.id ? "selected" : ""}>${esc(candidate.name)} · ${esc(candidate.id)}</option>`).join("")}</select></div>`;
-          if (fieldType === "textarea") return `<div class="field"><label>${esc(label)}</label><textarea data-blueprint-config-field="${esc(key)}">${esc(value)}</textarea></div>`;
-          if (fieldType === "checkbox") return `<label class="blueprint-check"><input type="checkbox" data-blueprint-config-field="${esc(key)}" ${value === true ? "checked" : ""} /> ${esc(label)}</label>`;
-          return `<div class="field"><label>${esc(label)}</label><input type="${fieldType === "number" ? "number" : "text"}" data-blueprint-config-field="${esc(key)}" value="${esc(value)}" /></div>`;
+          const localizedLabel = propertyLabel(key, label);
+          if (fieldType === "select") return `<div class="field"><label>${esc(localizedLabel)}</label><select data-blueprint-config-field="${esc(key)}">${String(options || "").split("|").map((option) => `<option value="${esc(option)}" ${String(value) === option ? "selected" : ""}>${esc(text(`option.${option}`, option))}</option>`).join("")}</select></div>`;
+          if (fieldType === "node-select") return `<div class="field"><label>${esc(localizedLabel)}</label><select data-blueprint-config-field="${esc(key)}"><option value="">${esc(text("field.selectNode", "请选择节点"))}</option>${blueprint.nodes.filter((candidate) => candidate.id !== node.id).map((candidate) => `<option value="${esc(candidate.id)}" ${String(value) === candidate.id ? "selected" : ""}>${esc(candidate.name)} · ${esc(candidate.id)}</option>`).join("")}</select></div>`;
+          if (fieldType === "textarea") return `<div class="field"><label>${esc(localizedLabel)}</label><textarea data-blueprint-config-field="${esc(key)}">${esc(value)}</textarea></div>`;
+          if (fieldType === "checkbox") return `<label class="blueprint-check"><input type="checkbox" data-blueprint-config-field="${esc(key)}" ${value === true ? "checked" : ""} /> ${esc(localizedLabel)}</label>`;
+          return `<div class="field"><label>${esc(localizedLabel)}</label><input type="${fieldType === "number" ? "number" : "text"}" data-blueprint-config-field="${esc(key)}" value="${esc(value)}" /></div>`;
         }).join("");
         const specialActions = node.type === "mcp-tool"
-          ? `<button class="secondary-button full" data-action="discover-blueprint-mcp-tools">发现 Server 工具</button>` : "";
+          ? `<button class="secondary-button full" data-action="discover-blueprint-mcp-tools">${esc(text("action.discoverMcp", "发现 Server 工具"))}</button>` : "";
         return `
           <aside class="blueprint-inspector">
-            <div class="blueprint-panel-heading"><strong>节点属性</strong><span>${esc(definition.name)}</span></div>
-            <div class="field"><label>节点名称</label><input data-blueprint-field="name" value="${esc(node.name)}" /></div>
-            <div class="field"><label>说明</label><textarea data-blueprint-field="description">${esc(node.description)}</textarea></div>
-            <div class="field"><label>执行指令 / 模板</label><textarea class="blueprint-instruction" data-blueprint-field="instruction" placeholder="描述该节点应完成什么">${esc(node.instruction)}</textarea></div>
-            <div class="blueprint-property-section"><strong>专属属性</strong><span>${esc(definition.name)} 的执行配置</span></div>
+            <div class="blueprint-panel-heading"><strong>${esc(text("inspector.node", "节点属性"))}</strong><span>${esc(nodeDefinition(definition).name)}</span></div>
+            <div class="field"><label>${esc(text("field.name", "节点名称"))}</label><input data-blueprint-field="name" value="${esc(node.name)}" /></div>
+            <div class="field"><label>${esc(text("field.description", "说明"))}</label><textarea data-blueprint-field="description">${esc(node.description)}</textarea></div>
+            ${renderInstructionEditor(node, esc, text)}
+            <div class="blueprint-property-section"><strong>${esc(text("inspector.specific", "专属属性"))}</strong><span>${esc(nodeDefinition(definition).name)} ${esc(text("inspector.executionConfig", "的执行配置"))}</span></div>
             ${propertyFields}
             ${specialActions}
             <div class="blueprint-field-row">
-              <div class="field"><label>超时（毫秒）</label><input type="number" min="0" data-blueprint-field="timeoutMs" value="${node.timeoutMs}" /></div>
-              <div class="field"><label>重试次数</label><input type="number" min="0" data-blueprint-field="retryCount" value="${node.retryCount}" /></div>
+              <div class="field"><label>${esc(text("field.timeout", "超时（毫秒，0 使用节点默认值）"))}</label><input type="number" min="0" data-blueprint-field="timeoutMs" value="${node.timeoutMs}" /></div>
+              <div class="field"><label>${esc(text("field.retryCount", "重试次数"))}</label><input type="number" min="0" data-blueprint-field="retryCount" value="${node.retryCount}" /></div>
             </div>
-            <label class="blueprint-check"><input type="checkbox" data-blueprint-field="enabled" ${node.enabled ? "checked" : ""} /> 启用此节点</label>
-            <div class="blueprint-inspector-note"><strong>节点 ID</strong><code>${esc(node.id)}</code><span>类型：${esc(node.type)}</span></div>
+            <label class="blueprint-check"><input type="checkbox" data-blueprint-field="enabled" ${node.enabled ? "checked" : ""} /> ${esc(text("field.enabled", "启用此节点"))}</label>
+            <div class="blueprint-inspector-note"><strong>${esc(text("field.nodeId", "节点 ID"))}</strong><code>${esc(node.id)}</code><span>${esc(text("field.type", "类型："))}${esc(node.type)}</span></div>
           </aside>
         `;
       }
@@ -547,17 +719,17 @@
         const to = blueprint.nodes.find((nodeItem) => nodeItem.id === edge.to);
         return `
           <aside class="blueprint-inspector">
-            <div class="blueprint-panel-heading"><strong>连接属性</strong><span>流程边</span></div>
-            <div class="blueprint-route-card"><strong>${esc(from?.name || "未知节点")}</strong><span>→</span><strong>${esc(to?.name || "未知节点")}</strong></div>
-            <div class="field"><label>连接标签</label><input data-blueprint-edge-field="label" value="${esc(edge.label)}" placeholder="可选，例如：通过" /></div>
-            <button class="secondary-button danger full" data-action="delete-blueprint-selection">删除连接</button>
+            <div class="blueprint-panel-heading"><strong>${esc(text("inspector.edge", "连接属性"))}</strong><span>${esc(text("inspector.flowEdge", "流程边"))}</span></div>
+            <div class="blueprint-route-card"><strong>${esc(from?.name || text("unknownNode", "未知节点"))}</strong><span>→</span><strong>${esc(to?.name || text("unknownNode", "未知节点"))}</strong></div>
+            <div class="field"><label>${esc(text("field.edgeLabel", "连接标签"))}</label><input data-blueprint-edge-field="label" value="${esc(edge.label)}" placeholder="${esc(text("field.edgeLabelPlaceholder", "可选，例如：通过"))}" /></div>
+            <button class="secondary-button danger full" data-action="delete-blueprint-selection">${esc(text("selection.deleteEdge", "删除连接"))}</button>
           </aside>
         `;
       }
       return `
         <aside class="blueprint-inspector blueprint-inspector-empty">
-          <div class="blueprint-panel-heading"><strong>属性检查器</strong><span>未选择</span></div>
-          <div class="blueprint-empty-hint"><b>◇</b><strong>选择节点或连接</strong><span>在画布中选择元素后，可在这里编辑名称、指令、超时和重试策略。</span></div>
+          <div class="blueprint-panel-heading"><strong>${esc(text("inspector.title", "属性检查器"))}</strong><span>${esc(text("inspector.none", "未选择"))}</span></div>
+          <div class="blueprint-empty-hint"><b>◇</b><strong>${esc(text("inspector.select", "选择节点或连接"))}</strong><span>${esc(text("inspector.hint", "在画布中选择元素后，可在这里编辑名称、指令、超时和重试策略。"))}</span></div>
         </aside>
       `;
     }
@@ -571,10 +743,10 @@
           <section class="workspace blueprint-workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}">
             ${sidebarRestoreButton}
             <div class="workspace-topbar">
-              <div class="project-heading"><h1 class="workspace-title">蓝图工作区</h1><div class="workspace-subtitle">通过节点和连接编排可重复执行的用户任务</div></div>
-              <button class="primary-button" data-action="show-create-blueprint">＋ 新建蓝图</button>
+              <div class="project-heading"><h1 class="workspace-title">${esc(text("workspace.title", "蓝图工作区"))}</h1><div class="workspace-subtitle">${esc(text("workspace.subtitle", "通过节点和连接编排可重复执行的用户任务"))}</div></div>
+              <button class="primary-button" data-action="show-create-blueprint">＋ ${esc(text("action.new", "新建蓝图"))}</button>
             </div>
-            <div class="blueprint-empty-state"><div><b>◇</b><h2>创建你的第一张任务蓝图</h2><p>将规划、Agent、工具、分支和人工审批组合成完整工作流。</p><button class="primary-button" data-action="show-create-blueprint">＋ 新建蓝图</button></div></div>
+            <div class="blueprint-empty-state"><div><b>◇</b><h2>${esc(text("empty.title", "创建你的第一张任务蓝图"))}</h2><p>${esc(text("empty.desc", "将规划、Agent、工具、分支和人工审批组合成完整工作流。"))}</p><div class="blueprint-empty-actions"><button class="secondary-button" data-action="show-generate-blueprint">✦ ${esc(text("action.generate", "根据任务生成蓝图"))}</button><button class="primary-button" data-action="show-create-blueprint">＋ ${esc(text("action.new", "新建蓝图"))}</button></div></div></div>
           </section>
         `;
       }
@@ -585,13 +757,14 @@
           <div class="workspace-topbar blueprint-topbar">
             <div class="project-heading">
               <div class="blueprint-title-row"><h1 class="workspace-title">${esc(blueprint.name)}</h1><span class="blueprint-version">v${blueprint.version}</span></div>
-              <div class="workspace-subtitle">${esc(blueprint.description || "通过可视化流程完成用户任务")}</div>
+              <div class="workspace-subtitle">${esc(blueprint.description || text("workspace.description", "通过可视化流程完成用户任务"))}</div>
             </div>
             <div class="workspace-actions">
-              <span class="blueprint-validation-pill ${validation.ok ? "ok" : "error"}">${validation.ok ? "结构有效" : "需要修复"} · ${validation.issues.length}</span>
-              <button class="secondary-button" data-action="show-blueprint-tasks">任务记录 ${blueprint.tasks.length}</button>
-              <button class="secondary-button" data-action="validate-blueprint">检查蓝图</button>
-              <button class="primary-button" data-action="show-blueprint-task">＋ 使用蓝图创建任务</button>
+              <span class="blueprint-validation-pill ${validation.ok ? "ok" : "error"}">${esc(text(validation.ok ? "validation.valid" : "validation.fix", validation.ok ? "结构有效" : "需要修复"))} · ${validation.issues.length}</span>
+              <button class="secondary-button" data-action="show-blueprint-tasks">${esc(text("action.taskRecords", "任务记录"))} ${blueprint.tasks.length}</button>
+              <button class="secondary-button" data-action="validate-blueprint">${esc(text("action.validate", "检查蓝图"))}</button>
+              <button class="secondary-button" data-action="show-generate-blueprint">✦ ${esc(text("action.generate", "根据任务生成蓝图"))}</button>
+              <button class="primary-button" data-action="show-blueprint-task">＋ ${esc(text("action.createTask", "使用蓝图创建任务"))}</button>
             </div>
           </div>
           <div class="blueprint-editor">
@@ -620,6 +793,7 @@
     getGroupBounds,
     createNode,
     createBlueprint,
+    generateBlueprintFromTask,
     ensureBlueprintShape,
     validateBlueprint,
     autoLayout,

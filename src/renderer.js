@@ -102,28 +102,29 @@ const blueprintRuntime = window.COSS_BLUEPRINT_RUNTIME.createBlueprintRuntime({
         moduleSummary: node.name,
         prompt,
         cwd: task.workspace,
+        timeoutMs: Number(node.timeoutMs) > 0 ? Number(node.timeoutMs) : 900000,
         codeBuddyApiKey: state.settings.codeBuddyApiKey || ""
       });
       if (!result?.ok) throw new Error(result?.error || "Agent 节点执行失败。");
       return { output: result.output, rawOutput: result.rawOutput || "", provider: result.provider || provider, runId: result.runId, latencyMs: result.latencyMs };
     },
-    command: async ({ task, node, instruction }) => {
+    command: async ({ task, node, scope, instruction }) => {
       if (!window.cossAPI?.runBlueprintCommand) throw new Error("当前运行环境未提供命令执行服务。");
       const result = await window.cossAPI.runBlueprintCommand({
-        command: node.config.command || instruction,
+        command: blueprintRuntime.renderTemplate(node.config.command || "", scope) || instruction,
         cwd: node.config.workingDirectory || task.workspace,
         timeoutMs: node.timeoutMs || 120000
       });
       if (!result?.ok) throw new Error(result?.error || "命令执行失败。");
       return result;
     },
-    file: async ({ task, node, instruction }) => {
+    file: async ({ task, node, scope, instruction }) => {
       const operation = node.config.operation || "read";
       const filePath = node.config.path || "";
       let result;
       if (operation === "read") result = await window.cossAPI?.readProjectFile?.({ projectPath: task.workspace, filePath });
       else if (operation === "write" || operation === "append") {
-        let content = node.config.content || instruction || "";
+        let content = blueprintRuntime.renderTemplate(node.config.content || "", scope) || instruction || "";
         if (operation === "append") {
           const previous = await window.cossAPI?.readProjectFile?.({ projectPath: task.workspace, filePath });
           if (previous?.ok) content = previous.content + content;
@@ -139,7 +140,7 @@ const blueprintRuntime = window.COSS_BLUEPRINT_RUNTIME.createBlueprintRuntime({
       return result;
     },
     browser: async ({ node, instruction, scope }) => {
-      const url = node.config.url || instruction;
+      const url = blueprintRuntime.renderTemplate(node.config.url || "", scope) || instruction;
       if (!/^https?:\/\//i.test(url)) throw new Error("浏览器节点需要有效的 HTTP/HTTPS 地址。");
       let actions = [];
       if ((node.config.mode || "extract-text") === "actions") {
@@ -768,6 +769,10 @@ function t(key, fallback = key, values = {}) {
   return interpolateText(template, values);
 }
 
+// World engine and other isolated renderers use this bridge so their labels
+// follow the same language as the DOM without importing renderer internals.
+window.COSS_TRANSLATE = t;
+
 function getDefaultAgentPromptTemplate() {
   return t("agent.prompt.default.template", I18N_RESOURCES[defaultState.settings.language]?.translation?.["agent.prompt.default.template"] || "");
 }
@@ -784,6 +789,7 @@ let pendingProgramType = null;
 let focusedWindowId = null;
 let activePopoverWindowId = null;
 let dragState = null;
+let forceFullRender = false;
 let zSeed = 20;
 const WINDOW_Z_BASE = 20;
 const WINDOW_Z_MAX = 9990;
@@ -7854,6 +7860,8 @@ async function executeCustomMenuCommand(command) {
 
 function render() {
   syncI18nLanguage();
+  const shouldForceFullRender = forceFullRender;
+  forceFullRender = false;
   document.documentElement.lang = getAppLanguage();
   document.documentElement.dir = getAppLanguage() === "ar-SA" ? "rtl" : "ltr";
   const project = getProject();
@@ -7867,7 +7875,8 @@ function render() {
     && existingWorldWorkspace?.dataset.worldViewMode === requestedWorldMode
     && existingWorldWorkspace?.dataset.sidebarCollapsed === String(Boolean(sidebarCollapsed))
     && !contextMenu
-    && !roleMenu;
+    && !roleMenu
+    && !shouldForceFullRender;
   if (canRefreshWorldIncrementally) {
     worldEngineInstance.updateWorld(activeWorld);
     const chatBadge = existingWorldWorkspace.querySelector('[data-action="show-world-chat"] .button-badge');
@@ -8017,33 +8026,90 @@ function showCreateBlueprintModal() {
   closeMenus();
   renderModal(`
     <div class="modal blueprint-create-modal">
-      <h2>新建蓝图</h2>
-      <p>创建一张独立的任务流程图。默认包含开始、规划、Agent 任务和完成节点。</p>
+      <h2>${escapeHtml(t("blueprint.modal.create.title", "新建蓝图"))}</h2>
+      <p>${escapeHtml(t("blueprint.modal.create.desc", "创建一张独立的任务流程图。默认包含开始、规划、Agent 任务和完成节点。"))}</p>
       <div class="form-grid">
-        <div class="field"><label for="blueprintName">蓝图名称</label><input id="blueprintName" value="新任务蓝图" /></div>
-        <div class="field"><label for="blueprintDescription">用途说明</label><textarea id="blueprintDescription">通过多角色协作完成用户任务。</textarea></div>
+        <div class="field"><label for="blueprintName">${escapeHtml(t("blueprint.modal.name", "蓝图名称"))}</label><input id="blueprintName" value="${escapeHtml(t("blueprint.modal.defaultName", "新任务蓝图"))}" /></div>
+        <div class="field"><label for="blueprintDescription">${escapeHtml(t("blueprint.modal.description", "用途说明"))}</label><textarea id="blueprintDescription">${escapeHtml(t("blueprint.modal.defaultDescription", "通过多角色协作完成用户任务。"))}</textarea></div>
         <div class="field">
-          <label for="blueprintPath">默认工作目录（可选）</label>
+          <label for="blueprintPath">${escapeHtml(t("blueprint.modal.defaultWorkspace", "默认工作目录（可选）"))}</label>
           <div class="path-picker-row">
-            <input id="blueprintPath" value="${escapeHtml(getProject()?.path || "")}" placeholder="运行任务时可再次指定" />
-            <button class="secondary-button" data-action="choose-blueprint-directory">选择文件夹</button>
+            <input id="blueprintPath" value="${escapeHtml(getProject()?.path || "")}" placeholder="${escapeHtml(t("blueprint.modal.workspacePlaceholder", "运行任务时可再次指定"))}" />
+            <button class="secondary-button" data-action="choose-blueprint-directory">${escapeHtml(t("project.create.chooseFolder", "选择文件夹"))}</button>
           </div>
-          <div id="blueprintPathStatus" class="form-status muted">蓝图本身会保存在 CosS 状态中。</div>
+          <div id="blueprintPathStatus" class="form-status muted">${escapeHtml(t("blueprint.modal.stateNote", "蓝图本身会保存在 CosS 状态中。"))}</div>
         </div>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
-        <button class="primary-button" data-action="create-blueprint">创建并打开</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="primary-button" data-action="create-blueprint">${escapeHtml(t("blueprint.modal.create.submit", "创建并打开"))}</button>
       </div>
     </div>
   `);
 }
 
+function showGenerateBlueprintModal() {
+  closeMenus();
+  renderModal(`
+    <div class="modal blueprint-generate-modal">
+      <h2>${escapeHtml(t("blueprint.modal.generate.title", "根据任务生成蓝图"))}</h2>
+      <p>${escapeHtml(t("blueprint.modal.generate.desc", "系统会根据任务目标自动选择节点、填写属性、创建流程和数据连接。生成后仍可在画布中微调。"))}</p>
+      <div class="form-grid">
+        <div class="field"><label for="generateBlueprintName">${escapeHtml(t("blueprint.modal.nameOptional", "蓝图名称（可选）"))}</label><input id="generateBlueprintName" value="" placeholder="${escapeHtml(t("blueprint.modal.namePlaceholder", "例如：项目检查与报告"))}" /></div>
+        <div class="field"><label for="generateBlueprintGoal">${escapeHtml(t("blueprint.modal.goal", "任务目标"))}</label><textarea id="generateBlueprintGoal" rows="4" placeholder="${escapeHtml(t("blueprint.modal.goalPlaceholder", "描述最终需要完成的效果，例如：读取 package.json，分析项目并生成报告。"))}"></textarea></div>
+        <div class="field"><label for="generateBlueprintInputPath">${escapeHtml(t("blueprint.modal.inputFile", "输入文件（可选）"))}</label><input id="generateBlueprintInputPath" placeholder="${escapeHtml(t("blueprint.modal.inputPlaceholder", "例如：package.json 或 README.md"))}" /></div>
+        <div class="field"><label for="generateBlueprintOutputPath">${escapeHtml(t("blueprint.modal.outputFile", "交付文件（可选）"))}</label><input id="generateBlueprintOutputPath" placeholder="${escapeHtml(t("blueprint.modal.outputPlaceholder", "例如：blueprint-output.md"))}" /></div>
+        <div class="field"><label for="generateBlueprintPath">${escapeHtml(t("blueprint.modal.workspace", "工作目录"))}</label><div class="path-picker-row"><input id="generateBlueprintPath" value="${escapeHtml(getProject()?.path || "")}" placeholder="${escapeHtml(t("blueprint.modal.workspacePlaceholder", "运行任务时可再次指定"))}" /><button class="secondary-button" data-action="choose-blueprint-directory">${escapeHtml(t("project.create.chooseFolder", "选择文件夹"))}</button></div></div>
+        <div class="field"><label for="generateBlueprintMode">${escapeHtml(t("blueprint.modal.mode", "生成方式"))}</label><select id="generateBlueprintMode"><option value="review" selected>${escapeHtml(t("blueprint.modal.mode.review", "生成后确认（推荐）"))}</option><option value="draft">${escapeHtml(t("blueprint.modal.mode.draft", "仅生成草稿"))}</option><option value="task">${escapeHtml(t("blueprint.modal.mode.task", "生成并创建任务"))}</option></select></div>
+      </div>
+      <label class="blueprint-check"><input id="generateBlueprintAllowSideEffects" type="checkbox" checked /> ${escapeHtml(t("blueprint.modal.allowSideEffects", "允许生成需要确认的写文件、命令或网页操作节点"))}</label>
+      <div id="generateBlueprintStatus" class="form-status muted">${escapeHtml(t("blueprint.modal.generate.status", "生成结果会创建为一张新的蓝图，不会覆盖当前蓝图。"))}</div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button><button class="primary-button" data-action="generate-blueprint">${escapeHtml(t("blueprint.modal.generate.submit", "生成并打开"))}</button></div>
+    </div>
+  `);
+}
+
+function generateBlueprintFromTaskModal() {
+  const goal = document.getElementById("generateBlueprintGoal")?.value?.trim();
+  const status = document.getElementById("generateBlueprintStatus");
+  if (!goal) {
+    if (status) {
+      status.className = "form-status error";
+      status.textContent = t("blueprint.modal.goalRequired", "请先描述任务目标。");
+    }
+    document.getElementById("generateBlueprintGoal")?.focus();
+    return;
+  }
+  const mode = document.getElementById("generateBlueprintMode")?.value || "review";
+  const workspace = document.getElementById("generateBlueprintPath")?.value?.trim() || getProject()?.path || "";
+  const blueprint = window.COSS_BLUEPRINT.generateBlueprintFromTask({
+    name: document.getElementById("generateBlueprintName")?.value?.trim(),
+    goal,
+    mode,
+    workspace,
+    inputPath: document.getElementById("generateBlueprintInputPath")?.value?.trim(),
+    outputPath: document.getElementById("generateBlueprintOutputPath")?.value?.trim(),
+    allowSideEffects: Boolean(document.getElementById("generateBlueprintAllowSideEffects")?.checked)
+  }, uid);
+  state.blueprints.unshift(blueprint);
+  state.activeBlueprintId = blueprint.id;
+  state.activeSidebarSection = "blueprints";
+  if (mode === "task") {
+    const task = blueprintRuntime.createTask(blueprint, { goal, workspace });
+    blueprint.tasks.unshift(task);
+    blueprint.ui.activeTaskId = task.id;
+  }
+  closeModal();
+  saveState();
+  render();
+  if (mode === "task") showBlueprintRunModal(blueprint.ui.activeTaskId);
+}
+
 async function chooseBlueprintDirectoryFromModal() {
-  const input = document.getElementById("blueprintPath") || document.getElementById("blueprintTaskPath");
-  const status = document.getElementById("blueprintPathStatus") || document.getElementById("blueprintTaskStatus");
+  const input = document.getElementById("blueprintPath") || document.getElementById("blueprintTaskPath") || document.getElementById("generateBlueprintPath");
+  const status = document.getElementById("blueprintPathStatus") || document.getElementById("blueprintTaskStatus") || document.getElementById("generateBlueprintStatus");
   if (!input || !window.cossAPI?.selectProjectDirectory) {
-    if (status) status.textContent = "当前运行环境无法打开文件夹选择器。";
+    if (status) status.textContent = t("blueprint.modal.folderPickerUnavailable", "当前运行环境无法打开文件夹选择器。");
     return;
   }
   const result = await window.cossAPI.selectProjectDirectory(input.value.trim());
@@ -8051,7 +8117,7 @@ async function chooseBlueprintDirectoryFromModal() {
     input.value = result.path;
     if (status) {
       status.className = "form-status ready";
-      status.textContent = "已选择工作目录。";
+      status.textContent = t("blueprint.modal.workspaceSelected", "已选择工作目录。");
     }
   }
 }
@@ -8078,12 +8144,12 @@ function showDeleteBlueprintModal(blueprintId) {
   if (!blueprint) return;
   renderModal(`
     <div class="modal">
-      <h2>删除蓝图</h2>
-      <p>这会从 CosS 中删除蓝图定义和它的任务记录，不会删除工作目录中的文件。</p>
-      <div class="message-empty"><strong>${escapeHtml(blueprint.name)}</strong><p>${blueprint.nodes.length} 个节点 · ${blueprint.edges.length} 条连接</p></div>
+      <h2>${escapeHtml(t("blueprint.modal.delete.title", "删除蓝图"))}</h2>
+      <p>${escapeHtml(t("blueprint.modal.delete.desc", "这会从 CosS 中删除蓝图定义和它的任务记录，不会删除工作目录中的文件。"))}</p>
+      <div class="message-empty"><strong>${escapeHtml(blueprint.name)}</strong><p>${blueprint.nodes.length} ${escapeHtml(t("blueprint.count.nodes", "个节点"))} · ${blueprint.edges.length} ${escapeHtml(t("blueprint.count.edges", "条连接"))}</p></div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">取消</button>
-        <button class="secondary-button danger" data-action="confirm-delete-blueprint" data-blueprint-id="${escapeHtml(blueprint.id)}">删除蓝图</button>
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button>
+        <button class="secondary-button danger" data-action="confirm-delete-blueprint" data-blueprint-id="${escapeHtml(blueprint.id)}">${escapeHtml(t("blueprint.modal.delete.submit", "删除蓝图"))}</button>
       </div>
     </div>
   `);
@@ -8387,7 +8453,7 @@ function groupBlueprintSelection() {
   if (!blueprint || nodeIds.length < 2) return;
   recordBlueprintEdit(blueprint);
   blueprint.groups ||= [];
-  blueprint.groups.push({ id: uid("bp-group"), name: `节点分组 ${blueprint.groups.length + 1}`, nodeIds, color: "#6b8afd", collapsed: false });
+  blueprint.groups.push({ id: uid("bp-group"), name: t("blueprint.group.defaultName", "节点分组 {{index}}", { index: blueprint.groups.length + 1 }), nodeIds, color: "#6b8afd", collapsed: false });
   blueprint.updatedAt = new Date().toISOString();
   saveState();
   render();
@@ -8440,14 +8506,14 @@ function showBlueprintValidation() {
   if (!blueprint) return;
   const result = window.COSS_BLUEPRINT.validateBlueprint(blueprint);
   const rows = result.issues.length
-    ? result.issues.map((issue) => `<button class="blueprint-issue ${issue.level}" data-action="focus-blueprint-issue" data-node-id="${escapeHtml(issue.nodeId || "")}"><b>${issue.level === "error" ? "错误" : "提醒"}</b><span>${escapeHtml(issue.message)}</span></button>`).join("")
-    : `<div class="blueprint-validation-success"><b>✓</b><strong>蓝图结构有效</strong><span>开始、结束和可达性检查均已通过。</span></div>`;
+     ? result.issues.map((issue) => `<button class="blueprint-issue ${issue.level}" data-action="focus-blueprint-issue" data-node-id="${escapeHtml(issue.nodeId || "")}"><b>${issue.level === "error" ? escapeHtml(t("blueprint.validation.error", "Error")) : escapeHtml(t("blueprint.validation.warning", "Warning"))}</b><span>${escapeHtml(issue.message)}</span></button>`).join("")
+     : `<div class="blueprint-validation-success"><b>✓</b><strong>${escapeHtml(t("blueprint.validation.success", "Blueprint structure is valid"))}</strong><span>${escapeHtml(t("blueprint.validation.successDesc", "Entry, exit, reachability, and key node checks passed."))}</span></div>`;
   renderModal(`
     <div class="modal blueprint-validation-modal">
-      <h2>蓝图检查</h2>
-      <p>检查入口、出口、连接可达性和关键节点配置。警告不会阻止保存。</p>
+      <h2>${escapeHtml(t("blueprint.validation.title", "检查蓝图"))}</h2>
+      <p>${escapeHtml(t("blueprint.validation.desc", "检查入口、出口、连接可达性和关键节点配置。警告不会阻止保存。"))}</p>
       <div class="blueprint-issue-list">${rows}</div>
-      <div class="modal-actions"><button class="primary-button" data-action="close-modal">完成</button></div>
+      <div class="modal-actions"><button class="primary-button" data-action="close-modal">${escapeHtml(t("common.done", "完成"))}</button></div>
     </div>
   `);
 }
@@ -8458,12 +8524,12 @@ function showBlueprintTaskModal() {
   const validation = window.COSS_BLUEPRINT.validateBlueprint(blueprint);
   renderModal(`
     <div class="modal blueprint-task-modal">
-      <h2>使用“${escapeHtml(blueprint.name)}”创建任务</h2>
-      <p>任务会冻结当前蓝图版本，并由图执行器按连接顺序运行。命令、写文件和 MCP 等副作用节点会先请求批准。</p>
-      <div class="field"><label for="blueprintTaskGoal">任务目标</label><textarea id="blueprintTaskGoal" placeholder="描述最终需要完成的效果"></textarea></div>
-      <div class="field"><label for="blueprintTaskPath">工作目录</label><div class="path-picker-row"><input id="blueprintTaskPath" value="${escapeHtml(blueprint.path)}" /><button class="secondary-button" data-action="choose-blueprint-directory">选择文件夹</button></div></div>
-      <div id="blueprintTaskStatus" class="form-status ${validation.ok ? "ready" : "error"}">${validation.ok ? "结构检查通过，可以创建任务。" : "蓝图存在结构错误，请先检查并修复。"}</div>
-      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="create-blueprint-task" ${validation.ok ? "" : "disabled"}>创建任务</button></div>
+      <h2>${escapeHtml(t("blueprint.task.create.title", "使用“{{name}}”创建任务", { name: blueprint.name }))}</h2>
+      <p>${escapeHtml(t("blueprint.task.create.desc", "任务会冻结当前蓝图版本，并由图执行器按连接顺序运行。这里填写本次运行目标，规划器和 Agent 会将其作为统一上下文；节点执行指令只描述具体动作。命令、写文件和 MCP 等副作用节点会先请求批准。"))}</p>
+      <div class="field"><label for="blueprintTaskGoal">${escapeHtml(t("blueprint.task.goal", "本次运行目标"))}</label><textarea id="blueprintTaskGoal" placeholder="${escapeHtml(t("blueprint.task.goalPlaceholder", "描述本次运行最终需要完成的效果"))}"></textarea></div>
+      <div class="field"><label for="blueprintTaskPath">${escapeHtml(t("blueprint.modal.workspace", "工作目录"))}</label><div class="path-picker-row"><input id="blueprintTaskPath" value="${escapeHtml(blueprint.path)}" /><button class="secondary-button" data-action="choose-blueprint-directory">${escapeHtml(t("project.create.chooseFolder", "选择文件夹"))}</button></div></div>
+      <div id="blueprintTaskStatus" class="form-status ${validation.ok ? "ready" : "error"}">${escapeHtml(validation.ok ? t("blueprint.task.validationReady", "结构检查通过，可以创建任务。") : t("blueprint.task.validationError", "蓝图存在结构错误，请先检查并修复。"))}</div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button><button class="primary-button" data-action="create-blueprint-task" ${validation.ok ? "" : "disabled"}>${escapeHtml(t("blueprint.task.create.submit", "创建任务"))}</button></div>
     </div>
   `);
 }
@@ -8474,32 +8540,32 @@ function showBlueprintTasksModal() {
   const taskRows = blueprint.tasks.length ? blueprint.tasks.map((task) => `
     <div class="blueprint-task-row">
       <span class="blueprint-task-status ${escapeHtml(task.status)}">${getBlueprintTaskStatusLabel(task.status)}</span>
-      <div><strong>${escapeHtml(task.goal)}</strong><small>${escapeHtml(task.workspace || "未指定工作目录")} · 蓝图 v${Number(task.blueprintVersion) || 1}</small></div>
-      <div class="blueprint-task-row-actions"><button class="secondary-button compact" data-action="view-blueprint-run" data-task-id="${escapeHtml(task.id)}">查看运行</button><button class="secondary-button compact danger" data-action="show-delete-blueprint-task" data-task-id="${escapeHtml(task.id)}">删除</button></div>
+       <div><strong>${escapeHtml(task.goal)}</strong><small>${escapeHtml(task.workspace || t("blueprint.task.noWorkspace", "No workspace specified"))} · Blueprint v${Number(task.blueprintVersion) || 1}</small></div>
+       <div class="blueprint-task-row-actions"><button class="secondary-button compact" data-action="view-blueprint-run" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.task.viewRun", "查看运行"))}</button><button class="secondary-button compact danger" data-action="show-delete-blueprint-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("common.delete", "删除"))}</button></div>
     </div>
-  `).join("") : `<div class="message-empty"><strong>暂无任务记录</strong><p>填写任务目标并绑定当前蓝图版本后，记录会显示在这里。</p></div>`;
+  `).join("") : `<div class="message-empty"><strong>${escapeHtml(t("blueprint.task.noRecords", "暂无任务记录"))}</strong><p>${escapeHtml(t("blueprint.task.noRecordsDesc", "填写任务目标并绑定当前蓝图版本后，记录会显示在这里。"))}</p></div>`;
   renderModal(`
     <div class="modal blueprint-task-list-modal">
-      <h2>${escapeHtml(blueprint.name)} · 任务记录</h2>
-      <p>这里显示基于当前蓝图创建的任务，可进入运行面板查看节点状态、日志和交付物。</p>
+      <h2>${escapeHtml(blueprint.name)} · ${escapeHtml(t("blueprint.action.taskRecords", "任务记录"))}</h2>
+      <p>${escapeHtml(t("blueprint.task.recordsDesc", "这里显示基于当前蓝图创建的任务，可进入运行面板查看节点状态、日志和交付物。"))}</p>
       <div class="blueprint-task-list">${taskRows}</div>
-      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">关闭</button><button class="primary-button" data-action="show-blueprint-task">＋ 创建任务</button></div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button><button class="primary-button" data-action="show-blueprint-task">＋ ${escapeHtml(t("blueprint.task.create.submit", "创建任务"))}</button></div>
     </div>
   `);
 }
 
 function getBlueprintTaskStatusLabel(status) {
   return {
-    ready: "就绪",
-    running: "运行中",
-    waiting: "等待中",
-    paused: "已暂停",
-    completed: "已完成",
-    failed: "失败",
-    canceled: "已取消",
-    idle: "未运行",
-    skipped: "已跳过"
-  }[status] || String(status || "未知");
+    ready: t("blueprint.status.ready", "就绪"),
+    running: t("blueprint.status.running", "运行中"),
+    waiting: t("blueprint.status.waiting", "等待中"),
+    paused: t("blueprint.status.paused", "已暂停"),
+    completed: t("blueprint.status.completed", "已完成"),
+    failed: t("blueprint.status.failed", "失败"),
+    canceled: t("blueprint.status.canceled", "已取消"),
+    idle: t("blueprint.status.idle", "未运行"),
+    skipped: t("blueprint.status.skipped", "已跳过")
+  }[status] || String(status || t("blueprint.status.unknown", "未知"));
 }
 
 function getBlueprintTask(taskId, blueprint = getBlueprint()) {
@@ -8554,57 +8620,57 @@ function showBlueprintRunModal(taskId) {
   const executionNodes = task.definition?.nodes || blueprint.nodes;
   const nodeRows = executionNodes.map((node, index) => {
     const run = task.nodeRuns[node.id];
-    const output = run?.output === null || run?.output === undefined ? "" : `<details><summary>查看输出</summary><pre>${escapeHtml(formatBlueprintRuntimeValue(run.output))}</pre></details>`;
+    const output = run?.output === null || run?.output === undefined ? "" : `<details><summary>${escapeHtml(t("blueprint.run.viewOutput", "查看输出"))}</summary><pre>${escapeHtml(formatBlueprintRuntimeValue(run.output))}</pre></details>`;
     const instances = run?.instances?.length ? `
       <details class="blueprint-instance-details">
-        <summary>逐项实例 ${run.instances.filter((item) => item.status === "completed").length} / ${run.instances.length}</summary>
+        <summary>${escapeHtml(t("blueprint.run.instances", "逐项实例"))} ${run.instances.filter((item) => item.status === "completed").length} / ${run.instances.length}</summary>
         <div class="blueprint-instance-list">${run.instances.map((instance) => `<div class="blueprint-instance ${escapeHtml(instance.status)}"><b>#${instance.index + 1}</b><span>${escapeHtml(formatBlueprintRuntimeValue(instance.item, 80))}</span><em>${escapeHtml(getBlueprintTaskStatusLabel(instance.status))}</em>${instance.error ? `<small>${escapeHtml(instance.error)}</small>` : ""}</div>`).join("")}</div>
       </details>
     ` : "";
     const rerunAction = run && ["completed", "failed", "skipped"].includes(run.status) && !["running", "waiting"].includes(task.status)
-      ? `<button class="blueprint-node-rerun" data-action="rerun-blueprint-node" data-task-id="${escapeHtml(task.id)}" data-node-id="${escapeHtml(node.id)}">重跑</button>` : "";
+      ? `<button class="blueprint-node-rerun" data-action="rerun-blueprint-node" data-task-id="${escapeHtml(task.id)}" data-node-id="${escapeHtml(node.id)}">${escapeHtml(t("blueprint.run.rerun", "重跑"))}</button>` : "";
     return `
       <div class="blueprint-run-node ${escapeHtml(run?.status || "idle")} ${task.currentNodeId === node.id ? "current" : ""}">
         <span class="blueprint-run-index">${index + 1}</span>
         <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(window.COSS_BLUEPRINT.TYPE_MAP[node.type]?.name || node.type)} · ${getBlueprintTaskStatusLabel(run?.status === "idle" ? "未运行" : run?.status)}</small>${run?.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ""}${instances}${output}</div>
-        <span class="blueprint-run-attempt">${run?.attempts ? "尝试 " + run.attempts : ""}${rerunAction}</span>
+        <span class="blueprint-run-attempt">${run?.attempts ? escapeHtml(t("blueprint.run.attempt", "Attempt {{count}}", { count: run.attempts })) : ""}${rerunAction}</span>
       </div>
     `;
   }).join("");
   const pending = task.pending ? `
     <section class="blueprint-pending-card ${escapeHtml(task.pending.type)}">
-      <div><strong>等待处理</strong><span>${escapeHtml(task.pending.message || "")}</span></div>
-      ${["human-input", "review-edit", "approval", "deliverable-gate", "adapter"].includes(task.pending.type) ? `<textarea id="blueprintPendingValue" placeholder="填写输入、修改内容、审批意见或外部工具结果"></textarea>` : ""}
+       <div><strong>${escapeHtml(t("blueprint.run.pending", "Action required"))}</strong><span>${escapeHtml(task.pending.message || "")}</span></div>
+       ${["human-input", "review-edit", "approval", "deliverable-gate", "adapter"].includes(task.pending.type) ? `<textarea id="blueprintPendingValue" placeholder="${escapeHtml(t("blueprint.run.pendingPlaceholder", "Enter input, edits, approval notes, or external tool output"))}"></textarea>` : ""}
       <div class="blueprint-pending-actions">
         ${task.pending.type === "timer"
-          ? `<button class="primary-button" data-action="continue-blueprint-run" data-task-id="${escapeHtml(task.id)}">到期后继续</button>`
-          : `<button class="secondary-button danger" data-action="reject-blueprint-pending" data-task-id="${escapeHtml(task.id)}">拒绝 / 失败</button><button class="primary-button" data-action="approve-blueprint-pending" data-task-id="${escapeHtml(task.id)}">批准并继续</button>`}
+           ? `<button class="primary-button" data-action="continue-blueprint-run" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.run.continueAfterTimer", "Continue when due"))}</button>`
+           : `<button class="secondary-button danger" data-action="reject-blueprint-pending" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.run.reject", "Reject / fail"))}</button><button class="primary-button" data-action="approve-blueprint-pending" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.run.approve", "Approve and continue"))}</button>`}
       </div>
     </section>
   ` : "";
   const eventRows = task.events.slice(-40).reverse().map((event) => `
-    <div class="blueprint-run-event ${escapeHtml(event.level)}"><time>${escapeHtml(formatDateTime(event.at))}</time><strong>${escapeHtml(event.nodeName || "蓝图任务")}</strong><span>${escapeHtml(event.type)}</span></div>
-  `).join("") || `<div class="message-empty">尚无运行事件</div>`;
-  const artifactRows = task.artifacts.map((artifact) => `<div class="blueprint-artifact-row"><strong>${escapeHtml(artifact.type)}</strong><span>${escapeHtml(formatBlueprintRuntimeValue(artifact.source || artifact.value, 180))}</span></div>`).join("") || `<div class="message-empty">尚无交付物</div>`;
+    <div class="blueprint-run-event ${escapeHtml(event.level)}"><time>${escapeHtml(formatDateTime(event.at))}</time><strong>${escapeHtml(event.nodeName || t("blueprint.task.title", "Blueprint task"))}</strong><span>${escapeHtml(event.type)}</span></div>
+  `).join("") || `<div class="message-empty">${escapeHtml(t("blueprint.run.noEvents", "No runtime events yet"))}</div>`;
+  const artifactRows = task.artifacts.map((artifact) => `<div class="blueprint-artifact-row"><strong>${escapeHtml(artifact.type)}</strong><span>${escapeHtml(formatBlueprintRuntimeValue(artifact.source || artifact.value, 180))}</span></div>`).join("") || `<div class="message-empty">${escapeHtml(t("blueprint.run.noArtifacts", "No deliverables yet"))}</div>`;
   const primaryAction = task.status === "ready" || task.status === "failed" || task.status === "paused"
-    ? `<button class="primary-button" data-action="run-blueprint-task" data-task-id="${escapeHtml(task.id)}">${task.status === "paused" ? "继续运行" : (task.status === "failed" ? "重试失败节点" : "启动任务")}</button>`
+     ? `<button class="primary-button" data-action="run-blueprint-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(task.status === "paused" ? t("blueprint.run.resume", "继续运行") : (task.status === "failed" ? t("blueprint.run.retryFailed", "重试失败节点") : t("blueprint.run.start", "启动任务")))}</button>`
     : "";
   renderModal(`
     <div class="modal blueprint-run-modal" data-task-id="${escapeHtml(task.id)}">
       <div class="blueprint-run-header">
-        <div><h2>${escapeHtml(task.goal)}</h2><p>${escapeHtml(blueprint.name)} · ${escapeHtml(task.workspace || "未指定目录")}</p></div>
+        <div><h2>${escapeHtml(task.goal)}</h2><p>${escapeHtml(blueprint.name)} · ${escapeHtml(task.workspace || t("blueprint.task.noWorkspace", "未指定目录"))}</p></div>
         <span class="blueprint-run-status ${escapeHtml(task.status)}">${escapeHtml(getBlueprintTaskStatusLabel(task.status))}</span>
       </div>
-      <div class="blueprint-run-summary"><span><b>${completed}</b> / ${executionNodes.length} 节点完成</span><span><b>${failed}</b> 个失败</span><span><b>${task.artifacts.length}</b> 个交付物</span></div>
+      <div class="blueprint-run-summary"><span><b>${completed}</b> / ${executionNodes.length} ${escapeHtml(t("blueprint.run.nodesCompleted", "nodes completed"))}</span><span><b>${failed}</b> ${escapeHtml(t("blueprint.run.failures", "failures"))}</span><span><b>${task.artifacts.length}</b> ${escapeHtml(t("blueprint.run.artifacts", "deliverables"))}</span></div>
       ${pending}
       <div class="blueprint-run-tabs">
-        <section><h3>节点运行</h3><div class="blueprint-run-nodes">${nodeRows}</div></section>
-        <section><h3>事件日志</h3><div class="blueprint-run-events">${eventRows}</div><h3>交付物</h3><div class="blueprint-artifact-list">${artifactRows}</div></section>
+        <section><h3>${escapeHtml(t("blueprint.run.nodeRuns", "Node runs"))}</h3><div class="blueprint-run-nodes">${nodeRows}</div></section>
+        <section><h3>${escapeHtml(t("blueprint.run.events", "Event log"))}</h3><div class="blueprint-run-events">${eventRows}</div><h3>${escapeHtml(t("blueprint.run.deliverables", "Deliverables"))}</h3><div class="blueprint-artifact-list">${artifactRows}</div></section>
       </div>
       <div class="modal-actions">
-        <button class="secondary-button" data-action="close-modal">关闭</button>
-        ${task.status === "running" ? `<button class="secondary-button" data-action="pause-blueprint-run" data-task-id="${escapeHtml(task.id)}">暂停</button>` : ""}
-        ${!["completed", "failed", "canceled"].includes(task.status) ? `<button class="secondary-button danger" data-action="cancel-blueprint-run" data-task-id="${escapeHtml(task.id)}">取消任务</button>` : ""}
+        <button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button>
+        ${task.status === "running" ? `<button class="secondary-button" data-action="pause-blueprint-run" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.run.pause", "暂停"))}</button>` : ""}
+        ${!["completed", "failed", "canceled"].includes(task.status) ? `<button class="secondary-button danger" data-action="cancel-blueprint-run" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.run.cancel", "取消任务"))}</button>` : ""}
         ${primaryAction}
       </div>
     </div>
@@ -8677,19 +8743,19 @@ async function discoverBlueprintMcpTools() {
   if (!blueprint || !node) return;
   const cwd = blueprint.path || getProject()?.path || "";
   if (!cwd) {
-    renderModal(`<div class="modal"><h2>MCP 工具发现</h2><p>请先为蓝图设置默认工作目录，以便读取其中的 .mcp.json。</p><div class="modal-actions"><button class="primary-button" data-action="close-modal">完成</button></div></div>`);
+     renderModal(`<div class="modal"><h2>${escapeHtml(t("blueprint.mcp.title", "MCP 工具发现"))}</h2><p>${escapeHtml(t("blueprint.mcp.workspaceRequired", "请先为蓝图设置默认工作目录，以便读取其中的 .mcp.json。"))}</p><div class="modal-actions"><button class="primary-button" data-action="close-modal">${escapeHtml(t("common.done", "完成"))}</button></div></div>`);
     return;
   }
-  renderModal(`<div class="modal"><h2>MCP 工具发现</h2><p>正在连接 ${escapeHtml(node.config.serverName || "coss")}...</p></div>`);
+  renderModal(`<div class="modal"><h2>${escapeHtml(t("blueprint.mcp.title", "MCP 工具发现"))}</h2><p>${escapeHtml(t("blueprint.mcp.connecting", "正在连接 {{server}}...", { server: node.config.serverName || "coss" }))}</p></div>`);
   const result = await window.cossAPI?.runBlueprintMcp?.({ cwd, serverName: node.config.serverName || "coss", operation: "list-tools", timeoutMs: node.timeoutMs || 60000 });
   const tools = result?.tools || result?.output || [];
   const rows = result?.ok && Array.isArray(tools) && tools.length ? tools.map((tool) => `
     <button class="blueprint-mcp-tool-option" data-action="select-blueprint-mcp-tool" data-tool-name="${escapeHtml(tool.name || "")}">
-      <strong>${escapeHtml(tool.name || "未命名工具")}</strong><span>${escapeHtml(tool.description || "无说明")}</span>
+       <strong>${escapeHtml(tool.name || t("blueprint.mcp.unnamedTool", "未命名工具"))}</strong><span>${escapeHtml(tool.description || t("blueprint.mcp.noDescription", "无说明"))}</span>
     </button>
-  `).join("") : `<div class="message-empty"><strong>未发现工具</strong><p>${escapeHtml(result?.error || "Server 没有返回工具。")}</p></div>`;
+  `).join("") : `<div class="message-empty"><strong>${escapeHtml(t("blueprint.mcp.none", "未发现工具"))}</strong><p>${escapeHtml(result?.error || t("blueprint.mcp.empty", "Server 没有返回工具。"))}</p></div>`;
   renderModal(`
-    <div class="modal blueprint-mcp-tools-modal"><h2>MCP 工具发现</h2><p>${escapeHtml(node.config.serverName || "coss")} · ${Array.isArray(tools) ? tools.length : 0} 个工具</p><div class="blueprint-mcp-tool-list">${rows}</div><div class="modal-actions"><button class="secondary-button" data-action="close-modal">关闭</button></div></div>
+     <div class="modal blueprint-mcp-tools-modal"><h2>${escapeHtml(t("blueprint.mcp.title", "MCP 工具发现"))}</h2><p>${escapeHtml(node.config.serverName || "coss")} · ${Array.isArray(tools) ? tools.length : 0} ${escapeHtml(t("blueprint.mcp.tools", "tools"))}</p><div class="blueprint-mcp-tool-list">${rows}</div><div class="modal-actions"><button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.close", "关闭"))}</button></div></div>
   `);
 }
 
@@ -8711,25 +8777,33 @@ function showDeleteBlueprintTaskModal(taskId) {
   if (!blueprint || !task) return;
   renderModal(`
     <div class="modal">
-      <h2>删除蓝图任务记录</h2>
-      <p>将删除这次运行的冻结蓝图、节点输出、事件日志和交付物记录。工作目录中的文件不会被删除。</p>
-      <div class="message-empty"><strong>${escapeHtml(task.goal)}</strong><p>${escapeHtml(getBlueprintTaskStatusLabel(task.status))} · ${task.events.length} 条事件</p></div>
-      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">取消</button><button class="secondary-button danger" data-action="confirm-delete-blueprint-task" data-task-id="${escapeHtml(task.id)}">删除记录</button></div>
+      <h2>${escapeHtml(t("blueprint.task.delete.title", "删除蓝图任务记录"))}</h2>
+      <p>${escapeHtml(t("blueprint.task.delete.desc", "将删除这次运行的冻结蓝图、节点输出、事件日志和交付物记录。工作目录中的文件不会被删除。"))}</p>
+      <div class="message-empty"><strong>${escapeHtml(task.goal)}</strong><p>${escapeHtml(getBlueprintTaskStatusLabel(task.status))} · ${task.events.length} ${escapeHtml(t("blueprint.task.events", "events"))}</p></div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">${escapeHtml(t("common.cancel", "取消"))}</button><button class="secondary-button danger" data-action="confirm-delete-blueprint-task" data-task-id="${escapeHtml(task.id)}">${escapeHtml(t("blueprint.task.delete.submit", "删除记录"))}</button></div>
     </div>
   `);
 }
 
-function deleteBlueprintTask(taskId) {
+async function deleteBlueprintTask(taskId) {
   const blueprint = getBlueprint();
   const index = blueprint?.tasks?.findIndex((task) => task.id === taskId) ?? -1;
   if (!blueprint || index < 0) return;
+  const task = blueprint.tasks[index];
   const timer = blueprintTimerHandles.get(taskId);
   if (timer) clearTimeout(timer);
   blueprintTimerHandles.delete(taskId);
+  if (["running", "waiting", "paused"].includes(task.status)) {
+    try {
+      await blueprintRuntime.cancel(blueprint, task);
+    } catch {
+      // 删除记录不能因为运行器已经结束或应用正在关闭而被阻塞。
+    }
+  }
   blueprint.tasks.splice(index, 1);
   if (blueprint.ui.activeTaskId === taskId) blueprint.ui.activeTaskId = blueprint.tasks[0]?.id || "";
   closeModal();
-  saveState();
+  await saveState();
   render();
   showBlueprintTasksModal();
 }
@@ -8761,7 +8835,9 @@ function createBlueprintTaskFromModal() {
 function handleBlueprintAction(action, target, event) {
   if (action === "show-blueprint-list") { showBlueprintList(); return true; }
   if (action === "show-create-blueprint") { showCreateBlueprintModal(); return true; }
+  if (action === "show-generate-blueprint") { showGenerateBlueprintModal(); return true; }
   if (action === "create-blueprint") { createBlueprintFromModal(); return true; }
+  if (action === "generate-blueprint") { generateBlueprintFromTaskModal(); return true; }
   if (action === "choose-blueprint-directory") { chooseBlueprintDirectoryFromModal(); return true; }
   if (action === "select-blueprint") { selectBlueprint(target.dataset.blueprintId); return true; }
   if (action === "show-delete-blueprint") { showDeleteBlueprintModal(target.dataset.blueprintId); return true; }
@@ -8852,13 +8928,13 @@ function renderSidebar(project) {
       <button class="project-open" data-action="select-blueprint" data-blueprint-id="${escapeHtml(item.id)}" title="${escapeHtml(item.name)}">
         <span class="nav-icon">◇</span>
         <span class="project-name">${escapeHtml(item.name)}</span>
-        <span class="project-time">${item.nodes?.length || 0} 节点</span>
+        <span class="project-time">${item.nodes?.length || 0} ${escapeHtml(t("blueprint.count.nodes", "节点"))}</span>
       </button>
-      <button class="project-delete" title="删除蓝图" data-action="show-delete-blueprint" data-blueprint-id="${escapeHtml(item.id)}">×</button>
+      <button class="project-delete" title="${escapeHtml(t("blueprint.modal.delete.title", "删除蓝图"))}" data-action="show-delete-blueprint" data-blueprint-id="${escapeHtml(item.id)}">×</button>
     </div>
   `).join("") : "";
 
-  const listTitle = showingWorlds ? t("nav.worlds", "Agent 世界") : (showingBlueprints ? "蓝图" : t("nav.projects", "项目"));
+  const listTitle = showingWorlds ? t("nav.worlds", "Agent 世界") : (showingBlueprints ? t("blueprint.workspace.title", "蓝图") : t("nav.projects", "项目"));
   const plusAction = showingWorlds ? "show-create-world" : (showingBlueprints ? "show-create-blueprint" : "show-create-project");
   const listCount = showingWorlds ? state.worlds.length : (showingBlueprints ? state.blueprints.length : state.projects.length);
 
@@ -8876,18 +8952,18 @@ function renderSidebar(project) {
         <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>${escapeHtml(t("nav.newTask", "新建任务"))}</button>
         <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>${escapeHtml(t("nav.messages", "消息"))}</button>
         <button class="nav-item ${showingProjects ? "active" : ""}" data-action="show-project-list"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
-        <button class="nav-item ${showingBlueprints ? "active" : ""}" data-action="show-blueprint-list"><span class="nav-icon">◇</span>蓝图</button>
+        <button class="nav-item ${showingBlueprints ? "active" : ""}" data-action="show-blueprint-list"><span class="nav-icon">◇</span>${escapeHtml(t("blueprint.workspace.title", "蓝图"))}</button>
         <button class="nav-item ${showingWorlds ? "active" : ""}" data-action="show-world-list"><span class="nav-icon">${icon("globe")}</span>${escapeHtml(t("nav.worlds", "Agent 世界"))}</button>
       </nav>
       <div class="section-title">
         <span>${escapeHtml(listTitle)} (${listCount})</span>
-        <button class="icon-button" title="${escapeHtml(showingWorlds ? t("world.create.title", "新建世界") : (showingBlueprints ? "新建蓝图" : t("nav.newProject", "新建项目")))}" data-action="${escapeHtml(plusAction)}">${icon("plus")}</button>
+        <button class="icon-button" title="${escapeHtml(showingWorlds ? t("world.create.title", "新建世界") : (showingBlueprints ? t("blueprint.action.new", "新建蓝图") : t("nav.newProject", "新建项目")))}" data-action="${escapeHtml(plusAction)}">${icon("plus")}</button>
       </div>
       <div class="project-list">
         ${showingWorlds
           ? (worldItems || `<div class="project-list-empty">${escapeHtml(t("world.list.empty", "暂无世界"))}</div>`)
           : (showingBlueprints
-            ? (blueprintItems || `<div class="project-list-empty">暂无蓝图</div>`)
+            ? (blueprintItems || `<div class="project-list-empty">${escapeHtml(t("blueprint.list.empty", "暂无蓝图"))}</div>`)
             : (projects || `<div class="project-list-empty">${escapeHtml(t("nav.noProjects", "暂无项目"))}</div>`))
         }
       </div>
@@ -11155,6 +11231,10 @@ const interactionService = window.COSS_INTERACTION_SERVICE.createInteractionServ
   setTaskListFilters: (value) => { taskListFilters = value; },
   setSelectedTaskListTaskId: (value) => { selectedTaskListTaskId = value; },
   render,
+  syncLanguage: (language) => {
+    syncI18nLanguage(language);
+    forceFullRender = true;
+  },
   updateFeedbackCounters,
   updateAccountDisplayName,
   updateAccountAvatarFromFile,

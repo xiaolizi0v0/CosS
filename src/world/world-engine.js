@@ -1,4 +1,16 @@
 (() => {
+  const tr = (key, fallback, values = {}) => {
+    if (typeof window.COSS_TRANSLATE === "function") return window.COSS_TRANSLATE(key, fallback, values);
+    return fallback;
+  };
+  const localizedObjectName = (object, fallback = "建筑") => {
+    const assetKey = getObjectProperty(object, "assetKey", "");
+    if (assetKey === "noticeBoard" || object?.type === "board") return tr("world.map.noticeBoard", "公告栏");
+    if (assetKey === "chalkboard" || object?.id === "chat-square") return tr("world.map.chatSquare", "世界群聊");
+    if (object?.type === "plot") return tr("world.map.plot", "规划用地");
+    if (object?.type === "role-house") return object.name?.replace(/-home$/, "") || tr("world.map.residentHome", "居民之家");
+    return object?.name || tr("world.map.building", fallback);
+  };
   const DEFAULT_MAP = { key: "default-meadow", width: 88, height: 64, tileSize: 80 };
   const STATUS_BUBBLES = {
     idle: "…",
@@ -593,12 +605,12 @@
           g.fillStyle(0x70452b, 1).fillRect(width * 0.2, height * 0.34, 8, height * 0.7).fillRect(width * 0.74, height * 0.34, 8, height * 0.7);
           g.fillStyle(0xf0c36d, 1).fillRoundedRect(0, 0, width, height * 0.72, 8);
           g.lineStyle(4, 0x875500, 0.55).strokeRoundedRect(0, 0, width, height * 0.72, 8);
-          this.add.text(x + width / 2, y + height * 0.32, "公告栏", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "15px", fontStyle: "bold", color: "#513b00" }).setOrigin(0.5);
+          this.add.text(x + width / 2, y + height * 0.32, tr("world.map.noticeBoard", "公告栏"), { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "15px", fontStyle: "bold", color: "#513b00" }).setOrigin(0.5);
         } else if (object.type === "plot") {
           g.fillStyle(0xffffff, 0.16).fillRoundedRect(0, 0, width, height, 16);
           g.lineStyle(3, 0xffffff, 0.72).strokeRoundedRect(0, 0, width, height, 16);
           g.lineStyle(2, 0x0f766e, 0.36).strokeRoundedRect(8, 8, width - 16, height - 16, 12);
-          this.add.text(x + width / 2, y + height / 2, "规划用地", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#0f766e" }).setOrigin(0.5);
+          this.add.text(x + width / 2, y + height / 2, tr("world.map.plot", "规划用地"), { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#0f766e" }).setOrigin(0.5);
         } else if (object.type === "house") {
           hintLabel = this.drawHouse(group, object, index, width, height);
         } else {
@@ -639,7 +651,7 @@
           g.lineStyle(2, 0xffffff, 0.45).strokeRoundedRect(0, 0, width, height, 16);
         }
         if (object.action) {
-          const hint = this.createWorldHintLabel(width / 2, height + 12, object.name || "场景物品", {
+          const hint = this.createWorldHintLabel(width / 2, height + 12, localizedObjectName(object, "场景物品"), {
             scrollFactor: 1,
             alpha: 0.66
           });
@@ -660,7 +672,7 @@
         home.on("animationupdate", () => this.fitRoleHouseSprite(home));
         group.add(home);
         this.houseSprites.set(roleId, home);
-        const hint = this.createWorldHintLabel(width / 2, height + 12, object.name?.replace(/-home$/, "") || "居民之家", {
+        const hint = this.createWorldHintLabel(width / 2, height + 12, localizedObjectName(object, "居民之家"), {
           scrollFactor: 1,
           alpha: 0.68
         });
@@ -684,7 +696,7 @@
         g.fillStyle(0xd8434e, 1).fillTriangle(-8, 30, width / 2, 0, width + 8, 30);
         g.fillStyle(0x172033, 0.72).fillRect(width / 2 - 9, height - 30, 18, 30);
         g.fillStyle(0xffffff, 0.8).fillRect(12, 42, 16, 16).fillRect(width - 28, 42, 16, 16);
-        return this.createWorldHintLabel(group.x + width / 2, group.y + height + 18, object.name || "建筑", { alpha: 0.66 });
+        return this.createWorldHintLabel(group.x + width / 2, group.y + height + 18, localizedObjectName(object, "建筑"), { alpha: 0.66 });
       }
 
       drawHouse(group, object, index, width, height) {
@@ -695,7 +707,7 @@
         g.fillStyle(0xb91c1c, 1).fillTriangle(-8, 30, width / 2, 0, width + 8, 30);
         g.fillStyle(0x7a4f2a, 1).fillRect(width / 2 - 9, height - 28, 18, 28);
         g.fillStyle(0xffffff, 0.78).fillRect(12, 38, 14, 14).fillRect(width - 26, 38, 14, 14);
-        return this.createWorldHintLabel(group.x + width / 2, group.y + height + 18, object.name || "小屋", { alpha: 0.66 });
+        return this.createWorldHintLabel(group.x + width / 2, group.y + height + 18, localizedObjectName(object, "小屋"), { alpha: 0.66 });
       }
 
       drawAgent(agent, index) {
@@ -750,9 +762,9 @@
         g.fillStyle(0xffffff, 0.84).fillRoundedRect(0, 0, 292, 96, 14);
         g.lineStyle(1, 0xffffff, 0.62).strokeRoundedRect(0, 0, 292, 96, 14);
         hud.add(g);
-        hud.add(this.add.text(16, 14, this.worldState?.name || "Agent 小镇", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#172033" }));
-        hud.add(this.add.text(16, 40, `地图 ${this.map.width}×${this.map.height} · 缩放 ${this.cameras.main.zoom.toFixed(1)}x`, { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
-        hud.add(this.add.text(16, 62, "拖拽移动视野 · 滚轮调整缩放 · 点击居民或建筑查看详情", { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
+        hud.add(this.add.text(16, 14, this.worldState?.name || tr("world.create.name.default", "我的 Agent 小镇"), { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "14px", fontStyle: "bold", color: "#172033" }));
+        hud.add(this.add.text(16, 40, tr("world.map.stats", "地图 {{width}}×{{height}} · 缩放 {{zoom}}x", { width: this.map.width, height: this.map.height, zoom: this.cameras.main.zoom.toFixed(1) }), { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
+        hud.add(this.add.text(16, 62, tr("world.map.controls", "拖拽移动视野 · 滚轮调整缩放 · 点击居民或建筑查看详情"), { fontFamily: "Microsoft YaHei, sans-serif", fontSize: "12px", color: "#64748b" }));
       }
 
       bindCameraControls() {
@@ -924,12 +936,12 @@
 
     const badge = document.createElement("div");
     badge.className = "world-engine-badge";
-    badge.textContent = "Agent 小镇地图";
+     badge.textContent = tr("world.map.badge", "Agent 小镇地图");
     container.appendChild(badge);
 
     return {
       ready: sceneReady,
-      updateWorld(nextWorld, options = {}) {
+       updateWorld(nextWorld, options = {}) {
         const scene = game.scene.getScene("CosSWorldScene");
         if (scene) {
           const previousMapKey = `${scene.map.key}:${scene.map.width}:${scene.map.height}:${scene.map.tileSize}`;
@@ -941,8 +953,9 @@
           const nextInterior = String(nextWorld?.activeInteriorRoleId || "");
           scene.configureCamera(previousMapKey !== nextMapKey || previousViewMode !== (nextInterior ? `interior:${nextInterior}` : "exterior"));
           scene.selectedAgentId = options.selectedAgentId || scene.selectedAgentId;
-          scene.drawWorld?.();
-        }
+           scene.drawWorld?.();
+         }
+         badge.textContent = tr("world.map.badge", "Agent 小镇地图");
       },
       setMapBadge(text) {
         badge.textContent = text;
@@ -1033,10 +1046,10 @@
     const map = normalizeMap(world?.map);
     const canvas = document.createElement("canvas");
     canvas.className = "world-canvas";
-    canvas.setAttribute("aria-label", "CosS Agent 小镇互动地图");
+     canvas.setAttribute("aria-label", tr("world.home.aria", "CosS Agent 小镇互动地图"));
     const badge = document.createElement("div");
     badge.className = "world-engine-badge";
-    badge.textContent = "Agent 小镇地图 · 兼容模式";
+     badge.textContent = `${tr("world.map.badge", "Agent 小镇地图")} · ${tr("world.map.compatible", "兼容模式")}`;
     container.replaceChildren(canvas, badge);
     const ctx = canvas.getContext("2d");
     const state = {
@@ -1187,7 +1200,7 @@
         ctx.fillStyle = "#334155";
         ctx.font = "12px system-ui";
         ctx.textAlign = "center";
-        ctx.fillText(object.name || object.type || "建筑", x + w / 2, y + h / 2);
+         ctx.fillText(localizedObjectName(object, object.type || "建筑"), x + w / 2, y + h / 2);
       });
       (state.world?.agents || []).filter((agent) => agent.location !== "home" || agent.movement).forEach((agent, index) => {
         const pos = getTilePosition(agent, state.map);
