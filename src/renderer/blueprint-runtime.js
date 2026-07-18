@@ -74,6 +74,21 @@
           durationMs: Math.max(0, Number(run.durationMs) || 0)
         };
       });
+      if (["completed", "failed", "canceled"].includes(task.status)) {
+        const terminalEvents = new Map();
+        task.events.forEach((event) => {
+          if (!event?.nodeId) return;
+          if (["node.completed", "node.resolved"].includes(event.type)) terminalEvents.set(event.nodeId, { status: "completed", at: event.at });
+          if (["node.failed", "node.rejected", "node.error-caught"].includes(event.type)) terminalEvents.set(event.nodeId, { status: "failed", at: event.at });
+        });
+        Object.entries(task.nodeRuns).forEach(([nodeId, run]) => {
+          if (!["running", "waiting", "idle"].includes(run.status)) return;
+          const terminal = terminalEvents.get(nodeId);
+          if (!terminal) return;
+          run.status = terminal.status;
+          run.completedAt ||= String(terminal.at || task.completedAt || "");
+        });
+      }
       return task;
     }
 
@@ -137,16 +152,19 @@
       }
       const enabledNodes = blueprint.nodes.filter((node) => node.enabled !== false);
       const ids = new Set(enabledNodes.map((node) => node.id));
+      const validEdges = blueprint.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
       return {
         nodes: enabledNodes,
         nodeById: new Map(enabledNodes.map((node) => [node.id, node])),
-        edges: blueprint.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)),
+        edges: validEdges.filter((edge) => edge.kind !== "data"),
+        dataEdges: validEdges.filter((edge) => edge.kind === "data"),
         start: enabledNodes.find((node) => node.type === "task-start")
       };
     }
 
     function getIncomingOutput(task, graph, node) {
-      const sources = graph.edges.filter((edge) => edge.to === node.id)
+      const inputEdges = graph.dataEdges?.some((edge) => edge.to === node.id) ? graph.dataEdges : graph.edges;
+      const sources = inputEdges.filter((edge) => edge.to === node.id)
         .map((edge) => task.context.nodes[edge.from]?.output)
         .filter((value) => value !== undefined);
       if (!sources.length) return task.context.input;

@@ -175,11 +175,12 @@ const blueprintRuntime = window.COSS_BLUEPRINT_RUNTIME.createBlueprintRuntime({
     }
   },
   onChange: (_blueprint, task) => {
-    saveState();
+    const saving = saveState();
     scheduleBlueprintTimer(task);
     const refreshRunModal = Boolean(document.querySelector(".blueprint-run-modal"));
     render();
     if (refreshRunModal) showBlueprintRunModal(task.id);
+    return saving;
   }
 });
 
@@ -814,6 +815,9 @@ let sidebarCollapsed = false;
 let sidebarWidth = 216;
 let sidebarResizeState = null;
 let sidebarCollapseTimer = null;
+const blueprintEditHistories = new Map();
+let blueprintClipboard = null;
+let blueprintSuppressPortClickUntil = 0;
 const SIDEBAR_MIN_WIDTH = 216;
 const SIDEBAR_MAX_WIDTH = 360;
 let pendingTaskPlanDraft = null;
@@ -8095,25 +8099,197 @@ function deleteBlueprint(blueprintId) {
   render();
 }
 
-function addBlueprintNode(type) {
+function captureBlueprintEditSnapshot(blueprint) {
+  return JSON.stringify({
+    nodes: blueprint.nodes,
+    edges: blueprint.edges,
+    variables: blueprint.variables,
+    groups: blueprint.groups || [],
+    selection: {
+      selectedNodeId: blueprint.ui.selectedNodeId || "",
+      selectedNodeIds: blueprint.ui.selectedNodeIds || [],
+      selectedEdgeId: blueprint.ui.selectedEdgeId || "",
+      pendingFromNodeId: blueprint.ui.pendingFromNodeId || ""
+    }
+  });
+}
+
+function getBlueprintEditHistory(blueprint) {
+  if (!blueprintEditHistories.has(blueprint.id)) {
+    blueprintEditHistories.set(blueprint.id, { undo: [], redo: [] });
+  }
+  return blueprintEditHistories.get(blueprint.id);
+}
+
+function recordBlueprintEdit(blueprint, snapshot = captureBlueprintEditSnapshot(blueprint)) {
+  const history = getBlueprintEditHistory(blueprint);
+  if (history.undo.at(-1) !== snapshot) history.undo.push(snapshot);
+  if (history.undo.length > 60) history.undo.shift();
+  history.redo.length = 0;
+}
+
+function restoreBlueprintEditSnapshot(blueprint, snapshot) {
+  const parsed = JSON.parse(snapshot);
+  blueprint.nodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
+  blueprint.edges = Array.isArray(parsed.edges) ? parsed.edges : [];
+  blueprint.variables = Array.isArray(parsed.variables) ? parsed.variables : [];
+  blueprint.groups = Array.isArray(parsed.groups) ? parsed.groups : [];
+  blueprint.ui.selectedNodeId = parsed.selection?.selectedNodeId || "";
+  blueprint.ui.selectedNodeIds = Array.isArray(parsed.selection?.selectedNodeIds) ? parsed.selection.selectedNodeIds : [];
+  blueprint.ui.selectedEdgeId = parsed.selection?.selectedEdgeId || "";
+  blueprint.ui.pendingFromNodeId = parsed.selection?.pendingFromNodeId || "";
+  blueprint.updatedAt = new Date().toISOString();
+  window.COSS_BLUEPRINT.ensureBlueprintShape(blueprint);
+}
+
+function undoBlueprintEdit() {
   const blueprint = getBlueprint();
-  if (!blueprint || !window.COSS_BLUEPRINT.TYPE_MAP[type]) return;
-  const node = window.COSS_BLUEPRINT.createNode(type, uid, blueprint.nodes.length);
-  const viewport = document.querySelector("[data-blueprint-viewport]");
-  node.x = Math.max(32, (viewport?.scrollLeft || 0) + 90);
-  node.y = Math.max(32, (viewport?.scrollTop || 0) + 90 + (blueprint.nodes.length % 4) * 26);
-  blueprint.nodes.push(node);
-  blueprint.ui.selectedNodeId = node.id;
+  if (!blueprint) return;
+  const history = getBlueprintEditHistory(blueprint);
+  const snapshot = history.undo.pop();
+  if (!snapshot) return;
+  history.redo.push(captureBlueprintEditSnapshot(blueprint));
+  restoreBlueprintEditSnapshot(blueprint, snapshot);
+  saveState();
+  render();
+}
+
+function redoBlueprintEdit() {
+  const blueprint = getBlueprint();
+  if (!blueprint) return;
+  const history = getBlueprintEditHistory(blueprint);
+  const snapshot = history.redo.pop();
+  if (!snapshot) return;
+  history.undo.push(captureBlueprintEditSnapshot(blueprint));
+  restoreBlueprintEditSnapshot(blueprint, snapshot);
+  saveState();
+  render();
+}
+
+function getSelectedBlueprintNodeIds(blueprint = getBlueprint()) {
+  if (!blueprint) return [];
+  const validIds = new Set(blueprint.nodes.map((node) => node.id));
+  return [...new Set([...(blueprint.ui.selectedNodeIds || []), blueprint.ui.selectedNodeId].filter(Boolean))]
+    .filter((nodeId) => validIds.has(nodeId));
+}
+
+function copyBlueprintSelection() {
+  const blueprint = getBlueprint();
+  const selectedNodeIds = getSelectedBlueprintNodeIds(blueprint);
+  if (!blueprint || !selectedNodeIds.length) return false;
+  const selected = new Set(selectedNodeIds);
+  blueprintClipboard = {
+    nodes: JSON.parse(JSON.stringify(blueprint.nodes.filter((node) => selected.has(node.id)))),
+    edges: JSON.parse(JSON.stringify(blueprint.edges.filter((edge) => selected.has(edge.from) && selected.has(edge.to)))),
+    pasteCount: 0
+  };
+  return true;
+}
+
+function pasteBlueprintSelection() {
+  const blueprint = getBlueprint();
+  if (!blueprint || !blueprintClipboard?.nodes?.length) return;
+  recordBlueprintEdit(blueprint);
+  blueprintClipboard.pasteCount = (blueprintClipboard.pasteCount || 0) + 1;
+  const offset = 32 * blueprintClipboard.pasteCount;
+  const idMap = new Map();
+  const nodes = blueprintClipboard.nodes.map((source) => {
+    const node = JSON.parse(JSON.stringify(source));
+    const oldId = node.id;
+    node.id = uid("bp-node");
+    node.x = Math.max(16, Number(node.x) + offset);
+    node.y = Math.max(16, Number(node.y) + offset);
+    idMap.set(oldId, node.id);
+    return node;
+  });
+  const edges = blueprintClipboard.edges.map((source) => ({
+    ...JSON.parse(JSON.stringify(source)),
+    id: uid("bp-edge"),
+    from: idMap.get(source.from),
+    to: idMap.get(source.to)
+  })).filter((edge) => edge.from && edge.to);
+  blueprint.nodes.push(...nodes);
+  blueprint.edges.push(...edges);
+  blueprint.ui.selectedNodeIds = nodes.map((node) => node.id);
+  blueprint.ui.selectedNodeId = nodes.at(-1)?.id || "";
   blueprint.ui.selectedEdgeId = "";
   blueprint.updatedAt = new Date().toISOString();
   saveState();
   render();
 }
 
-function selectBlueprintNode(nodeId) {
+function duplicateBlueprintSelection() {
+  if (copyBlueprintSelection()) pasteBlueprintSelection();
+}
+
+function setBlueprintZoom(rawZoom) {
+  const blueprint = getBlueprint();
+  if (!blueprint) return;
+  const viewport = document.querySelector("[data-blueprint-viewport]");
+  const previous = Math.min(2, Math.max(0.5, Number(blueprint.ui.zoom) || 1));
+  const next = Math.min(2, Math.max(0.5, Math.round(Number(rawZoom) * 10) / 10));
+  if (next === previous) return;
+  if (viewport) {
+    const centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / previous;
+    const centerY = (viewport.scrollTop + viewport.clientHeight / 2) / previous;
+    blueprint.ui.scrollLeft = Math.max(0, centerX * next - viewport.clientWidth / 2);
+    blueprint.ui.scrollTop = Math.max(0, centerY * next - viewport.clientHeight / 2);
+  }
+  blueprint.ui.zoom = next;
+  saveState();
+  render();
+}
+
+function fitBlueprintView() {
+  const blueprint = getBlueprint();
+  const viewport = document.querySelector("[data-blueprint-viewport]");
+  if (!blueprint || !viewport || !blueprint.nodes.length) return;
+  const minX = Math.min(...blueprint.nodes.map((node) => node.x));
+  const minY = Math.min(...blueprint.nodes.map((node) => node.y));
+  const maxX = Math.max(...blueprint.nodes.map((node) => node.x + 208));
+  const maxY = Math.max(...blueprint.nodes.map((node) => node.y + window.COSS_BLUEPRINT.getNodeHeight(node)));
+  const zoom = Math.min(1.5, Math.max(0.5, Math.min(
+    (viewport.clientWidth - 80) / Math.max(1, maxX - minX),
+    (viewport.clientHeight - 80) / Math.max(1, maxY - minY)
+  )));
+  blueprint.ui.zoom = Math.round(zoom * 10) / 10;
+  blueprint.ui.scrollLeft = Math.max(0, (minX - 40) * blueprint.ui.zoom);
+  blueprint.ui.scrollTop = Math.max(0, (minY - 40) * blueprint.ui.zoom);
+  saveState();
+  render();
+}
+
+function addBlueprintNode(type) {
+  const blueprint = getBlueprint();
+  if (!blueprint || !window.COSS_BLUEPRINT.TYPE_MAP[type]) return;
+  recordBlueprintEdit(blueprint);
+  const node = window.COSS_BLUEPRINT.createNode(type, uid, blueprint.nodes.length);
+  const viewport = document.querySelector("[data-blueprint-viewport]");
+  const zoom = Number(blueprint.ui.zoom) || 1;
+  node.x = Math.max(32, ((viewport?.scrollLeft || 0) + 90) / zoom);
+  node.y = Math.max(32, ((viewport?.scrollTop || 0) + 90) / zoom + (blueprint.nodes.length % 4) * 26);
+  blueprint.nodes.push(node);
+  blueprint.ui.selectedNodeId = node.id;
+  blueprint.ui.selectedNodeIds = [node.id];
+  blueprint.ui.selectedEdgeId = "";
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function selectBlueprintNode(nodeId, additive = false) {
   const blueprint = getBlueprint();
   if (!blueprint?.nodes.some((node) => node.id === nodeId)) return;
-  blueprint.ui.selectedNodeId = nodeId;
+  const selected = new Set(getSelectedBlueprintNodeIds(blueprint));
+  if (additive) {
+    if (selected.has(nodeId)) selected.delete(nodeId);
+    else selected.add(nodeId);
+  } else {
+    selected.clear();
+    selected.add(nodeId);
+  }
+  blueprint.ui.selectedNodeIds = [...selected];
+  blueprint.ui.selectedNodeId = selected.has(nodeId) ? nodeId : (blueprint.ui.selectedNodeIds.at(-1) || "");
   blueprint.ui.selectedEdgeId = "";
   render();
 }
@@ -8123,27 +8299,115 @@ function selectBlueprintEdge(edgeId) {
   if (!blueprint?.edges.some((edge) => edge.id === edgeId)) return;
   blueprint.ui.selectedEdgeId = edgeId;
   blueprint.ui.selectedNodeId = "";
+  blueprint.ui.selectedNodeIds = [];
   render();
 }
 
-function beginBlueprintEdge(nodeId) {
+function getBlueprintPort(node, direction, portId) {
+  return window.COSS_BLUEPRINT.getNodePorts(node)[direction === "input" ? "inputs" : "outputs"]
+    .find((port) => port.id === portId) || null;
+}
+
+function beginBlueprintEdge(nodeId, portId) {
   const blueprint = getBlueprint();
-  if (!blueprint?.nodes.some((node) => node.id === nodeId)) return;
+  const node = blueprint?.nodes.find((item) => item.id === nodeId);
+  const port = node ? getBlueprintPort(node, "output", portId || window.COSS_BLUEPRINT.getDefaultPortId(node, "output", "flow")) : null;
+  if (!blueprint || !node || !port) return;
   blueprint.ui.pendingFromNodeId = nodeId;
+  blueprint.ui.pendingFromPortId = port.id;
   blueprint.ui.selectedNodeId = nodeId;
+  blueprint.ui.selectedNodeIds = [nodeId];
   blueprint.ui.selectedEdgeId = "";
   render();
 }
 
-function completeBlueprintEdge(nodeId) {
+function completeBlueprintEdge(nodeId, portId) {
   const blueprint = getBlueprint();
   const from = blueprint?.ui.pendingFromNodeId;
-  if (!blueprint || !from || from === nodeId) return;
-  if (!blueprint.edges.some((edge) => edge.from === from && edge.to === nodeId)) {
-    blueprint.edges.push({ id: uid("bp-edge"), from, to: nodeId, label: "" });
+  const fromNode = blueprint?.nodes.find((node) => node.id === from);
+  const toNode = blueprint?.nodes.find((node) => node.id === nodeId);
+  const fromPort = fromNode ? getBlueprintPort(fromNode, "output", blueprint.ui.pendingFromPortId || window.COSS_BLUEPRINT.getDefaultPortId(fromNode, "output", "flow")) : null;
+  const toPort = toNode ? getBlueprintPort(toNode, "input", portId || window.COSS_BLUEPRINT.getDefaultPortId(toNode, "input", fromPort?.dataType || "flow")) : null;
+  if (!blueprint || !fromNode || !toNode || !fromPort || !toPort || from === nodeId) return false;
+  const compatible = fromPort.dataType === "flow"
+    ? toPort.dataType === "flow"
+    : toPort.dataType !== "flow" && (fromPort.dataType === "any" || toPort.dataType === "any" || fromPort.dataType === toPort.dataType);
+  if (!compatible) return false;
+  if (!blueprint.edges.some((edge) => edge.from === from && edge.to === nodeId && edge.fromPort === fromPort.id && edge.toPort === toPort.id)) {
+    recordBlueprintEdit(blueprint);
+    blueprint.edges.push({ id: uid("bp-edge"), from, to: nodeId, fromPort: fromPort.id, toPort: toPort.id, kind: fromPort.dataType === "flow" ? "flow" : "data", label: "" });
   }
   blueprint.ui.pendingFromNodeId = "";
+  blueprint.ui.pendingFromPortId = "";
   blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+  return true;
+}
+
+function alignBlueprintSelection(mode) {
+  const blueprint = getBlueprint();
+  const nodes = getSelectedBlueprintNodeIds(blueprint).map((id) => blueprint.nodes.find((node) => node.id === id)).filter(Boolean);
+  if (!blueprint || nodes.length < 2) return;
+  recordBlueprintEdit(blueprint);
+  const heights = nodes.map((node) => window.COSS_BLUEPRINT.getNodeHeight(node));
+  if (mode === "left") { const value = Math.min(...nodes.map((node) => node.x)); nodes.forEach((node) => { node.x = value; }); }
+  if (mode === "right") { const value = Math.max(...nodes.map((node) => node.x + 208)); nodes.forEach((node) => { node.x = value - 208; }); }
+  if (mode === "top") { const value = Math.min(...nodes.map((node) => node.y)); nodes.forEach((node) => { node.y = value; }); }
+  if (mode === "bottom") { const value = Math.max(...nodes.map((node, index) => node.y + heights[index])); nodes.forEach((node) => { node.y = value - window.COSS_BLUEPRINT.getNodeHeight(node); }); }
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function distributeBlueprintSelection(axis) {
+  const blueprint = getBlueprint();
+  const nodes = getSelectedBlueprintNodeIds(blueprint).map((id) => blueprint.nodes.find((node) => node.id === id)).filter(Boolean);
+  if (!blueprint || nodes.length < 3) return;
+  recordBlueprintEdit(blueprint);
+  if (axis === "horizontal") {
+    nodes.sort((a, b) => a.x - b.x);
+    const first = nodes[0].x;
+    const last = nodes.at(-1).x;
+    nodes.forEach((node, index) => { node.x = Math.round(first + (last - first) * index / (nodes.length - 1)); });
+  } else {
+    nodes.sort((a, b) => a.y - b.y);
+    const first = nodes[0].y;
+    const last = nodes.at(-1).y;
+    nodes.forEach((node, index) => { node.y = Math.round(first + (last - first) * index / (nodes.length - 1)); });
+  }
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function groupBlueprintSelection() {
+  const blueprint = getBlueprint();
+  const nodeIds = getSelectedBlueprintNodeIds(blueprint);
+  if (!blueprint || nodeIds.length < 2) return;
+  recordBlueprintEdit(blueprint);
+  blueprint.groups ||= [];
+  blueprint.groups.push({ id: uid("bp-group"), name: `节点分组 ${blueprint.groups.length + 1}`, nodeIds, color: "#6b8afd", collapsed: false });
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function toggleBlueprintGroup(groupId) {
+  const blueprint = getBlueprint();
+  const group = blueprint?.groups?.find((item) => item.id === groupId);
+  if (!blueprint || !group) return;
+  recordBlueprintEdit(blueprint);
+  group.collapsed = !group.collapsed;
+  saveState();
+  render();
+}
+
+function ungroupBlueprint(groupId) {
+  const blueprint = getBlueprint();
+  if (!blueprint?.groups?.some((group) => group.id === groupId)) return;
+  recordBlueprintEdit(blueprint);
+  blueprint.groups = blueprint.groups.filter((group) => group.id !== groupId);
   saveState();
   render();
 }
@@ -8151,15 +8415,20 @@ function completeBlueprintEdge(nodeId) {
 function deleteBlueprintSelection() {
   const blueprint = getBlueprint();
   if (!blueprint) return;
+  const selectedNodeIds = getSelectedBlueprintNodeIds(blueprint);
+  if (!blueprint.ui.selectedEdgeId && !selectedNodeIds.length) return;
+  recordBlueprintEdit(blueprint);
   if (blueprint.ui.selectedEdgeId) {
     blueprint.edges = blueprint.edges.filter((edge) => edge.id !== blueprint.ui.selectedEdgeId);
     blueprint.ui.selectedEdgeId = "";
-  } else if (blueprint.ui.selectedNodeId) {
-    const nodeId = blueprint.ui.selectedNodeId;
-    blueprint.nodes = blueprint.nodes.filter((node) => node.id !== nodeId);
-    blueprint.edges = blueprint.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
+  } else if (selectedNodeIds.length) {
+    const selected = new Set(selectedNodeIds);
+    blueprint.nodes = blueprint.nodes.filter((node) => !selected.has(node.id));
+    blueprint.edges = blueprint.edges.filter((edge) => !selected.has(edge.from) && !selected.has(edge.to));
+    blueprint.groups = (blueprint.groups || []).map((group) => ({ ...group, nodeIds: group.nodeIds.filter((nodeId) => !selected.has(nodeId)) })).filter((group) => group.nodeIds.length > 1);
     blueprint.ui.selectedNodeId = "";
-    if (blueprint.ui.pendingFromNodeId === nodeId) blueprint.ui.pendingFromNodeId = "";
+    blueprint.ui.selectedNodeIds = [];
+    if (selected.has(blueprint.ui.pendingFromNodeId)) blueprint.ui.pendingFromNodeId = "";
   }
   blueprint.updatedAt = new Date().toISOString();
   saveState();
@@ -8348,6 +8617,9 @@ async function startBlueprintTask(taskId) {
   const blueprint = getBlueprint();
   const task = getBlueprintTask(taskId, blueprint);
   if (!blueprint || !task) return;
+  blueprint.ui.activeTaskId = task.id;
+  closeModal();
+  render();
   try {
     if (task.status === "paused") await blueprintRuntime.continueTask(blueprint, task);
     else await blueprintRuntime.start(blueprint, task);
@@ -8364,6 +8636,9 @@ async function continueBlueprintTask(taskId) {
   const blueprint = getBlueprint();
   const task = getBlueprintTask(taskId, blueprint);
   if (!blueprint || !task) return;
+  blueprint.ui.activeTaskId = task.id;
+  closeModal();
+  render();
   await blueprintRuntime.continueTask(blueprint, task);
   showBlueprintRunModal(task.id);
 }
@@ -8372,7 +8647,11 @@ async function resolveBlueprintPending(taskId, approved) {
   const blueprint = getBlueprint();
   const task = getBlueprintTask(taskId, blueprint);
   if (!blueprint || !task) return;
-  await blueprintRuntime.resolvePending(blueprint, task, { approved, value: document.getElementById("blueprintPendingValue")?.value || "" });
+  const pendingValue = document.getElementById("blueprintPendingValue")?.value || "";
+  blueprint.ui.activeTaskId = task.id;
+  closeModal();
+  render();
+  await blueprintRuntime.resolvePending(blueprint, task, { approved, value: pendingValue });
   showBlueprintRunModal(task.id);
 }
 
@@ -8380,6 +8659,9 @@ async function rerunBlueprintNode(taskId, nodeId) {
   const blueprint = getBlueprint();
   const task = getBlueprintTask(taskId, blueprint);
   if (!blueprint || !task) return;
+  blueprint.ui.activeTaskId = task.id;
+  closeModal();
+  render();
   try {
     await blueprintRuntime.rerunNode(blueprint, task, nodeId);
   } catch (error) {
@@ -8415,6 +8697,7 @@ function selectBlueprintMcpTool(toolName) {
   const blueprint = getBlueprint();
   const node = blueprint?.nodes.find((item) => item.id === blueprint.ui.selectedNodeId && item.type === "mcp-tool");
   if (!blueprint || !node || !toolName) return;
+  recordBlueprintEdit(blueprint);
   node.config.toolName = toolName;
   blueprint.updatedAt = new Date().toISOString();
   closeModal();
@@ -8475,7 +8758,7 @@ function createBlueprintTaskFromModal() {
   showBlueprintRunModal(task.id);
 }
 
-function handleBlueprintAction(action, target) {
+function handleBlueprintAction(action, target, event) {
   if (action === "show-blueprint-list") { showBlueprintList(); return true; }
   if (action === "show-create-blueprint") { showCreateBlueprintModal(); return true; }
   if (action === "create-blueprint") { createBlueprintFromModal(); return true; }
@@ -8484,13 +8767,33 @@ function handleBlueprintAction(action, target) {
   if (action === "show-delete-blueprint") { showDeleteBlueprintModal(target.dataset.blueprintId); return true; }
   if (action === "confirm-delete-blueprint") { deleteBlueprint(target.dataset.blueprintId); return true; }
   if (action === "add-blueprint-node") { addBlueprintNode(target.dataset.nodeType); return true; }
-  if (action === "select-blueprint-node") { selectBlueprintNode(target.dataset.nodeId); return true; }
+  if (action === "select-blueprint-node") { selectBlueprintNode(target.dataset.nodeId, Boolean(event?.shiftKey || event?.ctrlKey || event?.metaKey)); return true; }
   if (action === "select-blueprint-edge") { selectBlueprintEdge(target.dataset.edgeId); return true; }
-  if (action === "begin-blueprint-edge") { beginBlueprintEdge(target.dataset.nodeId); return true; }
-  if (action === "complete-blueprint-edge") { completeBlueprintEdge(target.dataset.nodeId); return true; }
-  if (action === "cancel-blueprint-edge") { const blueprint = getBlueprint(); if (blueprint) blueprint.ui.pendingFromNodeId = ""; render(); return true; }
+  if (action === "begin-blueprint-edge") { if (Date.now() >= blueprintSuppressPortClickUntil) beginBlueprintEdge(target.dataset.nodeId, target.dataset.portId); return true; }
+  if (action === "complete-blueprint-edge") { completeBlueprintEdge(target.dataset.nodeId, target.dataset.portId); return true; }
+  if (action === "cancel-blueprint-edge") { const blueprint = getBlueprint(); if (blueprint) { blueprint.ui.pendingFromNodeId = ""; blueprint.ui.pendingFromPortId = ""; } render(); return true; }
   if (action === "delete-blueprint-selection") { deleteBlueprintSelection(); return true; }
-  if (action === "auto-layout-blueprint") { const blueprint = getBlueprint(); if (blueprint) { window.COSS_BLUEPRINT.autoLayout(blueprint); saveState(); render(); } return true; }
+  if (action === "undo-blueprint") { undoBlueprintEdit(); return true; }
+  if (action === "redo-blueprint") { redoBlueprintEdit(); return true; }
+  if (action === "copy-blueprint-selection") { copyBlueprintSelection(); return true; }
+  if (action === "paste-blueprint-selection") { pasteBlueprintSelection(); return true; }
+  if (action === "duplicate-blueprint-selection") { duplicateBlueprintSelection(); return true; }
+  if (action === "zoom-out-blueprint") { const blueprint = getBlueprint(); if (blueprint) setBlueprintZoom((Number(blueprint.ui.zoom) || 1) - 0.1); return true; }
+  if (action === "zoom-in-blueprint") { const blueprint = getBlueprint(); if (blueprint) setBlueprintZoom((Number(blueprint.ui.zoom) || 1) + 0.1); return true; }
+  if (action === "reset-blueprint-zoom") { setBlueprintZoom(1); return true; }
+  if (action === "fit-blueprint-view") { fitBlueprintView(); return true; }
+  if (action === "toggle-blueprint-pan") { const blueprint = getBlueprint(); if (blueprint) { blueprint.ui.panMode = !blueprint.ui.panMode; saveState(); render(); } return true; }
+  if (action === "toggle-blueprint-snap") { const blueprint = getBlueprint(); if (blueprint) { blueprint.ui.snapToGrid = !blueprint.ui.snapToGrid; saveState(); render(); } return true; }
+  if (action === "align-blueprint-left") { alignBlueprintSelection("left"); return true; }
+  if (action === "align-blueprint-right") { alignBlueprintSelection("right"); return true; }
+  if (action === "align-blueprint-top") { alignBlueprintSelection("top"); return true; }
+  if (action === "align-blueprint-bottom") { alignBlueprintSelection("bottom"); return true; }
+  if (action === "distribute-blueprint-horizontal") { distributeBlueprintSelection("horizontal"); return true; }
+  if (action === "distribute-blueprint-vertical") { distributeBlueprintSelection("vertical"); return true; }
+  if (action === "group-blueprint-selection") { groupBlueprintSelection(); return true; }
+  if (action === "toggle-blueprint-group") { toggleBlueprintGroup(target.dataset.groupId); return true; }
+  if (action === "ungroup-blueprint") { ungroupBlueprint(target.dataset.groupId); return true; }
+  if (action === "auto-layout-blueprint") { const blueprint = getBlueprint(); if (blueprint) { recordBlueprintEdit(blueprint); window.COSS_BLUEPRINT.autoLayout(blueprint); saveState(); render(); } return true; }
   if (action === "validate-blueprint") { showBlueprintValidation(); return true; }
   if (action === "show-blueprint-task") { showBlueprintTaskModal(); return true; }
   if (action === "show-blueprint-tasks") { showBlueprintTasksModal(); return true; }
@@ -10284,7 +10587,221 @@ function attachBlueprintInteractions() {
       blueprint.ui.scrollLeft = viewport.scrollLeft;
       blueprint.ui.scrollTop = viewport.scrollTop;
     }, { passive: true });
+
+    viewport.addEventListener("wheel", (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      setBlueprintZoom((Number(blueprint.ui.zoom) || 1) + (event.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
   }
+
+  let spacePressed = false;
+  const isEditableTarget = (target) => Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+  workspace.addEventListener("keydown", (event) => {
+    if (event.key === " " && !isEditableTarget(event.target)) {
+      spacePressed = true;
+      workspace.classList.add("space-pan-active");
+      event.preventDefault();
+    }
+    if (isEditableTarget(event.target)) return;
+    const command = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    if (command && key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redoBlueprintEdit(); else undoBlueprintEdit();
+    } else if (command && key === "y") {
+      event.preventDefault();
+      redoBlueprintEdit();
+    } else if (command && key === "c") {
+      event.preventDefault();
+      copyBlueprintSelection();
+    } else if (command && key === "v") {
+      event.preventDefault();
+      pasteBlueprintSelection();
+    } else if (command && key === "d") {
+      event.preventDefault();
+      duplicateBlueprintSelection();
+    } else if (command && key === "a") {
+      event.preventDefault();
+      blueprint.ui.selectedNodeIds = blueprint.nodes.map((node) => node.id);
+      blueprint.ui.selectedNodeId = blueprint.ui.selectedNodeIds.at(-1) || "";
+      blueprint.ui.selectedEdgeId = "";
+      render();
+    } else if (command && key === "0") {
+      event.preventDefault();
+      setBlueprintZoom(1);
+    } else if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      deleteBlueprintSelection();
+    }
+  });
+  workspace.addEventListener("keyup", (event) => {
+    if (event.key === " ") {
+      spacePressed = false;
+      workspace.classList.remove("space-pan-active");
+    }
+  });
+  workspace.addEventListener("blur", () => {
+    spacePressed = false;
+    workspace.classList.remove("space-pan-active");
+  }, true);
+
+  if (viewport) {
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.target.closest(".blueprint-node, .blueprint-stage-toolbar, .blueprint-minimap, .blueprint-context-menu, .blueprint-group-header")) return;
+      workspace.focus({ preventScroll: true });
+      const pan = event.button === 1 || (event.button === 0 && (blueprint.ui.panMode || spacePressed));
+      if (pan) {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startScrollLeft = viewport.scrollLeft;
+        const startScrollTop = viewport.scrollTop;
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add("panning");
+        const move = (moveEvent) => {
+          viewport.scrollLeft = startScrollLeft - (moveEvent.clientX - startX);
+          viewport.scrollTop = startScrollTop - (moveEvent.clientY - startY);
+        };
+        const finish = () => {
+          viewport.removeEventListener("pointermove", move);
+          viewport.removeEventListener("pointerup", finish);
+          viewport.removeEventListener("pointercancel", finish);
+          viewport.classList.remove("panning");
+        };
+        viewport.addEventListener("pointermove", move);
+        viewport.addEventListener("pointerup", finish);
+        viewport.addEventListener("pointercancel", finish);
+        return;
+      }
+      if (event.target.closest(".blueprint-edge")) return;
+      if (event.button !== 0) return;
+      const canvas = viewport.querySelector("[data-blueprint-canvas]");
+      if (!canvas) return;
+      event.preventDefault();
+      const zoom = Number(blueprint.ui.zoom) || 1;
+      const canvasRect = canvas.getBoundingClientRect();
+      const startX = (event.clientX - canvasRect.left) / zoom;
+      const startY = (event.clientY - canvasRect.top) / zoom;
+      const selectionBox = document.createElement("div");
+      selectionBox.className = "blueprint-selection-box";
+      canvas.appendChild(selectionBox);
+      viewport.setPointerCapture(event.pointerId);
+      let moved = false;
+      const move = (moveEvent) => {
+        const x = (moveEvent.clientX - canvasRect.left) / zoom;
+        const y = (moveEvent.clientY - canvasRect.top) / zoom;
+        const left = Math.min(startX, x);
+        const top = Math.min(startY, y);
+        const width = Math.abs(x - startX);
+        const height = Math.abs(y - startY);
+        moved ||= width + height > 6;
+        Object.assign(selectionBox.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
+      };
+      const finish = (finishEvent) => {
+        viewport.removeEventListener("pointermove", move);
+        viewport.removeEventListener("pointerup", finish);
+        viewport.removeEventListener("pointercancel", finish);
+        const x = (finishEvent.clientX - canvasRect.left) / zoom;
+        const y = (finishEvent.clientY - canvasRect.top) / zoom;
+        selectionBox.remove();
+        if (moved) {
+          const bounds = { left: Math.min(startX, x), top: Math.min(startY, y), right: Math.max(startX, x), bottom: Math.max(startY, y) };
+          const hits = blueprint.nodes.filter((node) => node.x + 208 >= bounds.left && node.x <= bounds.right && node.y + window.COSS_BLUEPRINT.getNodeHeight(node) >= bounds.top && node.y <= bounds.bottom).map((node) => node.id);
+          const selected = new Set((finishEvent.shiftKey || finishEvent.ctrlKey || finishEvent.metaKey) ? getSelectedBlueprintNodeIds(blueprint) : []);
+          hits.forEach((nodeId) => selected.add(nodeId));
+          blueprint.ui.selectedNodeIds = [...selected];
+          blueprint.ui.selectedNodeId = blueprint.ui.selectedNodeIds.at(-1) || "";
+        } else {
+          blueprint.ui.selectedNodeIds = [];
+          blueprint.ui.selectedNodeId = "";
+        }
+        blueprint.ui.selectedEdgeId = "";
+        render();
+      };
+      viewport.addEventListener("pointermove", move);
+      viewport.addEventListener("pointerup", finish);
+      viewport.addEventListener("pointercancel", finish);
+    });
+  }
+
+  const minimap = workspace.querySelector("[data-blueprint-minimap]");
+  const minimapViewport = minimap?.querySelector("[data-blueprint-minimap-viewport]");
+  const canvas = workspace.querySelector("[data-blueprint-canvas]");
+  const updateBlueprintMinimap = () => {
+    if (!viewport || !minimapViewport || !canvas) return;
+    const zoom = Number(blueprint.ui.zoom) || 1;
+    minimapViewport.setAttribute("x", String(viewport.scrollLeft / zoom));
+    minimapViewport.setAttribute("y", String(viewport.scrollTop / zoom));
+    minimapViewport.setAttribute("width", String(viewport.clientWidth / zoom));
+    minimapViewport.setAttribute("height", String(viewport.clientHeight / zoom));
+  };
+  updateBlueprintMinimap();
+  viewport?.addEventListener("scroll", updateBlueprintMinimap, { passive: true });
+  minimap?.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = minimap.getBoundingClientRect();
+    const svg = minimap.querySelector("svg");
+    const viewBox = svg?.viewBox?.baseVal;
+    if (!viewport || !viewBox) return;
+    const x = (event.clientX - rect.left) / rect.width * viewBox.width;
+    const y = (event.clientY - rect.top) / rect.height * viewBox.height;
+    const zoom = Number(blueprint.ui.zoom) || 1;
+    viewport.scrollLeft = Math.max(0, x * zoom - viewport.clientWidth / 2);
+    viewport.scrollTop = Math.max(0, y * zoom - viewport.clientHeight / 2);
+  });
+
+  workspace.addEventListener("contextmenu", (event) => {
+    if (isEditableTarget(event.target)) return;
+    event.preventDefault();
+    workspace.querySelector(".blueprint-context-menu")?.remove();
+    const nodeCard = event.target.closest("[data-blueprint-node-id]");
+    const groupCard = event.target.closest("[data-blueprint-group-id]");
+    const edgePath = event.target.closest(".blueprint-edge[data-edge-id]");
+    const edge = edgePath ? blueprint.edges.find((item) => item.id === edgePath.dataset.edgeId) : null;
+    if (edge) {
+      blueprint.ui.selectedEdgeId = edge.id;
+      blueprint.ui.selectedNodeId = "";
+      blueprint.ui.selectedNodeIds = [];
+      workspace.querySelectorAll(".blueprint-node.selected, .blueprint-edge.selected").forEach((item) => item.classList.remove("selected"));
+      edgePath.classList.add("selected");
+    } else if (nodeCard && !getSelectedBlueprintNodeIds(blueprint).includes(nodeCard.dataset.blueprintNodeId)) {
+      blueprint.ui.selectedNodeIds = [nodeCard.dataset.blueprintNodeId];
+      blueprint.ui.selectedNodeId = nodeCard.dataset.blueprintNodeId;
+      blueprint.ui.selectedEdgeId = "";
+      workspace.querySelectorAll(".blueprint-node.selected").forEach((node) => node.classList.remove("selected"));
+      nodeCard.classList.add("selected");
+    }
+    const selectedCount = getSelectedBlueprintNodeIds(blueprint).length;
+    const menu = document.createElement("div");
+    menu.className = "blueprint-context-menu";
+    const buttons = edge ? [
+      ["select-blueprint-edge", "查看 / 编辑连接", ` data-edge-id="${escapeHtml(edge.id)}"`],
+      ["select-blueprint-node", "选择起始节点", ` data-node-id="${escapeHtml(edge.from)}"`],
+      ["select-blueprint-node", "选择目标节点", ` data-node-id="${escapeHtml(edge.to)}"`],
+      ["delete-blueprint-selection", "删除连接", ""]
+    ] : groupCard ? [
+      ["toggle-blueprint-group", groupCard.classList.contains("collapsed") ? "展开分组" : "折叠分组", ` data-group-id="${escapeHtml(groupCard.dataset.blueprintGroupId)}"`],
+      ["ungroup-blueprint", "取消分组", ` data-group-id="${escapeHtml(groupCard.dataset.blueprintGroupId)}"`]
+    ] : nodeCard || selectedCount ? [
+      ["copy-blueprint-selection", "复制", ""], ["duplicate-blueprint-selection", "重复", ""],
+      ["align-blueprint-left", "左对齐", ""], ["align-blueprint-right", "右对齐", ""],
+      ["align-blueprint-top", "顶对齐", ""], ["align-blueprint-bottom", "底对齐", ""],
+      ["distribute-blueprint-horizontal", "横向分布", ""], ["distribute-blueprint-vertical", "纵向分布", ""],
+      ["group-blueprint-selection", `建立分组 (${selectedCount})`, ""], ["delete-blueprint-selection", "删除所选", ""]
+    ] : [
+      ["paste-blueprint-selection", "粘贴", ""], ["fit-blueprint-view", "适应视图", ""], ["auto-layout-blueprint", "自动整理", ""]
+    ];
+    menu.innerHTML = buttons.map(([action, label, attrs]) => `<button data-action="${action}"${attrs}>${label}</button>`).join("");
+    const rect = workspace.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(event.clientX - rect.left, rect.width - 170))}px`;
+    menu.style.top = `${Math.max(8, Math.min(event.clientY - rect.top, rect.height - buttons.length * 32 - 12))}px`;
+    workspace.appendChild(menu);
+  });
+  workspace.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest(".blueprint-context-menu")) workspace.querySelector(".blueprint-context-menu")?.remove();
+  });
 
   workspace.querySelector("[data-blueprint-search]")?.addEventListener("input", (event) => {
     const query = event.target.value.trim().toLowerCase();
@@ -10293,10 +10810,79 @@ function attachBlueprintInteractions() {
     });
   });
 
+  workspace.querySelectorAll(".blueprint-port.output").forEach((portElement) => {
+    portElement.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const nodeId = portElement.dataset.nodeId;
+      const portId = portElement.dataset.portId;
+      const node = blueprint.nodes.find((item) => item.id === nodeId);
+      const sourcePort = node ? getBlueprintPort(node, "output", portId) : null;
+      const canvas = workspace.querySelector("[data-blueprint-canvas]");
+      const preview = workspace.querySelector("[data-blueprint-edge-preview]");
+      if (!node || !sourcePort || !canvas || !preview) return;
+      const previewSvg = preview.ownerSVGElement;
+      const start = window.COSS_BLUEPRINT.getNodePortPoint(node, portId, "output");
+      let moved = false;
+      portElement.setPointerCapture(event.pointerId);
+      portElement.classList.add("dragging-link");
+
+      const isCompatibleInput = (input) => {
+        const inputNode = blueprint.nodes.find((item) => item.id === input?.dataset.nodeId);
+        const inputPort = inputNode ? getBlueprintPort(inputNode, "input", input.dataset.portId) : null;
+        if (!inputPort || inputNode.id === node.id) return false;
+        return sourcePort.dataType === "flow"
+          ? inputPort.dataType === "flow"
+          : inputPort.dataType !== "flow" && (sourcePort.dataType === "any" || inputPort.dataType === "any" || sourcePort.dataType === inputPort.dataType);
+      };
+      const clearTargets = () => workspace.querySelectorAll(".blueprint-port.input.connection-target").forEach((input) => input.classList.remove("connection-target"));
+      const move = (moveEvent) => {
+        const screenMatrix = previewSvg.getScreenCTM();
+        const pointer = previewSvg.createSVGPoint();
+        pointer.x = moveEvent.clientX;
+        pointer.y = moveEvent.clientY;
+        const localPointer = screenMatrix ? pointer.matrixTransform(screenMatrix.inverse()) : pointer;
+        const x = localPointer.x;
+        const y = localPointer.y;
+        moved ||= Math.hypot(moveEvent.clientX - event.clientX, moveEvent.clientY - event.clientY) > 5;
+        const offset = Math.max(60, Math.abs(x - start.x) * 0.45);
+        preview.setAttribute("d", `M ${start.x} ${start.y} C ${start.x + offset} ${start.y}, ${x - offset} ${y}, ${x} ${y}`);
+        preview.classList.toggle("visible", moved);
+        clearTargets();
+        const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.(".blueprint-port.input");
+        if (target && isCompatibleInput(target)) target.classList.add("connection-target");
+      };
+      const finish = (finishEvent) => {
+        portElement.removeEventListener("pointermove", move);
+        portElement.removeEventListener("pointerup", finish);
+        portElement.removeEventListener("pointercancel", finish);
+        portElement.classList.remove("dragging-link");
+        preview.classList.remove("visible");
+        preview.setAttribute("d", "");
+        clearTargets();
+        if (!moved) return;
+        blueprintSuppressPortClickUntil = Date.now() + 350;
+        const target = document.elementFromPoint(finishEvent.clientX, finishEvent.clientY)?.closest?.(".blueprint-port.input");
+        blueprint.ui.pendingFromNodeId = node.id;
+        blueprint.ui.pendingFromPortId = sourcePort.id;
+        if (!target || !isCompatibleInput(target) || !completeBlueprintEdge(target.dataset.nodeId, target.dataset.portId)) {
+          blueprint.ui.pendingFromNodeId = "";
+          blueprint.ui.pendingFromPortId = "";
+          render();
+        }
+      };
+      portElement.addEventListener("pointermove", move);
+      portElement.addEventListener("pointerup", finish);
+      portElement.addEventListener("pointercancel", finish);
+    });
+  });
+
   workspace.querySelectorAll("[data-blueprint-field]").forEach((field) => {
     field.addEventListener("change", () => {
       const node = blueprint.nodes.find((item) => item.id === blueprint.ui.selectedNodeId);
       if (!node) return;
+      recordBlueprintEdit(blueprint);
       const key = field.dataset.blueprintField;
       if (key === "enabled") node.enabled = field.checked;
       else if (key === "timeoutMs" || key === "retryCount") node[key] = Math.max(0, Number(field.value) || 0);
@@ -10311,6 +10897,7 @@ function attachBlueprintInteractions() {
     field.addEventListener("change", () => {
       const node = blueprint.nodes.find((item) => item.id === blueprint.ui.selectedNodeId);
       if (!node) return;
+      recordBlueprintEdit(blueprint);
       const key = field.dataset.blueprintConfigField;
       if (field.type === "checkbox") node.config[key] = field.checked;
       else if (field.type === "number") node.config[key] = Number(field.value) || 0;
@@ -10325,6 +10912,7 @@ function attachBlueprintInteractions() {
     field.addEventListener("change", () => {
       const edge = blueprint.edges.find((item) => item.id === blueprint.ui.selectedEdgeId);
       if (!edge) return;
+      recordBlueprintEdit(blueprint);
       edge[field.dataset.blueprintEdgeField] = field.value;
       blueprint.updatedAt = new Date().toISOString();
       saveState();
@@ -10332,28 +10920,59 @@ function attachBlueprintInteractions() {
     });
   });
 
+  const syncRenderedBlueprintEdges = () => {
+    blueprint.edges.forEach((edge) => {
+      const from = blueprint.nodes.find((node) => node.id === edge.from);
+      const to = blueprint.nodes.find((node) => node.id === edge.to);
+      const path = workspace.querySelector(`.blueprint-edge[data-edge-id="${CSS.escape(edge.id)}"]`);
+      if (!from || !to || !path) return;
+      const start = window.COSS_BLUEPRINT.getNodePortPoint(from, edge.fromPort || window.COSS_BLUEPRINT.getDefaultPortId(from, "output", "flow"), "output");
+      const end = window.COSS_BLUEPRINT.getNodePortPoint(to, edge.toPort || window.COSS_BLUEPRINT.getDefaultPortId(to, "input", "flow"), "input");
+      const x1 = start.x;
+      const y1 = start.y;
+      const x2 = end.x;
+      const y2 = end.y;
+      const offset = Math.max(60, Math.abs(x2 - x1) * 0.45);
+      path.setAttribute("d", `M ${x1} ${y1} C ${x1 + offset} ${y1}, ${x2 - offset} ${y2}, ${x2} ${y2}`);
+    });
+  };
+
   workspace.querySelectorAll(".blueprint-node-main").forEach((handle) => {
     handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       const card = handle.closest("[data-blueprint-node-id]");
       const node = blueprint.nodes.find((item) => item.id === card?.dataset.blueprintNodeId);
       if (!node || !card) return;
+      event.preventDefault();
+      const zoom = Number(blueprint.ui.zoom) || 1;
+      const currentSelection = getSelectedBlueprintNodeIds(blueprint);
+      const dragNodeIds = currentSelection.includes(node.id) ? currentSelection : [node.id];
+      const dragNodes = blueprint.nodes.filter((item) => dragNodeIds.includes(item.id));
+      const origins = new Map(dragNodes.map((item) => [item.id, { x: item.x, y: item.y }]));
+      const beforeSnapshot = captureBlueprintEditSnapshot(blueprint);
       const startX = event.clientX;
       const startY = event.clientY;
-      const originX = node.x;
-      const originY = node.y;
       let moved = false;
       handle.setPointerCapture(event.pointerId);
       card.classList.add("dragging");
 
       const move = (moveEvent) => {
-        const dx = moveEvent.clientX - startX;
-        const dy = moveEvent.clientY - startY;
+        const dx = (moveEvent.clientX - startX) / zoom;
+        const dy = (moveEvent.clientY - startY) / zoom;
         if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
-        node.x = Math.max(16, Math.round(originX + dx));
-        node.y = Math.max(16, Math.round(originY + dy));
-        card.style.left = node.x + "px";
-        card.style.top = node.y + "px";
+        dragNodes.forEach((dragNode) => {
+          const origin = origins.get(dragNode.id);
+          const rawX = Math.max(16, origin.x + dx);
+          const rawY = Math.max(16, origin.y + dy);
+          dragNode.x = blueprint.ui.snapToGrid ? Math.round(rawX / 24) * 24 : Math.round(rawX);
+          dragNode.y = blueprint.ui.snapToGrid ? Math.round(rawY / 24) * 24 : Math.round(rawY);
+          const dragCard = workspace.querySelector(`[data-blueprint-node-id="${CSS.escape(dragNode.id)}"]`);
+          if (dragCard) {
+            dragCard.style.left = dragNode.x + "px";
+            dragCard.style.top = dragNode.y + "px";
+          }
+        });
+        syncRenderedBlueprintEdges();
       };
       const finish = () => {
         handle.removeEventListener("pointermove", move);
@@ -10361,7 +10980,9 @@ function attachBlueprintInteractions() {
         handle.removeEventListener("pointercancel", finish);
         card.classList.remove("dragging");
         if (moved) {
+          recordBlueprintEdit(blueprint, beforeSnapshot);
           blueprint.ui.selectedNodeId = node.id;
+          blueprint.ui.selectedNodeIds = dragNodeIds;
           blueprint.ui.selectedEdgeId = "";
           blueprint.updatedAt = new Date().toISOString();
           saveState();
@@ -10503,7 +11124,7 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  if (handleBlueprintAction(action, target)) {
+  if (handleBlueprintAction(action, target, event)) {
     return;
   }
 

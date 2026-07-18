@@ -46,6 +46,69 @@
 
   const TYPE_MAP = Object.fromEntries(NODE_TYPES.map((item) => [item.id, item]));
   const CATEGORY_MAP = Object.fromEntries(NODE_CATEGORIES.map((item) => [item.id, item]));
+  const FLOW_PORT_SCHEMAS = {
+    "task-start": { inputs: [], outputs: [["exec-out", "开始"]] },
+    "task-finish": { inputs: [["exec-in", "完成"]], outputs: [] },
+    "task-fail": { inputs: [["exec-in", "失败"]], outputs: [] },
+    condition: { inputs: [["exec-in", "执行"]], outputs: [["true", "是"], ["false", "否"]] },
+    switch: { inputs: [["exec-in", "执行"]], outputs: [["case", "匹配"], ["default", "默认"]] },
+    parallel: { inputs: [["exec-in", "执行"]], outputs: [["branch-a", "分支 A"], ["branch-b", "分支 B"]] },
+    join: { inputs: [["branch-a", "分支 A"], ["branch-b", "分支 B"]], outputs: [["exec-out", "继续"]] }
+  };
+  const DATA_PORT_SCHEMAS = {
+    "task-start": { outputs: [["goal", "任务目标", "text"], ["variables", "变量", "object"]] },
+    "task-finish": { inputs: [["result", "最终结果", "any"]] },
+    planner: { inputs: [["goal", "目标", "text"]], outputs: [["plan", "计划", "object"]] },
+    "agent-task": { inputs: [["instruction", "指令", "text"], ["context", "上下文", "any"]], outputs: [["result", "结果", "any"]] },
+    "context-lens": { inputs: [["context", "上下文", "any"]], outputs: [["focused", "聚焦上下文", "any"]] },
+    "knowledge-retrieve": { inputs: [["query", "查询", "text"]], outputs: [["documents", "文档", "array"]] },
+    evaluator: { inputs: [["candidate", "候选结果", "any"]], outputs: [["score", "评分", "number"]] },
+    synthesizer: { inputs: [["items", "多项结果", "array"]], outputs: [["result", "汇总结果", "any"]] },
+    "mcp-tool": { inputs: [["arguments", "参数", "object"]], outputs: [["result", "结果", "any"]] },
+    file: { inputs: [["content", "内容", "any"]], outputs: [["file", "文件结果", "any"]] },
+    shell: { inputs: [["stdin", "输入", "text"]], outputs: [["stdout", "输出", "text"]] },
+    browser: { inputs: [["url", "地址", "text"]], outputs: [["content", "页面内容", "text"]] },
+    artifact: { inputs: [["source", "产物", "any"]], outputs: [["artifact", "交付物", "object"]] },
+    "variable-set": { inputs: [["value", "值", "any"]], outputs: [["value", "变量值", "any"]] },
+    "data-transform": { inputs: [["input", "输入", "any"]], outputs: [["output", "输出", "any"]] },
+    template: { inputs: [["variables", "变量", "object"]], outputs: [["text", "文本", "text"]] },
+    "parse-extract": { inputs: [["source", "源内容", "any"]], outputs: [["fields", "字段", "object"]] },
+    split: { inputs: [["collection", "集合", "any"]], outputs: [["items", "项目", "array"]] },
+    merge: { inputs: [["items", "项目", "array"]], outputs: [["result", "合并结果", "any"]] },
+    "schema-validate": { inputs: [["value", "待校验值", "any"]], outputs: [["valid", "有效值", "any"]] },
+    condition: { inputs: [["value", "判断值", "any"]] },
+    switch: { inputs: [["value", "路由值", "any"]] },
+    "for-each": { inputs: [["items", "集合", "array"]], outputs: [["results", "逐项结果", "array"]] },
+    "human-input": { outputs: [["answer", "用户回答", "any"]] },
+    "review-edit": { inputs: [["draft", "草稿", "any"]], outputs: [["approved", "审阅结果", "any"]] }
+  };
+  const PORT_TYPE_COLORS = { flow: "#475569", any: "#d946ef", text: "#d946ef", object: "#f59e0b", array: "#22c55e", number: "#38bdf8" };
+
+  function getNodePorts(node) {
+    const flow = FLOW_PORT_SCHEMAS[node.type] || { inputs: [["exec-in", "执行"]], outputs: [["exec-out", "继续"]] };
+    const data = DATA_PORT_SCHEMAS[node.type] || {};
+    const build = (items, direction, dataType) => (items || []).map(([id, label, type]) => ({ id, label, direction, dataType: type || dataType }));
+    return {
+      inputs: [...build(flow.inputs, "input", "flow"), ...build(data.inputs, "input", "any")],
+      outputs: [...build(flow.outputs, "output", "flow"), ...build(data.outputs, "output", "any")]
+    };
+  }
+
+  function getNodeHeight(node) {
+    const ports = getNodePorts(node);
+    return Math.max(116, 70 + Math.max(ports.inputs.length, ports.outputs.length, 2) * 23);
+  }
+
+  function getNodePortPoint(node, portId, direction) {
+    const ports = getNodePorts(node)[direction === "input" ? "inputs" : "outputs"];
+    const index = Math.max(0, ports.findIndex((port) => port.id === portId));
+    return { x: node.x + (direction === "input" ? 16 : 192), y: node.y + 76 + index * 23 };
+  }
+
+  function getDefaultPortId(node, direction, dataType = "flow") {
+    const ports = getNodePorts(node)[direction === "input" ? "inputs" : "outputs"];
+    return (ports.find((port) => port.dataType === dataType) || ports[0])?.id || "";
+  }
   const NODE_PROPERTY_SCHEMAS = {
     "task-start": [["inputSchema", "任务输入 Schema", "textarea"], ["defaults", "默认输入(JSON)", "textarea"]],
     "task-finish": [["outputMapping", "最终输出映射", "textarea"], ["completionMessage", "完成消息", "text"]],
@@ -111,7 +174,8 @@
       edges: [],
       tasks: [],
       variables: [],
-      ui: { selectedNodeId: "", selectedEdgeId: "", pendingFromNodeId: "", paletteCategory: "all" }
+      groups: [],
+      ui: { selectedNodeId: "", selectedNodeIds: [], selectedEdgeId: "", pendingFromNodeId: "", pendingFromPortId: "", paletteCategory: "all", zoom: 1, panMode: false, snapToGrid: true }
     };
     const start = createNode("task-start", createId, 0);
     const planner = createNode("planner", createId, 1);
@@ -142,12 +206,25 @@
     blueprint.edges = Array.isArray(blueprint.edges) ? blueprint.edges : [];
     blueprint.tasks = Array.isArray(blueprint.tasks) ? blueprint.tasks : [];
     blueprint.variables = Array.isArray(blueprint.variables) ? blueprint.variables : [];
+    blueprint.groups = (Array.isArray(blueprint.groups) ? blueprint.groups : []).map((group, index) => ({
+      id: String(group?.id || `bp-group-${index}`),
+      name: String(group?.name || "节点分组"),
+      nodeIds: [...new Set((Array.isArray(group?.nodeIds) ? group.nodeIds : []).map(String))],
+      color: String(group?.color || "#6b8afd"),
+      collapsed: group?.collapsed === true
+    }));
     blueprint.ui = blueprint.ui && typeof blueprint.ui === "object" ? blueprint.ui : {};
     blueprint.ui.selectedNodeId = String(blueprint.ui.selectedNodeId || "");
+    blueprint.ui.selectedNodeIds = [...new Set((Array.isArray(blueprint.ui.selectedNodeIds) ? blueprint.ui.selectedNodeIds : [])
+      .map((value) => String(value || "")).filter(Boolean))];
     blueprint.ui.selectedEdgeId = String(blueprint.ui.selectedEdgeId || "");
     blueprint.ui.pendingFromNodeId = String(blueprint.ui.pendingFromNodeId || "");
+    blueprint.ui.pendingFromPortId = String(blueprint.ui.pendingFromPortId || "");
     blueprint.ui.activeTaskId = String(blueprint.ui.activeTaskId || "");
     blueprint.ui.paletteCategory = String(blueprint.ui.paletteCategory || "all");
+    blueprint.ui.zoom = Math.min(2, Math.max(0.5, Number(blueprint.ui.zoom) || 1));
+    blueprint.ui.panMode = blueprint.ui.panMode === true;
+    blueprint.ui.snapToGrid = blueprint.ui.snapToGrid !== false;
     blueprint.nodes.forEach((node, index) => {
       node.id = String(node.id || "bp-node-" + index);
       node.type = TYPE_MAP[node.type] ? node.type : "agent-task";
@@ -162,13 +239,19 @@
       node.config = node.config && typeof node.config === "object" ? node.config : {};
     });
     const ids = new Set(blueprint.nodes.map((node) => node.id));
+    blueprint.ui.selectedNodeIds = blueprint.ui.selectedNodeIds.filter((nodeId) => ids.has(nodeId));
+    if (blueprint.ui.selectedNodeId && !ids.has(blueprint.ui.selectedNodeId)) blueprint.ui.selectedNodeId = "";
     blueprint.edges = blueprint.edges.filter((edge) => edge && ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to)
       .map((edge, index) => ({
         id: String(edge.id || "bp-edge-" + index),
         from: String(edge.from),
         to: String(edge.to),
+        fromPort: String(edge.fromPort || getDefaultPortId(blueprint.nodes.find((node) => node.id === edge.from), "output", "flow")),
+        toPort: String(edge.toPort || getDefaultPortId(blueprint.nodes.find((node) => node.id === edge.to), "input", "flow")),
+        kind: String(edge.kind || "flow"),
         label: String(edge.label || "")
       }));
+    blueprint.groups.forEach((group) => { group.nodeIds = group.nodeIds.filter((nodeId) => ids.has(nodeId)); });
     return blueprint;
   }
 
@@ -177,7 +260,7 @@
     const issues = [];
     const nodes = blueprint.nodes.filter((node) => node.enabled !== false);
     const ids = new Set(nodes.map((node) => node.id));
-    const edges = blueprint.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
+    const edges = blueprint.edges.filter((edge) => edge.kind !== "data" && ids.has(edge.from) && ids.has(edge.to));
     const starts = nodes.filter((node) => node.type === "task-start");
     const finishes = nodes.filter((node) => node.type === "task-finish");
     if (starts.length !== 1) issues.push({ level: "error", code: "start-count", message: "需要且只能有 1 个任务开始节点，当前为 " + starts.length + " 个。" });
@@ -227,13 +310,14 @@
 
   function autoLayout(blueprint) {
     ensureBlueprintShape(blueprint);
+    const flowEdges = blueprint.edges.filter((edge) => edge.kind !== "data");
     const incoming = new Map(blueprint.nodes.map((node) => [node.id, 0]));
-    blueprint.edges.forEach((edge) => incoming.set(edge.to, (incoming.get(edge.to) || 0) + 1));
+    flowEdges.forEach((edge) => incoming.set(edge.to, (incoming.get(edge.to) || 0) + 1));
     const queue = blueprint.nodes.filter((node) => node.type === "task-start" || incoming.get(node.id) === 0);
     const depth = new Map(queue.map((node) => [node.id, 0]));
     for (let cursor = 0; cursor < queue.length; cursor += 1) {
       const node = queue[cursor];
-      blueprint.edges.filter((edge) => edge.from === node.id).forEach((edge) => {
+      flowEdges.filter((edge) => edge.from === node.id).forEach((edge) => {
         const nextDepth = (depth.get(node.id) || 0) + 1;
         if (!depth.has(edge.to) || nextDepth > depth.get(edge.to)) depth.set(edge.to, nextDepth);
         const next = blueprint.nodes.find((candidate) => candidate.id === edge.to);
@@ -251,15 +335,25 @@
     });
     columns.forEach((column, level) => column.forEach((node, row) => {
       node.x = 64 + level * 238;
-      node.y = 72 + row * 132;
+      node.y = 72 + row * 168;
     }));
     blueprint.updatedAt = new Date().toISOString();
   }
 
   function getCanvasSize(blueprint) {
-    const maxX = Math.max(1100, ...blueprint.nodes.map((node) => node.x + 270));
-    const maxY = Math.max(680, ...blueprint.nodes.map((node) => node.y + 180));
+    const maxX = Math.max(1100, ...blueprint.nodes.map((node) => node.x + 300));
+    const maxY = Math.max(680, ...blueprint.nodes.map((node) => node.y + getNodeHeight(node) + 100));
     return { width: maxX, height: maxY };
+  }
+
+  function getGroupBounds(blueprint, group) {
+    const nodes = blueprint.nodes.filter((node) => group.nodeIds.includes(node.id));
+    if (!nodes.length) return { x: 40, y: 40, width: 240, height: 100 };
+    const minX = Math.min(...nodes.map((node) => node.x));
+    const minY = Math.min(...nodes.map((node) => node.y));
+    const maxX = Math.max(...nodes.map((node) => node.x + 208));
+    const maxY = Math.max(...nodes.map((node) => node.y + getNodeHeight(node)));
+    return { x: Math.max(8, minX - 28), y: Math.max(8, minY - 42), width: maxX - minX + 56, height: maxY - minY + 70 };
   }
 
   function createRenderer({ escapeHtml, icon, translate } = {}) {
@@ -292,59 +386,130 @@
 
     function renderGraph(blueprint) {
       const size = getCanvasSize(blueprint);
+      const zoom = Math.min(2, Math.max(0.5, Number(blueprint.ui.zoom) || 1));
+      const selectedNodeIds = new Set(blueprint.ui.selectedNodeIds || []);
+      if (blueprint.ui.selectedNodeId) selectedNodeIds.add(blueprint.ui.selectedNodeId);
+      const collapsedGroups = blueprint.groups.filter((group) => group.collapsed).map((group) => ({ group, bounds: getGroupBounds(blueprint, group) }));
+      const collapsedNodeIds = new Set(collapsedGroups.flatMap(({ group }) => group.nodeIds));
+      const collapsedGroupByNode = new Map(collapsedGroups.flatMap(({ group, bounds }) => group.nodeIds.map((nodeId) => [nodeId, { group, bounds }])));
       const nodeById = new Map(blueprint.nodes.map((node) => [node.id, node]));
       const activeTask = blueprint.tasks.find((task) => task.id === blueprint.ui.activeTaskId) || null;
       return `
         <section class="blueprint-stage">
           <div class="blueprint-stage-toolbar">
             <span><strong>流程画布</strong> · ${blueprint.nodes.length} 个节点 · ${blueprint.edges.length} 条连接</span>
-            <div>
+            <div class="blueprint-toolbar-actions">
+              <span class="blueprint-toolbar-group">
+                <button class="secondary-button compact" data-action="undo-blueprint" title="撤销 (Ctrl+Z)">↶</button>
+                <button class="secondary-button compact" data-action="redo-blueprint" title="重做 (Ctrl+Y)">↷</button>
+                <button class="secondary-button compact" data-action="copy-blueprint-selection" title="复制 (Ctrl+C)">复制</button>
+                <button class="secondary-button compact" data-action="paste-blueprint-selection" title="粘贴 (Ctrl+V)">粘贴</button>
+                <button class="secondary-button compact" data-action="duplicate-blueprint-selection" title="重复 (Ctrl+D)">重复</button>
+              </span>
+              <span class="blueprint-toolbar-group">
+                <button class="secondary-button compact" data-action="zoom-out-blueprint" title="缩小">−</button>
+                <button class="secondary-button compact blueprint-zoom-value" data-action="reset-blueprint-zoom" title="重置为 100%">${Math.round(zoom * 100)}%</button>
+                <button class="secondary-button compact" data-action="zoom-in-blueprint" title="放大">＋</button>
+                <button class="secondary-button compact" data-action="fit-blueprint-view" title="适应全部节点">适应</button>
+                <button class="secondary-button compact ${blueprint.ui.panMode ? "active" : ""}" data-action="toggle-blueprint-pan" title="拖动画布 (Space)">平移</button>
+                <button class="secondary-button compact ${blueprint.ui.snapToGrid ? "active" : ""}" data-action="toggle-blueprint-snap" title="拖动时吸附到 24px 网格">吸附</button>
+              </span>
+              <span class="blueprint-toolbar-group">
+                <button class="secondary-button compact" data-action="align-blueprint-left" title="左对齐所选节点">左齐</button>
+                <button class="secondary-button compact" data-action="distribute-blueprint-horizontal" title="横向均匀分布">横分</button>
+                <button class="secondary-button compact" data-action="group-blueprint-selection" title="把所选节点建立分组">分组</button>
+              </span>
               ${blueprint.ui.pendingFromNodeId ? `<button class="secondary-button compact" data-action="cancel-blueprint-edge">取消连线</button>` : ""}
               <button class="secondary-button compact" data-action="delete-blueprint-selection">删除所选</button>
               <button class="secondary-button compact" data-action="auto-layout-blueprint">自动整理</button>
             </div>
           </div>
           <div class="blueprint-canvas-viewport" data-blueprint-viewport>
-            <div class="blueprint-canvas" style="width:${size.width}px;height:${size.height}px" data-blueprint-canvas>
+            <div class="blueprint-canvas ${blueprint.ui.panMode ? "pan-mode" : ""}" style="width:${size.width}px;height:${size.height}px;zoom:${zoom}" data-blueprint-canvas>
               <svg class="blueprint-canvas-svg" aria-hidden="true">
                 <defs><marker id="blueprintArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z"></path></marker></defs>
                 ${blueprint.edges.map((edge) => {
                   const from = nodeById.get(edge.from);
                   const to = nodeById.get(edge.to);
                   if (!from || !to) return "";
-                  const x1 = from.x + 184;
-                  const y1 = from.y + 46;
-                  const x2 = to.x;
-                  const y2 = to.y + 46;
+                  const fromGroup = collapsedGroupByNode.get(from.id);
+                  const toGroup = collapsedGroupByNode.get(to.id);
+                  if (fromGroup?.group.id && fromGroup.group.id === toGroup?.group.id) return "";
+                  const start = fromGroup
+                    ? { x: fromGroup.bounds.x + 220, y: fromGroup.bounds.y + 31 }
+                    : getNodePortPoint(from, edge.fromPort || getDefaultPortId(from, "output", "flow"), "output");
+                  const end = toGroup
+                    ? { x: toGroup.bounds.x, y: toGroup.bounds.y + 31 }
+                    : getNodePortPoint(to, edge.toPort || getDefaultPortId(to, "input", "flow"), "input");
+                  const x1 = start.x;
+                  const y1 = start.y;
+                  const x2 = end.x;
+                  const y2 = end.y;
                   const offset = Math.max(60, Math.abs(x2 - x1) * 0.45);
-                  return `<path class="blueprint-edge ${blueprint.ui.selectedEdgeId === edge.id ? "selected" : ""}" data-action="select-blueprint-edge" data-edge-id="${esc(edge.id)}" d="M ${x1} ${y1} C ${x1 + offset} ${y1}, ${x2 - offset} ${y2}, ${x2} ${y2}" marker-end="url(#blueprintArrow)"></path>`;
+                  return `<path class="blueprint-edge kind-${esc(edge.kind || "flow")} ${blueprint.ui.selectedEdgeId === edge.id ? "selected" : ""}" data-action="select-blueprint-edge" data-edge-id="${esc(edge.id)}" d="M ${x1} ${y1} C ${x1 + offset} ${y1}, ${x2 - offset} ${y2}, ${x2} ${y2}" marker-end="url(#blueprintArrow)"></path>`;
                 }).join("")}
+                <path class="blueprint-edge-preview" data-blueprint-edge-preview d=""></path>
               </svg>
+              ${blueprint.groups.map((group) => {
+                const bounds = getGroupBounds(blueprint, group);
+                return `<section class="blueprint-group ${group.collapsed ? "collapsed" : ""}" style="left:${bounds.x}px;top:${bounds.y}px;width:${group.collapsed ? 220 : bounds.width}px;height:${group.collapsed ? 62 : bounds.height}px;--group-color:${esc(group.color)}" data-blueprint-group-id="${esc(group.id)}">
+                  <button class="blueprint-group-header" data-action="toggle-blueprint-group" data-group-id="${esc(group.id)}"><strong>${esc(group.name)}</strong><span>${group.nodeIds.length} 个节点 · ${group.collapsed ? "展开" : "折叠"}</span></button>
+                </section>`;
+              }).join("")}
               ${blueprint.nodes.map((node) => {
+                if (collapsedNodeIds.has(node.id)) return "";
                 const definition = TYPE_MAP[node.type];
                 const category = CATEGORY_MAP[definition.category];
+                const ports = getNodePorts(node);
                 const incoming = blueprint.edges.filter((edge) => edge.to === node.id).length;
                 const outgoing = blueprint.edges.filter((edge) => edge.from === node.id).length;
                 return `
-                  <article class="blueprint-node ${blueprint.ui.selectedNodeId === node.id ? "selected" : ""} ${node.enabled ? "" : "disabled"} run-${activeTask?.nodeRuns?.[node.id]?.status || "idle"}" style="left:${node.x}px;top:${node.y}px;--node-color:${category.color}" data-blueprint-node-id="${esc(node.id)}">
-                    <button class="blueprint-port input" data-action="complete-blueprint-edge" data-node-id="${esc(node.id)}" title="连接到此节点"></button>
+                  <article class="blueprint-node ${selectedNodeIds.has(node.id) ? "selected" : ""} ${node.enabled ? "" : "disabled"} run-${activeTask?.nodeRuns?.[node.id]?.status || "idle"}" style="left:${node.x}px;top:${node.y}px;height:${getNodeHeight(node)}px;--node-color:${category.color}" data-blueprint-node-id="${esc(node.id)}">
                     <button class="blueprint-node-main" data-action="select-blueprint-node" data-node-id="${esc(node.id)}">
                       <span class="blueprint-node-type">${esc(category.label)} · ${esc(definition.name)}</span>
                       <strong>${esc(node.name)}</strong>
                       <small>${activeTask ? `运行：${esc(activeTask.nodeRuns?.[node.id]?.status || "idle")}` : `收 ${incoming} · 发 ${outgoing}`}</small>
                     </button>
-                    <button class="blueprint-port output ${blueprint.ui.pendingFromNodeId === node.id ? "pending" : ""}" data-action="begin-blueprint-edge" data-node-id="${esc(node.id)}" title="从此节点创建连接"></button>
+                    ${ports.inputs.map((port, index) => {
+                      const connected = blueprint.edges.some((edge) => edge.to === node.id && (edge.toPort || getDefaultPortId(node, "input", "flow")) === port.id);
+                      return `<div class="blueprint-pin-row input" style="top:${64 + index * 23}px"><button class="blueprint-port input type-${esc(port.dataType)} ${connected ? "connected" : "unconnected"}" style="--port-color:${PORT_TYPE_COLORS[port.dataType] || PORT_TYPE_COLORS.any}" data-action="complete-blueprint-edge" data-node-id="${esc(node.id)}" data-port-id="${esc(port.id)}" data-port-type="${esc(port.dataType)}" title="${esc(port.label)} · ${connected ? "已连接" : "未连接"}输入"></button><span>${esc(port.label)}</span></div>`;
+                    }).join("")}
+                    ${ports.outputs.map((port, index) => {
+                      const connected = blueprint.edges.some((edge) => edge.from === node.id && (edge.fromPort || getDefaultPortId(node, "output", "flow")) === port.id);
+                      return `<div class="blueprint-pin-row output" style="top:${64 + index * 23}px"><span>${esc(port.label)}</span><button class="blueprint-port output type-${esc(port.dataType)} ${connected ? "connected" : "unconnected"} ${blueprint.ui.pendingFromNodeId === node.id && blueprint.ui.pendingFromPortId === port.id ? "pending" : ""}" style="--port-color:${PORT_TYPE_COLORS[port.dataType] || PORT_TYPE_COLORS.any}" data-action="begin-blueprint-edge" data-node-id="${esc(node.id)}" data-port-id="${esc(port.id)}" data-port-type="${esc(port.dataType)}" title="${esc(port.label)} · ${connected ? "已连接" : "未连接"}输出，可拖拽创建连接"></button></div>`;
+                    }).join("")}
                   </article>
                 `;
               }).join("")}
               ${blueprint.nodes.length ? "" : `<div class="blueprint-canvas-empty"><strong>把节点添加到画布</strong><span>从左侧节点库选择一个节点开始。</span></div>`}
             </div>
           </div>
+          <div class="blueprint-minimap" data-blueprint-minimap title="点击定位画布">
+            <svg viewBox="0 0 ${size.width} ${size.height}" preserveAspectRatio="none">
+              ${blueprint.nodes.map((node) => `<rect x="${node.x}" y="${node.y}" width="208" height="${getNodeHeight(node)}" class="${selectedNodeIds.has(node.id) ? "selected" : ""}"></rect>`).join("")}
+              <rect class="blueprint-minimap-viewport" data-blueprint-minimap-viewport x="0" y="0" width="1" height="1"></rect>
+            </svg>
+          </div>
         </section>
       `;
     }
 
     function renderInspector(blueprint) {
+      const selectedNodeIds = [...new Set([...(blueprint.ui.selectedNodeIds || []), blueprint.ui.selectedNodeId].filter(Boolean))]
+        .filter((nodeId) => blueprint.nodes.some((item) => item.id === nodeId));
+      if (selectedNodeIds.length > 1) {
+        return `
+          <aside class="blueprint-inspector blueprint-multi-inspector">
+            <div class="blueprint-panel-heading"><strong>多选节点</strong><span>${selectedNodeIds.length} 个</span></div>
+            <div class="blueprint-empty-hint"><b>◇</b><strong>已选择 ${selectedNodeIds.length} 个节点</strong><span>可以整体拖动、复制、重复或删除所选节点。</span></div>
+            <div class="blueprint-multi-actions"><button class="secondary-button" data-action="align-blueprint-left">左对齐</button><button class="secondary-button" data-action="align-blueprint-top">顶对齐</button><button class="secondary-button" data-action="distribute-blueprint-horizontal">横向分布</button><button class="secondary-button" data-action="distribute-blueprint-vertical">纵向分布</button></div>
+            <button class="secondary-button full" data-action="group-blueprint-selection">建立节点分组</button>
+            <button class="secondary-button full" data-action="copy-blueprint-selection">复制所选</button>
+            <button class="secondary-button full" data-action="duplicate-blueprint-selection">重复所选</button>
+            <button class="secondary-button danger full" data-action="delete-blueprint-selection">删除所选</button>
+          </aside>
+        `;
+      }
       const node = blueprint.nodes.find((item) => item.id === blueprint.ui.selectedNodeId);
       const edge = blueprint.edges.find((item) => item.id === blueprint.ui.selectedEdgeId);
       if (node) {
@@ -415,7 +580,7 @@
       }
       const validation = validateBlueprint(blueprint);
       return `
-        <section class="workspace blueprint-workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}" data-blueprint-id="${esc(blueprint.id)}">
+        <section class="workspace blueprint-workspace ${sidebarCollapsed ? "sidebar-collapsed" : ""}" data-blueprint-id="${esc(blueprint.id)}" tabindex="-1">
           ${sidebarRestoreButton}
           <div class="workspace-topbar blueprint-topbar">
             <div class="project-heading">
@@ -447,6 +612,12 @@
     TYPE_MAP,
     CATEGORY_MAP,
     NODE_PROPERTY_SCHEMAS,
+    PORT_TYPE_COLORS,
+    getNodePorts,
+    getNodeHeight,
+    getNodePortPoint,
+    getDefaultPortId,
+    getGroupBounds,
     createNode,
     createBlueprint,
     ensureBlueprintShape,
