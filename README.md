@@ -1,7 +1,7 @@
 <p align="center">
   <img src="./src/Logo.png" alt="CosS Logo" style="width: 80px; vertical-align: middle;">
 </p>
-<h1 align="center">CosS Desktop v0.11.1</h1>
+<h1 align="center">CosS Desktop v0.12.0</h1>
 <p align="center">
   <img src="https://img.shields.io/github/languages/code-size/xiaolizi0v0/CosS" alt="code size"/>
   <img src="https://img.shields.io/badge/Electron-31.7.7-brightgreen" alt="Electron"/>
@@ -16,11 +16,12 @@
 
 **Code Orchestration System** — 一个基于 MCP 协议的 AI 多智能体协作工作区。
 
-CosS 提供类桌面工作区与交互式 Agent 世界，让产品经理、技术负责人、工程师、测试等 AI 智能体通过**中央线性工作流内核（Kernel）**协作完成软件开发任务。所有智能体通过 **Model Context Protocol (MCP)** 接入系统，遵循统一的步骤认领、租约、锁和审批机制。
+CosS 提供项目、蓝图与 Agent 世界三类工作区，让产品经理、技术负责人、工程师、测试等 AI 智能体通过**中央工作流内核（Kernel）**协作完成软件开发任务。所有智能体通过 **Model Context Protocol (MCP)** 接入系统，遵循统一的步骤认领、租约、锁和审批机制。
 
 ## 核心特性
 
 - **类桌面工作区** — 左侧项目栏创建/切换项目，每个项目拥有独立的工作区
+- **可执行蓝图工作区** — 32 类节点、自由连线、审批、并行与逐项运行，用可视化图谱编排并执行用户任务
 - **多智能体协作** — 支持产品经理、技术负责人、前后端工程师、QA 工程师等 9 种角色
 - **Agent 世界** — 9 位居民拥有独立住宅与房间，可加入世界群聊并通过公告栏领取任务
 - **线性工作流内核** — LLM Planner 自动将用户目标分解为线性步骤，按序分派给对应角色
@@ -58,8 +59,8 @@ Release Assets 使用 electron-builder 生成安装包，包含：
 - `checksums.txt` — SHA-256 校验和
 
 ```powershell
-git tag v0.11.1
-git push origin v0.11.1
+git tag v0.12.0
+git push origin v0.12.0
 ```
 
 ## 系统架构

@@ -37,7 +37,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.11.1";
+    return "0.12.0";
   }
 })();
 const terminalProcessTreeSnapshotDelaysMs = [500, 2000, 5000];
@@ -2098,6 +2098,472 @@ function extractWorldAgentFinalMessage(output) {
   // 策略3：取最后一段非空行（原始兜底）
   const candidate = lines.slice(-20).join("\n");
   return candidate.slice(0, 10000);
+}
+
+async function handleBlueprintCommandRun(_event, request = {}) {
+  const startedAt = Date.now();
+  const command = String(request.command || "").trim().slice(0, 16000);
+  const cwd = normalizeCwd(request.cwd || process.cwd());
+  const timeoutMs = Math.min(300000, Math.max(1000, Number(request.timeoutMs) || 120000));
+  if (!command) return { ok: false, error: "命令为空。", output: "", exitCode: null, latencyMs: 0 };
+  appendLogEvent("blueprint.command.started", { cwd, command: sanitizeLogText(command, 300), timeoutMs });
+  return new Promise((resolve) => {
+    const launch = process.platform === "win32"
+      ? { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command] }
+      : { file: process.env.SHELL || "/bin/sh", args: ["-lc", command] };
+    let output = "";
+    let settled = false;
+    let child;
+    const finish = (ok, exitCode, error = "", timedOut = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const result = { ok, output: stripAnsi(output).trim().slice(-60000), error, exitCode, timedOut, latencyMs: Date.now() - startedAt };
+      appendLogEvent(ok ? "blueprint.command.completed" : "blueprint.command.failed", {
+        cwd,
+        exitCode,
+        timedOut,
+        outputLength: result.output.length,
+        error: sanitizeLogText(error, 300),
+        latencyMs: result.latencyMs
+      }, ok ? "info" : "warn");
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try {
+        if (child?.pid) {
+          child.kill();
+          killProcessTree(child.pid);
+        }
+      } catch {}
+      finish(false, null, "命令执行超时。", true);
+    }, timeoutMs);
+    try {
+      child = childProcess.spawn(launch.file, launch.args, {
+        cwd,
+        env: getWindowsShellEnv(),
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      child.stdout?.on("data", (chunk) => { output = (output + chunk).slice(-80000); });
+      child.stderr?.on("data", (chunk) => { output = (output + chunk).slice(-80000); });
+      child.on("error", (error) => finish(false, null, error.message));
+      child.on("close", (code) => finish(code === 0, code, code === 0 ? "" : "命令退出码为 " + code + "。"));
+    } catch (error) {
+      finish(false, null, error.message);
+    }
+  });
+}
+
+function buildBlueprintAgentLaunch(provider, prompt, cwd, request = {}) {
+  const permissionMode = String(request.permissionMode || "confirm");
+  const model = String(request.model || "").trim();
+  if (provider === "claude") {
+    const status = getClaudeCodeStatus();
+    if (!status.installed) throw new Error(status.versionError || "Claude Code 未安装或不可运行。");
+    const claudeMode = { "read-only": "plan", "workspace-write": "acceptEdits", confirm: "default" }[permissionMode] || "default";
+    const args = ["-p", prompt, "--permission-mode", claudeMode, "--output-format", "text"];
+    if (model) args.push("--model", model);
+    return { file: status.command, args, cwd, env: getWindowsShellEnv(), launchMethod: "blueprint-claude" };
+  }
+  if (provider === "codex") {
+    const status = getCodexCommandStatus();
+    if (!status.runnable) throw new Error(status.errorDetail || "Codex CLI 未安装或不可运行。");
+    const args = ["exec", "--sandbox", permissionMode === "read-only" ? "read-only" : "workspace-write", "--skip-git-repo-check", "--ephemeral"];
+    if (model) args.push("--model", model);
+    args.push(prompt);
+    const direct = buildNodeAgentLaunch(resolveCodexBinScript(status.command, status.lookupPaths), args, getWindowsShellEnv(), "blueprint-node-codex-bin");
+    if (direct) return { ...direct, cwd, env: getWindowsShellEnv() };
+    if (process.platform === "win32") return {
+      file: "powershell.exe",
+      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", buildPowerShellInvocation(status.command, args)],
+      cwd,
+      env: getWindowsShellEnv(),
+      launchMethod: "blueprint-powershell-codex"
+    };
+    return { file: status.command, args, cwd, env: getWindowsShellEnv(), launchMethod: "blueprint-codex" };
+  }
+  const apiKey = String(request.codeBuddyApiKey || "").trim();
+  const env = getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {});
+  if (!getCaseInsensitiveEnvValue(env, "CODEBUDDY_API_KEY")) throw new Error("尚未配置 CodeBuddy Code API Key。");
+  const launch = buildWorldCodeBuddyLaunch(cwd, prompt, env);
+  return { ...launch, env, cwd };
+}
+
+async function handleBlueprintAgentRun(_event, request = {}) {
+  const startedAt = Date.now();
+  const provider = ["claude", "codex", "codebuddy"].includes(request.provider) ? request.provider : "codebuddy";
+  const prompt = String(request.prompt || "").trim().slice(0, 60000);
+  const cwd = normalizeCwd(request.cwd || process.cwd());
+  const timeoutMs = Math.min(900000, Math.max(5000, Number(request.timeoutMs) || 300000));
+  const runId = sanitizeLogText(request.runId || randomUUID(), 80);
+  if (!prompt) return { ok: false, provider, runId, error: "Agent 指令为空。", output: "", latencyMs: 0 };
+  let launch;
+  try {
+    launch = buildBlueprintAgentLaunch(provider, prompt, cwd, request);
+  } catch (error) {
+    return { ok: false, provider, runId, error: error.message, output: "", latencyMs: Date.now() - startedAt };
+  }
+  appendLogEvent("blueprint.agent.started", { provider, runId, cwd, launchMethod: launch.launchMethod, timeoutMs });
+  return new Promise((resolve) => {
+    let output = "";
+    let settled = false;
+    let child;
+    const finish = (ok, exitCode, error = "", timedOut = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const rawOutput = stripAnsi(output).trim().slice(-60000);
+      const finalOutput = extractWorldAgentFinalMessage(rawOutput) || rawOutput.slice(-10000);
+      const result = { ok, provider, runId, output: finalOutput, rawOutput, error, exitCode, timedOut, launchMethod: launch.launchMethod, latencyMs: Date.now() - startedAt };
+      appendLogEvent(ok ? "blueprint.agent.completed" : "blueprint.agent.failed", {
+        provider, runId, cwd, exitCode, timedOut, outputLength: finalOutput.length, error: sanitizeLogText(error, 300), latencyMs: result.latencyMs
+      }, ok ? "info" : "warn");
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try {
+        if (child?.pid) {
+          child.kill();
+          killProcessTree(child.pid);
+        }
+      } catch {}
+      finish(false, null, "Agent 执行超时。", true);
+    }, timeoutMs);
+    try {
+      child = childProcess.spawn(launch.file, launch.args || [], {
+        cwd: launch.cwd || cwd,
+        env: launch.env || getWindowsShellEnv(),
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      child.stdout?.on("data", (chunk) => { output = (output + chunk).slice(-100000); });
+      child.stderr?.on("data", (chunk) => { output = (output + chunk).slice(-100000); });
+      child.on("error", (error) => finish(false, null, error.message));
+      child.on("close", (code) => finish(code === 0, code, code === 0 ? "" : provider + " 退出码为 " + code + "。"));
+    } catch (error) {
+      finish(false, null, error.message);
+    }
+  });
+}
+
+async function performBlueprintBrowserActions(webContents, actions = []) {
+  const results = [];
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = actions[index] && typeof actions[index] === "object" ? actions[index] : {};
+    const type = String(action.type || "").toLowerCase();
+    const selector = String(action.selector || "").slice(0, 500);
+    if (!["wait", "click", "fill", "extract"].includes(type)) throw new Error("不支持的浏览器动作：" + type);
+    if (!selector) throw new Error("浏览器动作 #" + (index + 1) + " 缺少 selector。");
+    if (type === "wait") {
+      const timeoutMs = Math.min(30000, Math.max(100, Number(action.timeoutMs) || 8000));
+      const found = await webContents.executeJavaScript(`new Promise((resolve) => {
+        const selector = ${JSON.stringify(selector)};
+        const existing = document.querySelector(selector);
+        if (existing) { resolve(true); return; }
+        const observer = new MutationObserver(() => {
+          if (document.querySelector(selector)) { observer.disconnect(); resolve(true); }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => { observer.disconnect(); resolve(false); }, ${timeoutMs});
+      })`, true);
+      if (!found) throw new Error("等待元素超时：" + selector);
+      results.push({ index, type, selector, ok: true });
+      continue;
+    }
+    if (type === "click") {
+      const clicked = await webContents.executeJavaScript(`(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) return false;
+        element.click();
+        return true;
+      })()`, true);
+      if (!clicked) throw new Error("找不到要点击的元素：" + selector);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(5000, Math.max(0, Number(action.waitAfterMs) || 350))));
+      results.push({ index, type, selector, ok: true });
+      continue;
+    }
+    if (type === "fill") {
+      const value = String(action.value ?? "").slice(0, 10000);
+      const filled = await webContents.executeJavaScript(`(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) return false;
+        const value = ${JSON.stringify(value)};
+        const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
+        if (descriptor?.set) descriptor.set.call(element, value); else element.value = value;
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      })()`, true);
+      if (!filled) throw new Error("找不到要填写的元素：" + selector);
+      results.push({ index, type, selector, ok: true, valueLength: value.length });
+      continue;
+    }
+    const text = await webContents.executeJavaScript(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      return element ? String(element.innerText || element.textContent || "") : null;
+    })()`, true);
+    if (text === null) throw new Error("找不到要提取的元素：" + selector);
+    results.push({ index, type, selector, ok: true, output: String(text).slice(0, Math.min(50000, Math.max(500, Number(action.maxChars) || 10000))) });
+  }
+  return results;
+}
+
+async function handleBlueprintBrowserRun(_event, request = {}) {
+  const startedAt = Date.now();
+  const mode = ["open", "extract-text", "extract-selector", "actions"].includes(request.mode) ? request.mode : "extract-text";
+  const selector = String(request.selector || "").trim().slice(0, 500);
+  const maxChars = Math.min(100000, Math.max(1000, Number(request.maxChars) || 20000));
+  let targetUrl;
+  try {
+    targetUrl = new URL(String(request.url || ""));
+  } catch {
+    return { ok: false, error: "浏览器节点地址无效。", output: "" };
+  }
+  if (!["http:", "https:"].includes(targetUrl.protocol)) return { ok: false, error: "浏览器节点仅支持 HTTP/HTTPS 地址。", output: "" };
+  if (mode === "open") {
+    await shell.openExternal(targetUrl.toString());
+    return { ok: true, mode, url: targetUrl.toString(), opened: true, output: targetUrl.toString(), latencyMs: Date.now() - startedAt };
+  }
+  let browserWindow;
+  try {
+    browserWindow = new BrowserWindow({
+      show: false,
+      width: 1100,
+      height: 760,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        javascript: true
+      }
+    });
+    browserWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    const timeoutMs = Math.min(120000, Math.max(5000, Number(request.timeoutMs) || 45000));
+    await Promise.race([
+      browserWindow.loadURL(targetUrl.toString()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("网页加载超时。")), timeoutMs))
+    ]);
+    const actions = mode === "actions" && Array.isArray(request.actions) ? request.actions.slice(0, 20) : [];
+    const actionResults = actions.length ? await performBlueprintBrowserActions(browserWindow.webContents, actions) : [];
+    const selectorLiteral = JSON.stringify(mode === "extract-selector" ? selector : "");
+    const extracted = await browserWindow.webContents.executeJavaScript(
+      `(() => {
+        const requestedSelector = ${selectorLiteral};
+        const element = requestedSelector ? document.querySelector(requestedSelector) : document.body;
+        if (!element) return { found: false, title: document.title, url: location.href, text: "" };
+        return {
+          found: true,
+          title: document.title,
+          url: location.href,
+          text: String(element.innerText || element.textContent || "").replace(/\n{3,}/g, "\n\n")
+        };
+      })()`,
+      true
+    );
+    const output = String(extracted?.text || "").slice(0, maxChars);
+    const actionOutput = [...actionResults].reverse().find((item) => item.type === "extract")?.output;
+    const result = { ok: true, mode, selector, found: Boolean(extracted?.found), title: String(extracted?.title || ""), url: String(extracted?.url || targetUrl), output: actionOutput ?? output, actions: actionResults, truncated: String(extracted?.text || "").length > output.length, latencyMs: Date.now() - startedAt };
+    appendLogEvent("blueprint.browser.extracted", { mode, url: result.url, selector, found: result.found, outputLength: output.length, truncated: result.truncated, latencyMs: result.latencyMs });
+    return result;
+  } catch (error) {
+    appendLogEvent("blueprint.browser.failed", { mode, url: targetUrl.toString(), selector, error: sanitizeLogText(error.message, 300), latencyMs: Date.now() - startedAt }, "warn");
+    return { ok: false, mode, url: targetUrl.toString(), selector, error: error.message, output: "", latencyMs: Date.now() - startedAt };
+  } finally {
+    if (browserWindow && !browserWindow.isDestroyed()) browserWindow.destroy();
+  }
+}
+
+async function readBlueprintMcpHttpResponse(response) {
+  if (response.status === 202 || response.status === 204) return null;
+  const text = await response.text();
+  if (!text.trim()) return null;
+  if ((response.headers.get("content-type") || "").includes("text/event-stream")) {
+    const messages = text.split(/\r?\n/).filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim()).filter((line) => line && line !== "[DONE]")
+      .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+    return messages.reverse().find((message) => message.id !== undefined) || messages[0] || null;
+  }
+  try { return JSON.parse(text); } catch { throw new Error("MCP HTTP 响应不是有效 JSON：" + text.slice(0, 300)); }
+}
+
+async function callBlueprintStreamableHttpMcp(server, request, appVersionValue) {
+  const endpoint = String(server.url || server.endpoint || "").trim();
+  const target = new URL(endpoint);
+  if (!["http:", "https:"].includes(target.protocol)) throw new Error("MCP HTTP Endpoint 仅支持 HTTP/HTTPS。");
+  const timeoutMs = Math.min(180000, Math.max(5000, Number(request.timeoutMs) || 60000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let sessionId = "";
+  let protocolVersion = "2025-06-18";
+  const baseHeaders = { ...(server.headers || {}), "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
+  async function post(message, includeSession = true) {
+    const headers = { ...baseHeaders, "Mcp-Method": message.method || "" };
+    if (message.method === "tools/call" && message.params?.name) headers["Mcp-Name"] = message.params.name;
+    if (includeSession && sessionId) headers["Mcp-Session-Id"] = sessionId;
+    if (includeSession) headers["MCP-Protocol-Version"] = protocolVersion;
+    const response = await fetch(target, { method: "POST", headers, body: JSON.stringify(message), signal: controller.signal });
+    if (!response.ok && response.status !== 202) throw new Error("MCP HTTP " + response.status + "：" + (await response.text()).slice(0, 500));
+    return { response, message: await readBlueprintMcpHttpResponse(response) };
+  }
+  try {
+    const initialized = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion, capabilities: {}, clientInfo: { name: "coss-blueprint", version: appVersionValue } } }, false);
+    if (initialized.message?.error) throw new Error(initialized.message.error.message || "MCP HTTP 初始化失败。");
+    sessionId = initialized.response.headers.get("mcp-session-id") || "";
+    protocolVersion = initialized.message?.result?.protocolVersion || protocolVersion;
+    await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+    const operation = request.operation === "list-tools" ? "tools/list" : "tools/call";
+    const params = operation === "tools/list" ? {} : { name: request.toolName, arguments: request.arguments || {} };
+    const called = await post({ jsonrpc: "2.0", id: 2, method: operation, params });
+    if (called.message?.error) throw new Error(called.message.error.message || "MCP HTTP 请求失败。");
+    return called.message?.result || {};
+  } finally {
+    clearTimeout(timer);
+    if (sessionId) {
+      const headers = { ...baseHeaders, "Mcp-Session-Id": sessionId, "MCP-Protocol-Version": protocolVersion };
+      fetch(target, { method: "DELETE", headers }).catch(() => {});
+    }
+  }
+}
+
+async function handleBlueprintMcpRun(_event, request = {}) {
+  const startedAt = Date.now();
+  const cwd = normalizeCwd(request.cwd || process.cwd());
+  const serverName = String(request.serverName || "coss").trim().slice(0, 100);
+  const toolName = String(request.toolName || "").trim().slice(0, 180);
+  const operation = request.operation === "list-tools" ? "list-tools" : "call-tool";
+  const timeoutMs = Math.min(180000, Math.max(5000, Number(request.timeoutMs) || 60000));
+  if (operation === "call-tool" && !toolName) return { ok: false, error: "MCP 工具名称为空。", output: null };
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(path.join(cwd, ".mcp.json"), "utf8"));
+  } catch (error) {
+    return { ok: false, error: "无法读取工作目录中的 .mcp.json：" + error.message, output: null };
+  }
+  const server = config?.mcpServers?.[serverName];
+  if (!server) return { ok: false, error: "找不到 MCP Server：" + serverName, output: null };
+  const serverType = String(server.type || (server.url ? "streamable-http" : "stdio")).toLowerCase();
+  if (["http", "streamable-http", "streamable_http"].includes(serverType)) {
+    try {
+      const result = await callBlueprintStreamableHttpMcp(server, { ...request, operation, toolName }, appVersion);
+      const tools = operation === "list-tools" ? (result.tools || []) : undefined;
+      const content = operation === "call-tool" && Array.isArray(result.content) ? result.content : [];
+      const text = content.filter((item) => item.type === "text").map((item) => item.text || "").join("\n");
+      let output = operation === "list-tools" ? tools : (text || result);
+      if (text) { try { output = JSON.parse(text); } catch {} }
+      return { ok: result.isError !== true, serverName, serverType: "streamable-http", toolName, tools, output, error: result.isError ? (text || "MCP 工具返回错误。") : "", latencyMs: Date.now() - startedAt };
+    } catch (error) {
+      return { ok: false, serverName, serverType: "streamable-http", toolName, error: error.name === "AbortError" ? "MCP HTTP 调用超时。" : error.message, output: null, latencyMs: Date.now() - startedAt };
+    }
+  }
+  if (serverType !== "stdio") return { ok: false, error: "暂不支持 MCP Server 类型：" + serverType, output: null };
+  const command = String(server.command || "").trim();
+  const args = Array.isArray(server.args) ? server.args.map((item) => String(item)) : [];
+  if (!command) return { ok: false, error: "MCP Server 未配置 command。", output: null };
+  let toolArguments = request.arguments;
+  if (!toolArguments || typeof toolArguments !== "object" || Array.isArray(toolArguments)) toolArguments = {};
+  appendLogEvent("blueprint.mcp.started", { cwd, serverName, toolName, operation, timeoutMs });
+  return new Promise((resolve) => {
+    let child;
+    let settled = false;
+    let stderr = "";
+    let buffer = Buffer.alloc(0);
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (child?.pid) {
+          child.kill();
+          killProcessTree(child.pid);
+        }
+      } catch {}
+      const response = { ...result, serverName, toolName, latencyMs: Date.now() - startedAt, stderr: stderr.slice(-4000) };
+      appendLogEvent(response.ok ? "blueprint.mcp.completed" : "blueprint.mcp.failed", {
+        cwd, serverName, toolName, latencyMs: response.latencyMs, error: sanitizeLogText(response.error, 300)
+      }, response.ok ? "info" : "warn");
+      resolve(response);
+    };
+    const send = (message) => {
+      const json = JSON.stringify(message);
+      child.stdin.write("Content-Length: " + Buffer.byteLength(json, "utf8") + "\r\n\r\n" + json);
+    };
+    const handleMessage = (message) => {
+      if (message?.id === 1) {
+        if (message.error) { finish({ ok: false, error: message.error.message || "MCP 初始化失败。", output: null }); return; }
+        send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+        send(operation === "list-tools"
+          ? { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }
+          : { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: toolName, arguments: toolArguments } });
+        return;
+      }
+      if (message?.id !== 2) return;
+      if (message.error) { finish({ ok: false, error: message.error.message || "MCP 工具调用失败。", output: null }); return; }
+      if (operation === "list-tools") {
+        finish({ ok: true, error: "", output: message.result?.tools || [], tools: message.result?.tools || [] });
+        return;
+      }
+      const content = Array.isArray(message.result?.content) ? message.result.content : [];
+      const text = content.filter((item) => item.type === "text").map((item) => item.text || "").join("\n");
+      let output = text || message.result || null;
+      if (text) {
+        try { output = JSON.parse(text); } catch {}
+      }
+      finish({ ok: message.result?.isError !== true, error: message.result?.isError ? (text || "MCP 工具返回错误。") : "", output, content });
+    };
+    const processBuffer = () => {
+      while (buffer.length) {
+        const crlf = buffer.indexOf("\r\n\r\n");
+        const lf = buffer.indexOf("\n\n");
+        const boundaryIndex = crlf >= 0 && (lf < 0 || crlf < lf) ? crlf : lf;
+        const boundaryLength = boundaryIndex === crlf ? 4 : 2;
+        if (boundaryIndex >= 0) {
+          const header = buffer.slice(0, boundaryIndex).toString("utf8");
+          const match = header.match(/Content-Length:\s*(\d+)/i);
+          if (match) {
+            const length = Number(match[1]);
+            const start = boundaryIndex + boundaryLength;
+            if (buffer.length < start + length) return;
+            const json = buffer.slice(start, start + length).toString("utf8");
+            buffer = buffer.slice(start + length);
+            try { handleMessage(JSON.parse(json)); } catch {}
+            continue;
+          }
+        }
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const line = buffer.slice(0, newline).toString("utf8").trim();
+        buffer = buffer.slice(newline + 1);
+        if (line.startsWith("{")) {
+          try { handleMessage(JSON.parse(line)); } catch {}
+        }
+      }
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: "MCP 工具调用超时。", output: null, timedOut: true }), timeoutMs);
+    try {
+      const launch = process.platform === "win32" && isWindowsBatchCommand(command)
+        ? { file: "cmd.exe", args: ["/d", "/c", buildCmdInvocation(command, args)] }
+        : { file: command, args };
+      child = childProcess.spawn(launch.file, launch.args, {
+        cwd,
+        env: { ...getWindowsShellEnv(), ...(server.env || {}) },
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      child.stdout.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); processBuffer(); });
+      child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-8000); });
+      child.on("error", (error) => finish({ ok: false, error: error.message, output: null }));
+      child.on("close", (code) => { if (!settled) finish({ ok: false, error: "MCP Server 提前退出，退出码 " + code + "。", output: null, exitCode: code }); });
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "coss-blueprint", version: appVersion } }
+      });
+    } catch (error) {
+      finish({ ok: false, error: error.message, output: null });
+    }
+  });
 }
 
 async function handleWorldAgentRun(_event, request = {}) {
@@ -4720,6 +5186,10 @@ app.whenReady().then(() => {
     sanitizeLogText,
     getCodexCommandStatus,
     handleWorldAgentRun,
+    handleBlueprintCommandRun,
+    handleBlueprintAgentRun,
+    handleBlueprintBrowserRun,
+    handleBlueprintMcpRun,
     getCodeBuddyCommandStatus,
     getShellEnv,
     getWindowsShellEnv,

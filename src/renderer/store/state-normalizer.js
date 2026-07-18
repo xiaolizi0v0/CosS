@@ -1,6 +1,7 @@
 (function exposeStateNormalizer(global) {
   function createStateNormalizer({
     ensureWorldShape,
+    ensureBlueprintShape,
     ensureProjectShape,
     ensureAgentPrompt,
     ensureModelSettings,
@@ -14,8 +15,11 @@
       normalize(nextState = {}) {
         nextState.worlds = (Array.isArray(nextState.worlds) ? nextState.worlds : [])
           .map(ensureWorldShape).filter(Boolean);
+        nextState.blueprints = (Array.isArray(nextState.blueprints) ? nextState.blueprints : [])
+          .map(ensureBlueprintShape || ((item) => item)).filter(Boolean);
         nextState.activeWorldId = typeof nextState.activeWorldId === "string" ? nextState.activeWorldId : "";
-        nextState.activeSidebarSection = ["worlds", "projects"].includes(nextState.activeSidebarSection)
+        nextState.activeBlueprintId = typeof nextState.activeBlueprintId === "string" ? nextState.activeBlueprintId : "";
+        nextState.activeSidebarSection = ["worlds", "blueprints", "projects"].includes(nextState.activeSidebarSection)
           ? nextState.activeSidebarSection : "projects";
         nextState.deletedProjectIds = [...new Set((nextState.deletedProjectIds || [])
           .map((value) => String(value || "").trim()).filter(Boolean))];

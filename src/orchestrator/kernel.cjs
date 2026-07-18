@@ -1,6 +1,6 @@
 const { randomUUID } = require("crypto");
 
-const KERNEL_VERSION = "0.11.1";
+const KERNEL_VERSION = "0.12.0";
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 
 const roleTemplates = [

@@ -30,7 +30,7 @@ const PRODUCT_DOCS_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/hel
 const PRODUCT_PRIVACY_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/privacy.md";
 const PRODUCT_LICENSE_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/license.md";
 
-const APP_VERSION = "v0.11.1";
+const APP_VERSION = "v0.12.0";
 const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const appStore = window.COSS_STORE.createAppStore(structuredClone(defaultState), {
@@ -46,6 +46,7 @@ function replaceAppState(nextState, reason = "replace") {
 
 const stateNormalizer = window.COSS_STATE_NORMALIZER.createStateNormalizer({
   ensureWorldShape,
+  ensureBlueprintShape: window.COSS_BLUEPRINT.ensureBlueprintShape,
   ensureProjectShape,
   ensureAgentPrompt: (template) => ensureAgentPromptMcpInstructions(ensureAgentPromptPermissionPlaceholders(template)),
   ensureModelSettings,
@@ -54,6 +55,132 @@ const stateNormalizer = window.COSS_STATE_NORMALIZER.createStateNormalizer({
   languageOptions: LANGUAGE_OPTIONS,
   defaultLanguage: defaultState.settings.language,
   defaultState
+});
+
+const blueprintRenderer = window.COSS_BLUEPRINT.createRenderer({
+  escapeHtml,
+  icon,
+  translate: t
+});
+
+const blueprintTimerHandles = new Map();
+const blueprintRuntime = window.COSS_BLUEPRINT_RUNTIME.createBlueprintRuntime({
+  createId: uid,
+  validateBlueprint: window.COSS_BLUEPRINT.validateBlueprint,
+  adapters: {
+    plan: async ({ blueprint, task }) => {
+      const activeModel = getActiveModelConfig();
+      const project = getProject() || { name: blueprint.name, memory: null };
+      const result = await requestTaskPlan(task.goal, project, activeModel, project.memory || null);
+      if (!result?.ok) throw new Error(result?.error || "规划器未返回有效计划。");
+      return result;
+    },
+    agent: async ({ blueprint, task, node, input, instruction }) => {
+      if (!window.cossAPI?.runBlueprintAgent) throw new Error("当前运行环境未提供蓝图 Agent 执行服务。");
+      const roleId = String(node.config.roleId || "assistant");
+      const role = ROLE_TEMPLATES.find((item) => item.id === roleId);
+      const provider = ["claude", "codex", "codebuddy"].includes(node.config.provider)
+        ? node.config.provider : normalizeAgentProvider(state.settings.agentProvider);
+      const prompt = [
+        "你正在执行 CosS 蓝图节点。",
+        "蓝图：" + blueprint.name,
+        "任务目标：" + task.goal,
+        "节点：" + node.name,
+        instruction || node.description,
+        "上游输入：" + (typeof input === "string" ? input : JSON.stringify(input))
+      ].filter(Boolean).join("\n\n");
+      const result = await window.cossAPI.runBlueprintAgent({
+        blueprintId: blueprint.id,
+        taskId: task.id,
+        runId: uid("bp-agent-run"),
+        provider,
+        model: node.config.model || "",
+        permissionMode: node.config.permissionMode || state.settings.agentPermissionMode || "confirm",
+        roleId,
+        roleName: role ? trRoleName(role) : roleId,
+        taskGoal: task.goal,
+        moduleSummary: node.name,
+        prompt,
+        cwd: task.workspace,
+        codeBuddyApiKey: state.settings.codeBuddyApiKey || ""
+      });
+      if (!result?.ok) throw new Error(result?.error || "Agent 节点执行失败。");
+      return { output: result.output, rawOutput: result.rawOutput || "", provider: result.provider || provider, runId: result.runId, latencyMs: result.latencyMs };
+    },
+    command: async ({ task, node, instruction }) => {
+      if (!window.cossAPI?.runBlueprintCommand) throw new Error("当前运行环境未提供命令执行服务。");
+      const result = await window.cossAPI.runBlueprintCommand({
+        command: node.config.command || instruction,
+        cwd: node.config.workingDirectory || task.workspace,
+        timeoutMs: node.timeoutMs || 120000
+      });
+      if (!result?.ok) throw new Error(result?.error || "命令执行失败。");
+      return result;
+    },
+    file: async ({ task, node, instruction }) => {
+      const operation = node.config.operation || "read";
+      const filePath = node.config.path || "";
+      let result;
+      if (operation === "read") result = await window.cossAPI?.readProjectFile?.({ projectPath: task.workspace, filePath });
+      else if (operation === "write" || operation === "append") {
+        let content = node.config.content || instruction || "";
+        if (operation === "append") {
+          const previous = await window.cossAPI?.readProjectFile?.({ projectPath: task.workspace, filePath });
+          if (previous?.ok) content = previous.content + content;
+        }
+        result = await window.cossAPI?.writeProjectFile?.({ projectPath: task.workspace, filePath, content });
+      } else if (operation === "delete") result = await window.cossAPI?.deleteProjectFile?.({ projectPath: task.workspace, filePath });
+      else if (operation === "move") result = await window.cossAPI?.renameProjectFile?.({ projectPath: task.workspace, fromPath: filePath, toPath: node.config.toPath || "" });
+      else if (operation === "exists") {
+        const listed = await window.cossAPI?.listProjectFiles?.(task.workspace);
+        result = listed?.ok ? { ok: true, exists: listed.files.some((item) => item.path === filePath), path: filePath } : listed;
+      }
+      if (!result?.ok) throw new Error(result?.error || "文件节点执行失败。");
+      return result;
+    },
+    browser: async ({ node, instruction, scope }) => {
+      const url = node.config.url || instruction;
+      if (!/^https?:\/\//i.test(url)) throw new Error("浏览器节点需要有效的 HTTP/HTTPS 地址。");
+      let actions = [];
+      if ((node.config.mode || "extract-text") === "actions") {
+        const actionsText = blueprintRuntime.renderTemplate(node.config.actions || "[]", scope);
+        try { actions = JSON.parse(actionsText || "[]"); } catch (error) { throw new Error("浏览器动作序列不是有效 JSON：" + error.message); }
+        if (!Array.isArray(actions)) throw new Error("浏览器动作序列必须是数组。");
+      }
+      const result = await window.cossAPI?.runBlueprintBrowser?.({
+        url,
+        mode: node.config.mode || "extract-text",
+        selector: node.config.selector || "",
+        actions,
+        maxChars: Number(node.config.maxChars) || 20000,
+        timeoutMs: node.timeoutMs || 45000
+      });
+      if (!result?.ok) throw new Error(result?.error || "浏览器节点执行失败。");
+      return result;
+    },
+    mcp: async ({ task, node, scope }) => {
+      if (!window.cossAPI?.runBlueprintMcp) throw new Error("当前运行环境未提供 MCP 调用服务。");
+      const argumentText = blueprintRuntime.renderTemplate(node.config.arguments || "{}", scope);
+      let toolArguments;
+      try { toolArguments = JSON.parse(argumentText || "{}"); } catch (error) { throw new Error("MCP 参数不是有效 JSON：" + error.message); }
+      const result = await window.cossAPI.runBlueprintMcp({
+        cwd: task.workspace,
+        serverName: node.config.serverName || "coss",
+        toolName: node.config.toolName || "",
+        arguments: toolArguments,
+        timeoutMs: node.timeoutMs || 60000
+      });
+      if (!result?.ok) throw new Error(result?.error || "MCP 工具调用失败。");
+      return result.output;
+    }
+  },
+  onChange: (_blueprint, task) => {
+    saveState();
+    scheduleBlueprintTimer(task);
+    const refreshRunModal = Boolean(document.querySelector(".blueprint-run-modal"));
+    render();
+    if (refreshRunModal) showBlueprintRunModal(task.id);
+  }
 });
 
 function ensureStateShape(nextState) {
@@ -482,7 +609,9 @@ const workspaceActionService = window.COSS_WORKSPACE_ACTION_SERVICE.createWorksp
   openRoleMenu,
   createProgram,
   closeModal,
-  showCreateTaskModal,
+  showCreateTaskModal: () => state.activeSidebarSection === "blueprints"
+    ? (getBlueprint() ? showBlueprintTaskModal() : showCreateBlueprintModal())
+    : showCreateTaskModal(),
   showMessageCenterModal,
   showLogsModal,
   checkClaudeStatus,
@@ -2691,7 +2820,7 @@ function ensureAgentSessionShape(win, project = getProject()) {
     taskId: taskContext.taskId,
     subtaskId: taskContext.subtaskId,
     sessionName: win.agentSession?.sessionName || `CosS-${project?.name || "Project"}-${role.name}-${provider}`,
-    promptTemplateVersion: "v0.11.1",
+    promptTemplateVersion: "v0.12.0",
     createdAt,
     lastStartedAt: win.agentSession?.lastStartedAt || "",
     resumeCount: Number.isFinite(Number(win.agentSession?.resumeCount)) ? Number(win.agentSession.resumeCount) : 0,
@@ -7768,6 +7897,7 @@ function render() {
   attachWindowDragHandlers();
   attachSidebarResizeHandlers();
   attachAgentBlueprintDragHandlers();
+  attachBlueprintInteractions();
   hydrateTerminalWindows();
   hydrateBrowserViews();
   restoreTaskListScrollState();
@@ -7860,8 +7990,532 @@ function restoreTaskListScrollState() {
   });
 }
 
+function getBlueprint(blueprintId = state.activeBlueprintId) {
+  return (state.blueprints || []).find((item) => item.id === blueprintId) || null;
+}
+
+function showBlueprintList() {
+  state.activeSidebarSection = "blueprints";
+  if (!getBlueprint() && state.blueprints?.length) state.activeBlueprintId = state.blueprints[0].id;
+  saveState();
+  render();
+}
+
+function selectBlueprint(blueprintId) {
+  if (!getBlueprint(blueprintId)) return;
+  state.activeBlueprintId = blueprintId;
+  state.activeSidebarSection = "blueprints";
+  saveState();
+  render();
+}
+
+function showCreateBlueprintModal() {
+  closeMenus();
+  renderModal(`
+    <div class="modal blueprint-create-modal">
+      <h2>新建蓝图</h2>
+      <p>创建一张独立的任务流程图。默认包含开始、规划、Agent 任务和完成节点。</p>
+      <div class="form-grid">
+        <div class="field"><label for="blueprintName">蓝图名称</label><input id="blueprintName" value="新任务蓝图" /></div>
+        <div class="field"><label for="blueprintDescription">用途说明</label><textarea id="blueprintDescription">通过多角色协作完成用户任务。</textarea></div>
+        <div class="field">
+          <label for="blueprintPath">默认工作目录（可选）</label>
+          <div class="path-picker-row">
+            <input id="blueprintPath" value="${escapeHtml(getProject()?.path || "")}" placeholder="运行任务时可再次指定" />
+            <button class="secondary-button" data-action="choose-blueprint-directory">选择文件夹</button>
+          </div>
+          <div id="blueprintPathStatus" class="form-status muted">蓝图本身会保存在 CosS 状态中。</div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="primary-button" data-action="create-blueprint">创建并打开</button>
+      </div>
+    </div>
+  `);
+}
+
+async function chooseBlueprintDirectoryFromModal() {
+  const input = document.getElementById("blueprintPath") || document.getElementById("blueprintTaskPath");
+  const status = document.getElementById("blueprintPathStatus") || document.getElementById("blueprintTaskStatus");
+  if (!input || !window.cossAPI?.selectProjectDirectory) {
+    if (status) status.textContent = "当前运行环境无法打开文件夹选择器。";
+    return;
+  }
+  const result = await window.cossAPI.selectProjectDirectory(input.value.trim());
+  if (result?.ok && result.path) {
+    input.value = result.path;
+    if (status) {
+      status.className = "form-status ready";
+      status.textContent = "已选择工作目录。";
+    }
+  }
+}
+
+function createBlueprintFromModal() {
+  const name = document.getElementById("blueprintName")?.value?.trim();
+  if (!name) {
+    const input = document.getElementById("blueprintName");
+    input?.focus();
+    return;
+  }
+  const blueprint = window.COSS_BLUEPRINT.createBlueprint(name, document.getElementById("blueprintPath")?.value || "", uid);
+  blueprint.description = document.getElementById("blueprintDescription")?.value?.trim() || blueprint.description;
+  state.blueprints.unshift(blueprint);
+  state.activeBlueprintId = blueprint.id;
+  state.activeSidebarSection = "blueprints";
+  closeModal();
+  saveState();
+  render();
+}
+
+function showDeleteBlueprintModal(blueprintId) {
+  const blueprint = getBlueprint(blueprintId);
+  if (!blueprint) return;
+  renderModal(`
+    <div class="modal">
+      <h2>删除蓝图</h2>
+      <p>这会从 CosS 中删除蓝图定义和它的任务记录，不会删除工作目录中的文件。</p>
+      <div class="message-empty"><strong>${escapeHtml(blueprint.name)}</strong><p>${blueprint.nodes.length} 个节点 · ${blueprint.edges.length} 条连接</p></div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">取消</button>
+        <button class="secondary-button danger" data-action="confirm-delete-blueprint" data-blueprint-id="${escapeHtml(blueprint.id)}">删除蓝图</button>
+      </div>
+    </div>
+  `);
+}
+
+function deleteBlueprint(blueprintId) {
+  const index = state.blueprints.findIndex((item) => item.id === blueprintId);
+  if (index < 0) return;
+  state.blueprints.splice(index, 1);
+  if (state.activeBlueprintId === blueprintId) state.activeBlueprintId = state.blueprints[0]?.id || "";
+  closeModal();
+  saveState();
+  render();
+}
+
+function addBlueprintNode(type) {
+  const blueprint = getBlueprint();
+  if (!blueprint || !window.COSS_BLUEPRINT.TYPE_MAP[type]) return;
+  const node = window.COSS_BLUEPRINT.createNode(type, uid, blueprint.nodes.length);
+  const viewport = document.querySelector("[data-blueprint-viewport]");
+  node.x = Math.max(32, (viewport?.scrollLeft || 0) + 90);
+  node.y = Math.max(32, (viewport?.scrollTop || 0) + 90 + (blueprint.nodes.length % 4) * 26);
+  blueprint.nodes.push(node);
+  blueprint.ui.selectedNodeId = node.id;
+  blueprint.ui.selectedEdgeId = "";
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function selectBlueprintNode(nodeId) {
+  const blueprint = getBlueprint();
+  if (!blueprint?.nodes.some((node) => node.id === nodeId)) return;
+  blueprint.ui.selectedNodeId = nodeId;
+  blueprint.ui.selectedEdgeId = "";
+  render();
+}
+
+function selectBlueprintEdge(edgeId) {
+  const blueprint = getBlueprint();
+  if (!blueprint?.edges.some((edge) => edge.id === edgeId)) return;
+  blueprint.ui.selectedEdgeId = edgeId;
+  blueprint.ui.selectedNodeId = "";
+  render();
+}
+
+function beginBlueprintEdge(nodeId) {
+  const blueprint = getBlueprint();
+  if (!blueprint?.nodes.some((node) => node.id === nodeId)) return;
+  blueprint.ui.pendingFromNodeId = nodeId;
+  blueprint.ui.selectedNodeId = nodeId;
+  blueprint.ui.selectedEdgeId = "";
+  render();
+}
+
+function completeBlueprintEdge(nodeId) {
+  const blueprint = getBlueprint();
+  const from = blueprint?.ui.pendingFromNodeId;
+  if (!blueprint || !from || from === nodeId) return;
+  if (!blueprint.edges.some((edge) => edge.from === from && edge.to === nodeId)) {
+    blueprint.edges.push({ id: uid("bp-edge"), from, to: nodeId, label: "" });
+  }
+  blueprint.ui.pendingFromNodeId = "";
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function deleteBlueprintSelection() {
+  const blueprint = getBlueprint();
+  if (!blueprint) return;
+  if (blueprint.ui.selectedEdgeId) {
+    blueprint.edges = blueprint.edges.filter((edge) => edge.id !== blueprint.ui.selectedEdgeId);
+    blueprint.ui.selectedEdgeId = "";
+  } else if (blueprint.ui.selectedNodeId) {
+    const nodeId = blueprint.ui.selectedNodeId;
+    blueprint.nodes = blueprint.nodes.filter((node) => node.id !== nodeId);
+    blueprint.edges = blueprint.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId);
+    blueprint.ui.selectedNodeId = "";
+    if (blueprint.ui.pendingFromNodeId === nodeId) blueprint.ui.pendingFromNodeId = "";
+  }
+  blueprint.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+}
+
+function showBlueprintValidation() {
+  const blueprint = getBlueprint();
+  if (!blueprint) return;
+  const result = window.COSS_BLUEPRINT.validateBlueprint(blueprint);
+  const rows = result.issues.length
+    ? result.issues.map((issue) => `<button class="blueprint-issue ${issue.level}" data-action="focus-blueprint-issue" data-node-id="${escapeHtml(issue.nodeId || "")}"><b>${issue.level === "error" ? "错误" : "提醒"}</b><span>${escapeHtml(issue.message)}</span></button>`).join("")
+    : `<div class="blueprint-validation-success"><b>✓</b><strong>蓝图结构有效</strong><span>开始、结束和可达性检查均已通过。</span></div>`;
+  renderModal(`
+    <div class="modal blueprint-validation-modal">
+      <h2>蓝图检查</h2>
+      <p>检查入口、出口、连接可达性和关键节点配置。警告不会阻止保存。</p>
+      <div class="blueprint-issue-list">${rows}</div>
+      <div class="modal-actions"><button class="primary-button" data-action="close-modal">完成</button></div>
+    </div>
+  `);
+}
+
+function showBlueprintTaskModal() {
+  const blueprint = getBlueprint();
+  if (!blueprint) return;
+  const validation = window.COSS_BLUEPRINT.validateBlueprint(blueprint);
+  renderModal(`
+    <div class="modal blueprint-task-modal">
+      <h2>使用“${escapeHtml(blueprint.name)}”创建任务</h2>
+      <p>任务会冻结当前蓝图版本，并由图执行器按连接顺序运行。命令、写文件和 MCP 等副作用节点会先请求批准。</p>
+      <div class="field"><label for="blueprintTaskGoal">任务目标</label><textarea id="blueprintTaskGoal" placeholder="描述最终需要完成的效果"></textarea></div>
+      <div class="field"><label for="blueprintTaskPath">工作目录</label><div class="path-picker-row"><input id="blueprintTaskPath" value="${escapeHtml(blueprint.path)}" /><button class="secondary-button" data-action="choose-blueprint-directory">选择文件夹</button></div></div>
+      <div id="blueprintTaskStatus" class="form-status ${validation.ok ? "ready" : "error"}">${validation.ok ? "结构检查通过，可以创建任务。" : "蓝图存在结构错误，请先检查并修复。"}</div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="create-blueprint-task" ${validation.ok ? "" : "disabled"}>创建任务</button></div>
+    </div>
+  `);
+}
+
+function showBlueprintTasksModal() {
+  const blueprint = getBlueprint();
+  if (!blueprint) return;
+  const taskRows = blueprint.tasks.length ? blueprint.tasks.map((task) => `
+    <div class="blueprint-task-row">
+      <span class="blueprint-task-status ${escapeHtml(task.status)}">${getBlueprintTaskStatusLabel(task.status)}</span>
+      <div><strong>${escapeHtml(task.goal)}</strong><small>${escapeHtml(task.workspace || "未指定工作目录")} · 蓝图 v${Number(task.blueprintVersion) || 1}</small></div>
+      <div class="blueprint-task-row-actions"><button class="secondary-button compact" data-action="view-blueprint-run" data-task-id="${escapeHtml(task.id)}">查看运行</button><button class="secondary-button compact danger" data-action="show-delete-blueprint-task" data-task-id="${escapeHtml(task.id)}">删除</button></div>
+    </div>
+  `).join("") : `<div class="message-empty"><strong>暂无任务记录</strong><p>填写任务目标并绑定当前蓝图版本后，记录会显示在这里。</p></div>`;
+  renderModal(`
+    <div class="modal blueprint-task-list-modal">
+      <h2>${escapeHtml(blueprint.name)} · 任务记录</h2>
+      <p>这里显示基于当前蓝图创建的任务，可进入运行面板查看节点状态、日志和交付物。</p>
+      <div class="blueprint-task-list">${taskRows}</div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">关闭</button><button class="primary-button" data-action="show-blueprint-task">＋ 创建任务</button></div>
+    </div>
+  `);
+}
+
+function getBlueprintTaskStatusLabel(status) {
+  return {
+    ready: "就绪",
+    running: "运行中",
+    waiting: "等待中",
+    paused: "已暂停",
+    completed: "已完成",
+    failed: "失败",
+    canceled: "已取消",
+    idle: "未运行",
+    skipped: "已跳过"
+  }[status] || String(status || "未知");
+}
+
+function getBlueprintTask(taskId, blueprint = getBlueprint()) {
+  return blueprint?.tasks?.find((item) => item.id === taskId) || null;
+}
+
+function scheduleBlueprintTimer(task) {
+  const previous = blueprintTimerHandles.get(task.id);
+  if (previous) clearTimeout(previous);
+  blueprintTimerHandles.delete(task.id);
+  if (task.pending?.type !== "timer" || !task.pending.resumeAt) return;
+  const delay = Math.min(2147483647, Math.max(0, new Date(task.pending.resumeAt).getTime() - Date.now()));
+  const handle = setTimeout(async () => {
+    blueprintTimerHandles.delete(task.id);
+    const blueprint = state.blueprints.find((item) => item.tasks?.some((candidate) => candidate.id === task.id));
+    const currentTask = blueprint?.tasks?.find((candidate) => candidate.id === task.id);
+    if (!blueprint || !currentTask || currentTask.pending?.type !== "timer") return;
+    await blueprintRuntime.continueTask(blueprint, currentTask);
+  }, delay);
+  blueprintTimerHandles.set(task.id, handle);
+}
+
+function restoreBlueprintRuntimeTasks() {
+  let changed = false;
+  (state.blueprints || []).forEach((blueprint) => (blueprint.tasks || []).forEach((task) => {
+    blueprintRuntime.ensureTask(blueprint, task);
+    if (task.status === "running") {
+      task.status = "paused";
+      task.events.push({ id: uid("bp-event"), type: "task.recovered-paused", level: "warn", nodeId: task.currentNodeId || "", nodeName: "", at: new Date().toISOString(), detail: { reason: "应用重启后等待用户继续" } });
+      changed = true;
+    }
+    scheduleBlueprintTimer(task);
+  }));
+  if (changed) saveState();
+}
+
+function formatBlueprintRuntimeValue(value, limit = 800) {
+  if (value === undefined || value === null || value === "") return "—";
+  let text;
+  try { text = typeof value === "string" ? value : JSON.stringify(value, null, 2); } catch { text = String(value); }
+  return text.length > limit ? text.slice(0, limit) + "…" : text;
+}
+
+function showBlueprintRunModal(taskId) {
+  const blueprint = getBlueprint();
+  const task = getBlueprintTask(taskId, blueprint);
+  if (!blueprint || !task) return;
+  blueprintRuntime.ensureTask(blueprint, task);
+  blueprint.ui.activeTaskId = task.id;
+  const completed = Object.values(task.nodeRuns).filter((run) => run.status === "completed").length;
+  const failed = Object.values(task.nodeRuns).filter((run) => run.status === "failed").length;
+  const executionNodes = task.definition?.nodes || blueprint.nodes;
+  const nodeRows = executionNodes.map((node, index) => {
+    const run = task.nodeRuns[node.id];
+    const output = run?.output === null || run?.output === undefined ? "" : `<details><summary>查看输出</summary><pre>${escapeHtml(formatBlueprintRuntimeValue(run.output))}</pre></details>`;
+    const instances = run?.instances?.length ? `
+      <details class="blueprint-instance-details">
+        <summary>逐项实例 ${run.instances.filter((item) => item.status === "completed").length} / ${run.instances.length}</summary>
+        <div class="blueprint-instance-list">${run.instances.map((instance) => `<div class="blueprint-instance ${escapeHtml(instance.status)}"><b>#${instance.index + 1}</b><span>${escapeHtml(formatBlueprintRuntimeValue(instance.item, 80))}</span><em>${escapeHtml(getBlueprintTaskStatusLabel(instance.status))}</em>${instance.error ? `<small>${escapeHtml(instance.error)}</small>` : ""}</div>`).join("")}</div>
+      </details>
+    ` : "";
+    const rerunAction = run && ["completed", "failed", "skipped"].includes(run.status) && !["running", "waiting"].includes(task.status)
+      ? `<button class="blueprint-node-rerun" data-action="rerun-blueprint-node" data-task-id="${escapeHtml(task.id)}" data-node-id="${escapeHtml(node.id)}">重跑</button>` : "";
+    return `
+      <div class="blueprint-run-node ${escapeHtml(run?.status || "idle")} ${task.currentNodeId === node.id ? "current" : ""}">
+        <span class="blueprint-run-index">${index + 1}</span>
+        <div><strong>${escapeHtml(node.name)}</strong><small>${escapeHtml(window.COSS_BLUEPRINT.TYPE_MAP[node.type]?.name || node.type)} · ${getBlueprintTaskStatusLabel(run?.status === "idle" ? "未运行" : run?.status)}</small>${run?.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ""}${instances}${output}</div>
+        <span class="blueprint-run-attempt">${run?.attempts ? "尝试 " + run.attempts : ""}${rerunAction}</span>
+      </div>
+    `;
+  }).join("");
+  const pending = task.pending ? `
+    <section class="blueprint-pending-card ${escapeHtml(task.pending.type)}">
+      <div><strong>等待处理</strong><span>${escapeHtml(task.pending.message || "")}</span></div>
+      ${["human-input", "review-edit", "approval", "deliverable-gate", "adapter"].includes(task.pending.type) ? `<textarea id="blueprintPendingValue" placeholder="填写输入、修改内容、审批意见或外部工具结果"></textarea>` : ""}
+      <div class="blueprint-pending-actions">
+        ${task.pending.type === "timer"
+          ? `<button class="primary-button" data-action="continue-blueprint-run" data-task-id="${escapeHtml(task.id)}">到期后继续</button>`
+          : `<button class="secondary-button danger" data-action="reject-blueprint-pending" data-task-id="${escapeHtml(task.id)}">拒绝 / 失败</button><button class="primary-button" data-action="approve-blueprint-pending" data-task-id="${escapeHtml(task.id)}">批准并继续</button>`}
+      </div>
+    </section>
+  ` : "";
+  const eventRows = task.events.slice(-40).reverse().map((event) => `
+    <div class="blueprint-run-event ${escapeHtml(event.level)}"><time>${escapeHtml(formatDateTime(event.at))}</time><strong>${escapeHtml(event.nodeName || "蓝图任务")}</strong><span>${escapeHtml(event.type)}</span></div>
+  `).join("") || `<div class="message-empty">尚无运行事件</div>`;
+  const artifactRows = task.artifacts.map((artifact) => `<div class="blueprint-artifact-row"><strong>${escapeHtml(artifact.type)}</strong><span>${escapeHtml(formatBlueprintRuntimeValue(artifact.source || artifact.value, 180))}</span></div>`).join("") || `<div class="message-empty">尚无交付物</div>`;
+  const primaryAction = task.status === "ready" || task.status === "failed" || task.status === "paused"
+    ? `<button class="primary-button" data-action="run-blueprint-task" data-task-id="${escapeHtml(task.id)}">${task.status === "paused" ? "继续运行" : (task.status === "failed" ? "重试失败节点" : "启动任务")}</button>`
+    : "";
+  renderModal(`
+    <div class="modal blueprint-run-modal" data-task-id="${escapeHtml(task.id)}">
+      <div class="blueprint-run-header">
+        <div><h2>${escapeHtml(task.goal)}</h2><p>${escapeHtml(blueprint.name)} · ${escapeHtml(task.workspace || "未指定目录")}</p></div>
+        <span class="blueprint-run-status ${escapeHtml(task.status)}">${escapeHtml(getBlueprintTaskStatusLabel(task.status))}</span>
+      </div>
+      <div class="blueprint-run-summary"><span><b>${completed}</b> / ${executionNodes.length} 节点完成</span><span><b>${failed}</b> 个失败</span><span><b>${task.artifacts.length}</b> 个交付物</span></div>
+      ${pending}
+      <div class="blueprint-run-tabs">
+        <section><h3>节点运行</h3><div class="blueprint-run-nodes">${nodeRows}</div></section>
+        <section><h3>事件日志</h3><div class="blueprint-run-events">${eventRows}</div><h3>交付物</h3><div class="blueprint-artifact-list">${artifactRows}</div></section>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-button" data-action="close-modal">关闭</button>
+        ${task.status === "running" ? `<button class="secondary-button" data-action="pause-blueprint-run" data-task-id="${escapeHtml(task.id)}">暂停</button>` : ""}
+        ${!["completed", "failed", "canceled"].includes(task.status) ? `<button class="secondary-button danger" data-action="cancel-blueprint-run" data-task-id="${escapeHtml(task.id)}">取消任务</button>` : ""}
+        ${primaryAction}
+      </div>
+    </div>
+  `);
+  saveState();
+  render();
+}
+
+async function startBlueprintTask(taskId) {
+  const blueprint = getBlueprint();
+  const task = getBlueprintTask(taskId, blueprint);
+  if (!blueprint || !task) return;
+  try {
+    if (task.status === "paused") await blueprintRuntime.continueTask(blueprint, task);
+    else await blueprintRuntime.start(blueprint, task);
+  } catch (error) {
+    task.status = "failed";
+    task.events ||= [];
+    task.events.push({ id: uid("bp-event"), type: "task.compile-failed", level: "error", nodeId: "", nodeName: "", at: new Date().toISOString(), detail: { error: error.message } });
+    saveState();
+  }
+  showBlueprintRunModal(task.id);
+}
+
+async function continueBlueprintTask(taskId) {
+  const blueprint = getBlueprint();
+  const task = getBlueprintTask(taskId, blueprint);
+  if (!blueprint || !task) return;
+  await blueprintRuntime.continueTask(blueprint, task);
+  showBlueprintRunModal(task.id);
+}
+
+async function resolveBlueprintPending(taskId, approved) {
+  const blueprint = getBlueprint();
+  const task = getBlueprintTask(taskId, blueprint);
+  if (!blueprint || !task) return;
+  await blueprintRuntime.resolvePending(blueprint, task, { approved, value: document.getElementById("blueprintPendingValue")?.value || "" });
+  showBlueprintRunModal(task.id);
+}
+
+async function rerunBlueprintNode(taskId, nodeId) {
+  const blueprint = getBlueprint();
+  const task = getBlueprintTask(taskId, blueprint);
+  if (!blueprint || !task) return;
+  try {
+    await blueprintRuntime.rerunNode(blueprint, task, nodeId);
+  } catch (error) {
+    task.events.push({ id: uid("bp-event"), type: "task.node-rerun-failed", level: "error", nodeId, nodeName: "", at: new Date().toISOString(), detail: { error: error.message } });
+    saveState();
+  }
+  showBlueprintRunModal(task.id);
+}
+
+async function discoverBlueprintMcpTools() {
+  const blueprint = getBlueprint();
+  const node = blueprint?.nodes.find((item) => item.id === blueprint.ui.selectedNodeId && item.type === "mcp-tool");
+  if (!blueprint || !node) return;
+  const cwd = blueprint.path || getProject()?.path || "";
+  if (!cwd) {
+    renderModal(`<div class="modal"><h2>MCP 工具发现</h2><p>请先为蓝图设置默认工作目录，以便读取其中的 .mcp.json。</p><div class="modal-actions"><button class="primary-button" data-action="close-modal">完成</button></div></div>`);
+    return;
+  }
+  renderModal(`<div class="modal"><h2>MCP 工具发现</h2><p>正在连接 ${escapeHtml(node.config.serverName || "coss")}...</p></div>`);
+  const result = await window.cossAPI?.runBlueprintMcp?.({ cwd, serverName: node.config.serverName || "coss", operation: "list-tools", timeoutMs: node.timeoutMs || 60000 });
+  const tools = result?.tools || result?.output || [];
+  const rows = result?.ok && Array.isArray(tools) && tools.length ? tools.map((tool) => `
+    <button class="blueprint-mcp-tool-option" data-action="select-blueprint-mcp-tool" data-tool-name="${escapeHtml(tool.name || "")}">
+      <strong>${escapeHtml(tool.name || "未命名工具")}</strong><span>${escapeHtml(tool.description || "无说明")}</span>
+    </button>
+  `).join("") : `<div class="message-empty"><strong>未发现工具</strong><p>${escapeHtml(result?.error || "Server 没有返回工具。")}</p></div>`;
+  renderModal(`
+    <div class="modal blueprint-mcp-tools-modal"><h2>MCP 工具发现</h2><p>${escapeHtml(node.config.serverName || "coss")} · ${Array.isArray(tools) ? tools.length : 0} 个工具</p><div class="blueprint-mcp-tool-list">${rows}</div><div class="modal-actions"><button class="secondary-button" data-action="close-modal">关闭</button></div></div>
+  `);
+}
+
+function selectBlueprintMcpTool(toolName) {
+  const blueprint = getBlueprint();
+  const node = blueprint?.nodes.find((item) => item.id === blueprint.ui.selectedNodeId && item.type === "mcp-tool");
+  if (!blueprint || !node || !toolName) return;
+  node.config.toolName = toolName;
+  blueprint.updatedAt = new Date().toISOString();
+  closeModal();
+  saveState();
+  render();
+}
+
+function showDeleteBlueprintTaskModal(taskId) {
+  const blueprint = getBlueprint();
+  const task = getBlueprintTask(taskId, blueprint);
+  if (!blueprint || !task) return;
+  renderModal(`
+    <div class="modal">
+      <h2>删除蓝图任务记录</h2>
+      <p>将删除这次运行的冻结蓝图、节点输出、事件日志和交付物记录。工作目录中的文件不会被删除。</p>
+      <div class="message-empty"><strong>${escapeHtml(task.goal)}</strong><p>${escapeHtml(getBlueprintTaskStatusLabel(task.status))} · ${task.events.length} 条事件</p></div>
+      <div class="modal-actions"><button class="secondary-button" data-action="close-modal">取消</button><button class="secondary-button danger" data-action="confirm-delete-blueprint-task" data-task-id="${escapeHtml(task.id)}">删除记录</button></div>
+    </div>
+  `);
+}
+
+function deleteBlueprintTask(taskId) {
+  const blueprint = getBlueprint();
+  const index = blueprint?.tasks?.findIndex((task) => task.id === taskId) ?? -1;
+  if (!blueprint || index < 0) return;
+  const timer = blueprintTimerHandles.get(taskId);
+  if (timer) clearTimeout(timer);
+  blueprintTimerHandles.delete(taskId);
+  blueprint.tasks.splice(index, 1);
+  if (blueprint.ui.activeTaskId === taskId) blueprint.ui.activeTaskId = blueprint.tasks[0]?.id || "";
+  closeModal();
+  saveState();
+  render();
+  showBlueprintTasksModal();
+}
+
+function createBlueprintTaskFromModal() {
+  const blueprint = getBlueprint();
+  const goal = document.getElementById("blueprintTaskGoal")?.value?.trim();
+  const status = document.getElementById("blueprintTaskStatus");
+  if (!blueprint || !goal) {
+    if (status) {
+      status.className = "form-status error";
+      status.textContent = "请填写任务目标。";
+    }
+    return;
+  }
+  const task = blueprintRuntime.createTask(blueprint, {
+    goal,
+    workspace: document.getElementById("blueprintTaskPath")?.value?.trim() || blueprint.path
+  });
+  blueprint.tasks.unshift(task);
+  blueprint.ui.activeTaskId = task.id;
+  blueprint.updatedAt = new Date().toISOString();
+  closeModal();
+  saveState();
+  render();
+  showBlueprintRunModal(task.id);
+}
+
+function handleBlueprintAction(action, target) {
+  if (action === "show-blueprint-list") { showBlueprintList(); return true; }
+  if (action === "show-create-blueprint") { showCreateBlueprintModal(); return true; }
+  if (action === "create-blueprint") { createBlueprintFromModal(); return true; }
+  if (action === "choose-blueprint-directory") { chooseBlueprintDirectoryFromModal(); return true; }
+  if (action === "select-blueprint") { selectBlueprint(target.dataset.blueprintId); return true; }
+  if (action === "show-delete-blueprint") { showDeleteBlueprintModal(target.dataset.blueprintId); return true; }
+  if (action === "confirm-delete-blueprint") { deleteBlueprint(target.dataset.blueprintId); return true; }
+  if (action === "add-blueprint-node") { addBlueprintNode(target.dataset.nodeType); return true; }
+  if (action === "select-blueprint-node") { selectBlueprintNode(target.dataset.nodeId); return true; }
+  if (action === "select-blueprint-edge") { selectBlueprintEdge(target.dataset.edgeId); return true; }
+  if (action === "begin-blueprint-edge") { beginBlueprintEdge(target.dataset.nodeId); return true; }
+  if (action === "complete-blueprint-edge") { completeBlueprintEdge(target.dataset.nodeId); return true; }
+  if (action === "cancel-blueprint-edge") { const blueprint = getBlueprint(); if (blueprint) blueprint.ui.pendingFromNodeId = ""; render(); return true; }
+  if (action === "delete-blueprint-selection") { deleteBlueprintSelection(); return true; }
+  if (action === "auto-layout-blueprint") { const blueprint = getBlueprint(); if (blueprint) { window.COSS_BLUEPRINT.autoLayout(blueprint); saveState(); render(); } return true; }
+  if (action === "validate-blueprint") { showBlueprintValidation(); return true; }
+  if (action === "show-blueprint-task") { showBlueprintTaskModal(); return true; }
+  if (action === "show-blueprint-tasks") { showBlueprintTasksModal(); return true; }
+  if (action === "view-blueprint-run") { showBlueprintRunModal(target.dataset.taskId); return true; }
+  if (action === "rerun-blueprint-node") { rerunBlueprintNode(target.dataset.taskId, target.dataset.nodeId); return true; }
+  if (action === "discover-blueprint-mcp-tools") { discoverBlueprintMcpTools(); return true; }
+  if (action === "select-blueprint-mcp-tool") { selectBlueprintMcpTool(target.dataset.toolName); return true; }
+  if (action === "show-delete-blueprint-task") { showDeleteBlueprintTaskModal(target.dataset.taskId); return true; }
+  if (action === "confirm-delete-blueprint-task") { deleteBlueprintTask(target.dataset.taskId); return true; }
+  if (action === "run-blueprint-task") { startBlueprintTask(target.dataset.taskId); return true; }
+  if (action === "continue-blueprint-run") { continueBlueprintTask(target.dataset.taskId); return true; }
+  if (action === "approve-blueprint-pending") { resolveBlueprintPending(target.dataset.taskId, true); return true; }
+  if (action === "reject-blueprint-pending") { resolveBlueprintPending(target.dataset.taskId, false); return true; }
+  if (action === "pause-blueprint-run") { const blueprint = getBlueprint(); const task = getBlueprintTask(target.dataset.taskId, blueprint); if (blueprint && task) blueprintRuntime.pause(blueprint, task).then(() => showBlueprintRunModal(task.id)); return true; }
+  if (action === "cancel-blueprint-run") { const blueprint = getBlueprint(); const task = getBlueprintTask(target.dataset.taskId, blueprint); if (blueprint && task) blueprintRuntime.cancel(blueprint, task).then(() => showBlueprintRunModal(task.id)); return true; }
+  if (action === "create-blueprint-task") { createBlueprintTaskFromModal(); return true; }
+  if (action === "focus-blueprint-issue") { closeModal(); if (target.dataset.nodeId) selectBlueprintNode(target.dataset.nodeId); return true; }
+  if (action === "set-blueprint-category") { const blueprint = getBlueprint(); if (blueprint) blueprint.ui.paletteCategory = target.dataset.category || "all"; render(); return true; }
+  return false;
+}
+
 function renderSidebar(project) {
   const showingWorlds = state.activeSidebarSection === "worlds";
+  const showingBlueprints = state.activeSidebarSection === "blueprints";
+  const showingProjects = !showingWorlds && !showingBlueprints;
 
   const projects = state.projects
     .map((item) => {
@@ -7890,8 +8544,20 @@ function renderSidebar(project) {
     </div>
   `).join("") : "";
 
-  const listTitle = showingWorlds ? t("nav.worlds", "Agent 世界") : t("nav.projects", "项目");
-  const plusAction = showingWorlds ? "show-create-world" : "show-create-project";
+  const blueprintItems = state.blueprints.length ? state.blueprints.map((item) => `
+    <div class="project-item ${item.id === state.activeBlueprintId ? "active" : ""}">
+      <button class="project-open" data-action="select-blueprint" data-blueprint-id="${escapeHtml(item.id)}" title="${escapeHtml(item.name)}">
+        <span class="nav-icon">◇</span>
+        <span class="project-name">${escapeHtml(item.name)}</span>
+        <span class="project-time">${item.nodes?.length || 0} 节点</span>
+      </button>
+      <button class="project-delete" title="删除蓝图" data-action="show-delete-blueprint" data-blueprint-id="${escapeHtml(item.id)}">×</button>
+    </div>
+  `).join("") : "";
+
+  const listTitle = showingWorlds ? t("nav.worlds", "Agent 世界") : (showingBlueprints ? "蓝图" : t("nav.projects", "项目"));
+  const plusAction = showingWorlds ? "show-create-world" : (showingBlueprints ? "show-create-blueprint" : "show-create-project");
+  const listCount = showingWorlds ? state.worlds.length : (showingBlueprints ? state.blueprints.length : state.projects.length);
 
   return `
     <aside class="sidebar">
@@ -7906,17 +8572,20 @@ function renderSidebar(project) {
       <nav class="nav">
         <button class="nav-item" data-action="show-create-task"><span class="nav-icon">${icon("clock")}</span>${escapeHtml(t("nav.newTask", "新建任务"))}</button>
         <button class="nav-item" data-action="show-message-center"><span class="nav-icon">${icon("assistant")}</span>${escapeHtml(t("nav.messages", "消息"))}</button>
-        <button class="nav-item ${!showingWorlds ? "active" : ""}" data-action="show-project-list"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
+        <button class="nav-item ${showingProjects ? "active" : ""}" data-action="show-project-list"><span class="nav-icon">${icon("cube")}</span>${escapeHtml(t("nav.projects", "项目"))}</button>
+        <button class="nav-item ${showingBlueprints ? "active" : ""}" data-action="show-blueprint-list"><span class="nav-icon">◇</span>蓝图</button>
         <button class="nav-item ${showingWorlds ? "active" : ""}" data-action="show-world-list"><span class="nav-icon">${icon("globe")}</span>${escapeHtml(t("nav.worlds", "Agent 世界"))}</button>
       </nav>
       <div class="section-title">
-        <span>${escapeHtml(listTitle)} (${(showingWorlds ? state.worlds : state.projects).length})</span>
-        <button class="icon-button" title="${escapeHtml(showingWorlds ? t("world.create.title", "新建世界") : t("nav.newProject", "新建项目"))}" data-action="${escapeHtml(plusAction)}">${icon("plus")}</button>
+        <span>${escapeHtml(listTitle)} (${listCount})</span>
+        <button class="icon-button" title="${escapeHtml(showingWorlds ? t("world.create.title", "新建世界") : (showingBlueprints ? "新建蓝图" : t("nav.newProject", "新建项目")))}" data-action="${escapeHtml(plusAction)}">${icon("plus")}</button>
       </div>
       <div class="project-list">
         ${showingWorlds
           ? (worldItems || `<div class="project-list-empty">${escapeHtml(t("world.list.empty", "暂无世界"))}</div>`)
-          : (projects || `<div class="project-list-empty">${escapeHtml(t("nav.noProjects", "暂无项目"))}</div>`)
+          : (showingBlueprints
+            ? (blueprintItems || `<div class="project-list-empty">暂无蓝图</div>`)
+            : (projects || `<div class="project-list-empty">${escapeHtml(t("nav.noProjects", "暂无项目"))}</div>`))
         }
       </div>
       <div class="sidebar-footer">
@@ -7957,6 +8626,10 @@ function renderResizeHandles(win) {
 
 function renderWorkspace(project) {
   const world = getWorld();
+
+  if (state.activeSidebarSection === "blueprints") {
+    return blueprintRenderer.renderWorkspace(getBlueprint(), sidebarCollapsed);
+  }
 
   // 当侧边栏显示世界列表时，渲染世界主页
   if (state.activeSidebarSection === "worlds") {
@@ -9598,6 +10271,110 @@ function finishAgentBlueprintDrag() {
   agentBlueprintDragState = null;
 }
 
+function attachBlueprintInteractions() {
+  const blueprint = getBlueprint();
+  const workspace = document.querySelector(".blueprint-workspace[data-blueprint-id]");
+  if (!blueprint || !workspace) return;
+
+  const viewport = workspace.querySelector("[data-blueprint-viewport]");
+  if (viewport) {
+    viewport.scrollLeft = Math.max(0, Number(blueprint.ui.scrollLeft) || 0);
+    viewport.scrollTop = Math.max(0, Number(blueprint.ui.scrollTop) || 0);
+    viewport.addEventListener("scroll", () => {
+      blueprint.ui.scrollLeft = viewport.scrollLeft;
+      blueprint.ui.scrollTop = viewport.scrollTop;
+    }, { passive: true });
+  }
+
+  workspace.querySelector("[data-blueprint-search]")?.addEventListener("input", (event) => {
+    const query = event.target.value.trim().toLowerCase();
+    workspace.querySelectorAll("[data-blueprint-node-search]").forEach((item) => {
+      item.hidden = Boolean(query) && !item.dataset.blueprintNodeSearch.includes(query);
+    });
+  });
+
+  workspace.querySelectorAll("[data-blueprint-field]").forEach((field) => {
+    field.addEventListener("change", () => {
+      const node = blueprint.nodes.find((item) => item.id === blueprint.ui.selectedNodeId);
+      if (!node) return;
+      const key = field.dataset.blueprintField;
+      if (key === "enabled") node.enabled = field.checked;
+      else if (key === "timeoutMs" || key === "retryCount") node[key] = Math.max(0, Number(field.value) || 0);
+      else node[key] = field.value;
+      blueprint.updatedAt = new Date().toISOString();
+      saveState();
+      render();
+    });
+  });
+
+  workspace.querySelectorAll("[data-blueprint-config-field]").forEach((field) => {
+    field.addEventListener("change", () => {
+      const node = blueprint.nodes.find((item) => item.id === blueprint.ui.selectedNodeId);
+      if (!node) return;
+      const key = field.dataset.blueprintConfigField;
+      if (field.type === "checkbox") node.config[key] = field.checked;
+      else if (field.type === "number") node.config[key] = Number(field.value) || 0;
+      else node.config[key] = field.value;
+      blueprint.updatedAt = new Date().toISOString();
+      saveState();
+      render();
+    });
+  });
+
+  workspace.querySelectorAll("[data-blueprint-edge-field]").forEach((field) => {
+    field.addEventListener("change", () => {
+      const edge = blueprint.edges.find((item) => item.id === blueprint.ui.selectedEdgeId);
+      if (!edge) return;
+      edge[field.dataset.blueprintEdgeField] = field.value;
+      blueprint.updatedAt = new Date().toISOString();
+      saveState();
+      render();
+    });
+  });
+
+  workspace.querySelectorAll(".blueprint-node-main").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const card = handle.closest("[data-blueprint-node-id]");
+      const node = blueprint.nodes.find((item) => item.id === card?.dataset.blueprintNodeId);
+      if (!node || !card) return;
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const originX = node.x;
+      const originY = node.y;
+      let moved = false;
+      handle.setPointerCapture(event.pointerId);
+      card.classList.add("dragging");
+
+      const move = (moveEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        node.x = Math.max(16, Math.round(originX + dx));
+        node.y = Math.max(16, Math.round(originY + dy));
+        card.style.left = node.x + "px";
+        card.style.top = node.y + "px";
+      };
+      const finish = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", finish);
+        handle.removeEventListener("pointercancel", finish);
+        card.classList.remove("dragging");
+        if (moved) {
+          blueprint.ui.selectedNodeId = node.id;
+          blueprint.ui.selectedEdgeId = "";
+          blueprint.updatedAt = new Date().toISOString();
+          saveState();
+          render();
+        }
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", finish);
+      handle.addEventListener("pointercancel", finish);
+    });
+  });
+}
+
 function attachAgentBlueprintDragHandlers() {
   document.querySelectorAll(".agent-blueprint-node").forEach((node) => {
     node.addEventListener("pointerdown", (event) => {
@@ -9723,6 +10500,10 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (workspaceActionService.handle(action, target, event)) {
+    return;
+  }
+
+  if (handleBlueprintAction(action, target)) {
     return;
   }
 
@@ -9909,6 +10690,7 @@ async function tryAutoInstallAgent(name, statusGetter, installFn) {
 async function runStartupConfigurationLoad() {
   setAppLoadingStep(t("app.loading.workspace", "正在加载工作区状态..."));
   await loadState();
+  restoreBlueprintRuntimeTasks();
 
   // 环境探测（保持加载画面，让用户看到检测进度）
   setAppLoadingStep(t("app.loading.windows", "正在读取窗口状态..."));
@@ -9962,7 +10744,7 @@ async function runStartupConfigurationLoad() {
   render();
   startExternalStateRefresh();
   startPendingKernelAutoWorkflowPump();
-  if (state.activeProjectId && state.activeSidebarSection !== "worlds") {
+  if (state.activeProjectId && state.activeSidebarSection === "projects") {
     bootWorkspace(state.activeProjectId);
   }
   setTimeout(() => {

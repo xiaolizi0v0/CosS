@@ -1,5 +1,5 @@
 const STATE_SCHEMA_VERSION = 2;
-const PROJECT_STATE_VERSION = "0.11.1";
+const PROJECT_STATE_VERSION = "0.12.0";
 const TASK_STATUSES = Object.freeze(["planned", "running", "done"]);
 const SUBTASK_STATUSES = Object.freeze(["idle", "running", "done"]);
 const KERNEL_PHASES = Object.freeze(["idle", "running", "done"]);
@@ -8,7 +8,7 @@ const AGENT_DELIVERY_STATUSES = Object.freeze([
 ]);
 
 const PERSISTED_COLLECTIONS = Object.freeze([
-  "projects", "worlds", "deletedProjectIds", "settings"
+  "projects", "worlds", "blueprints", "deletedProjectIds", "settings"
 ]);
 
 module.exports = {

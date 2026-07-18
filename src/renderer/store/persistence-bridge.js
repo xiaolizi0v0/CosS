@@ -96,7 +96,7 @@
       const stored = api?.loadState
         ? await api.loadState()
         : JSON.parse(localStorage.getItem("coss-state") || "null");
-      if (stored?.projects?.length) {
+      if (stored && (stored.projects?.length || stored.worlds?.length || stored.blueprints?.length)) {
         normalizeStoredState(stored);
         stored.worlds = Array.isArray(stored.worlds) ? stored.worlds : [];
         setState(stored, "state-load");
@@ -114,8 +114,10 @@
         activeProjectId: demo.id,
         projects: [demo],
         activeWorldId: "",
+        activeBlueprintId: "",
         activeSidebarSection: "projects",
         worlds: [],
+        blueprints: [],
         deletedProjectIds: [],
         settings: { ...getDefaultState().settings }
       }, "demo-state");
@@ -127,7 +129,7 @@
       if (!api?.loadState || queue.isInFlight || queue.isDirty) return false;
       const previousState = getState();
       const loaded = await api.loadState();
-      if (!loaded?.projects?.length) return false;
+      if (!loaded || !(loaded.projects?.length || loaded.worlds?.length || loaded.blueprints?.length)) return false;
       normalizeStoredState(loaded);
       setState(loaded, `external-state:${reason}`);
       await refreshStamp();

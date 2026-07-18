@@ -4,8 +4,10 @@
       activeProjectId: null,
       projects: [],
       activeWorldId: "",
+      activeBlueprintId: "",
       activeSidebarSection: "projects",
       worlds: [],
+      blueprints: [],
       deletedProjectIds: [],
       settings: {
         agentProvider: "claude",

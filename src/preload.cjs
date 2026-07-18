@@ -8,7 +8,7 @@ const IPC_CHANNELS = Object.freeze({
   MCP_WRITE_PROJECT_CONFIG: "mcp:write-project-config", MCP_AUDIT_EVENTS: "mcp:audit-events",
   LLM_PLAN_TASK: "llm:plan-task", LLM_TEST_MODEL: "llm:test-model",
   APP_INFO: "app:info", APP_OPEN_EXTERNAL_URL: "app:open-external-url", APP_LOG_EVENT: "app:log-event",
-  WORLD_AGENT_RUN: "world-agent:run", TERMINAL_CREATE: "terminal:create",
+  WORLD_AGENT_RUN: "world-agent:run", BLUEPRINT_COMMAND_RUN: "blueprint-command:run", BLUEPRINT_AGENT_RUN: "blueprint-agent:run", BLUEPRINT_BROWSER_RUN: "blueprint-browser:run", BLUEPRINT_MCP_RUN: "blueprint-mcp:run", TERMINAL_CREATE: "terminal:create",
   TERMINAL_INPUT: "terminal:input", TERMINAL_RESIZE: "terminal:resize", TERMINAL_DISPOSE: "terminal:dispose"
 });
 const IPC_EVENTS = Object.freeze({
@@ -71,6 +71,10 @@ contextBridge.exposeInMainWorld("cossAPI", {
   getCodeBuddyStatus: (request) => ipcRenderer.invoke("codebuddy:status", request),
   testAgentLogin: (request) => ipcRenderer.invoke("agent:login-test", request),
   runWorldAgent: (request) => ipcRenderer.invoke(IPC_CHANNELS.WORLD_AGENT_RUN, request),
+  runBlueprintCommand: (request) => ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_COMMAND_RUN, request),
+  runBlueprintAgent: (request) => ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_AGENT_RUN, request),
+  runBlueprintBrowser: (request) => ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_BROWSER_RUN, request),
+  runBlueprintMcp: (request) => ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_MCP_RUN, request),
   createTerminal: (options) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_CREATE, options),
   sendTerminalInput: (id, data, options) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_INPUT, id, data, options),
   resizeTerminal: (id, cols, rows) => ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_RESIZE, id, cols, rows),

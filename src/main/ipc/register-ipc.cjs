@@ -48,6 +48,10 @@ function registerApplicationIpc(ipcMain, dependencies = {}) {
     sanitizeLogText,
     getCodexCommandStatus,
     handleWorldAgentRun,
+    handleBlueprintCommandRun,
+    handleBlueprintAgentRun,
+    handleBlueprintBrowserRun,
+    handleBlueprintMcpRun,
     getCodeBuddyCommandStatus,
     getShellEnv,
     getWindowsShellEnv,
@@ -162,6 +166,10 @@ function registerApplicationIpc(ipcMain, dependencies = {}) {
     return status;
   });
   ipcMain.handle(IPC_CHANNELS.WORLD_AGENT_RUN, handleWorldAgentRun);
+  ipcMain.handle(IPC_CHANNELS.BLUEPRINT_COMMAND_RUN, handleBlueprintCommandRun);
+  ipcMain.handle(IPC_CHANNELS.BLUEPRINT_AGENT_RUN, handleBlueprintAgentRun);
+  ipcMain.handle(IPC_CHANNELS.BLUEPRINT_BROWSER_RUN, handleBlueprintBrowserRun);
+  ipcMain.handle(IPC_CHANNELS.BLUEPRINT_MCP_RUN, handleBlueprintMcpRun);
   ipcMain.handle("codebuddy:status", (_event, request = {}) => {
     const apiKey = typeof request === "object" && request !== null ? String(request.apiKey || "").trim() : "";
     const status = getCodeBuddyCommandStatus(getShellEnv(apiKey ? { CODEBUDDY_API_KEY: apiKey } : {}));
