@@ -357,9 +357,13 @@
             this._backendReady = false;
           }
 
-          // 恢复转录
+          // 恢复转录（切换项目后回到终端时）
           if (result.reattached && result.transcript) {
             this._recentOutput = result.transcript.slice(-RECENT_OUTPUT_MAX_LENGTH);
+            // 将历史转录写入 xterm
+            this._xterm?.term?.reset?.();
+            this._xterm?.writeSync?.(result.transcript);
+            this._xterm?.scrollToBottom?.();
           }
 
           return { ok: true, ...result };
@@ -456,7 +460,7 @@
     // 销毁
     // ------------------------------------------------------------------
 
-    dispose() {
+    dispose(disposeBackend = true) {
       if (this._disposed) return;
       this._disposed = true;
 
@@ -476,8 +480,10 @@
       // 清除滚动指示器
       this._hideScrollIndicator();
 
-      // 通知后端释放
-      cossAPI?.disposeTerminal?.(this.id);
+      // 仅在明确要求时释放后端进程
+      if (disposeBackend !== false) {
+        cossAPI?.disposeTerminal?.(this.id);
+      }
 
       // 释放 xterm
       this._xterm?.dispose();
@@ -578,7 +584,7 @@
       if (disposeBackend) {
         cossAPI?.disposeTerminal?.(windowId);
       }
-      inst.dispose();
+      inst.dispose(disposeBackend);
       this._instances.delete(windowId);
       if (this._activeId === windowId) this._activeId = null;
     }

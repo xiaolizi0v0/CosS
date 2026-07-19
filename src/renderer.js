@@ -10037,12 +10037,14 @@ function cleanupTerminalView(windowId, disposeBackend = false) {
   const svc = getTerminalService();
   if (svc) {
     svc.dispose(windowId, disposeBackend);
-    // Also clean up legacy state
-    terminalBackendIds.delete(windowId);
-    terminalBackendReadyIds.delete(windowId);
-    terminalBackendActiveModes.delete(windowId);
-    terminalBackendReadyAt.delete(windowId);
-    terminalRecentOutput.delete(windowId);
+    // 仅在后端也释放时才清理旧状态（保留 transcript 以支持切换回来时恢复）
+    if (disposeBackend) {
+      terminalBackendIds.delete(windowId);
+      terminalBackendReadyIds.delete(windowId);
+      terminalBackendActiveModes.delete(windowId);
+      terminalBackendReadyAt.delete(windowId);
+      terminalRecentOutput.delete(windowId);
+    }
     return;
   }
 
@@ -10298,9 +10300,6 @@ function hydrateTerminalWindows() {
           }
 
           if (result.reattached && result.transcript && !backendWasKnown) {
-            inst._xterm?.term?.reset?.();
-            inst._xterm?.writeSync?.(result.transcript);
-            inst._xterm?.scrollToBottom?.();
             terminalRecentOutput.set(win.id, String(result.transcript || "").slice(-5000));
           }
 
