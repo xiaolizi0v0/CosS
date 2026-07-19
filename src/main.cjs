@@ -38,7 +38,7 @@ const appVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.12.0";
+    return "0.12.1";
   }
 })();
 const terminalProcessTreeSnapshotDelaysMs = [500, 2000, 5000];

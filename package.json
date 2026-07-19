@@ -1,6 +1,6 @@
 {
   "name": "coss-desktop",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "CosS desktop workspace for orchestrating multi-agent collaboration with MCP and interactive Agent worlds.",
   "license": "CC-BY-NC-SA-4.0",
   "author": "xiaolizi0v0",

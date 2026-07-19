@@ -30,7 +30,7 @@ const PRODUCT_DOCS_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/hel
 const PRODUCT_PRIVACY_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/privacy.md";
 const PRODUCT_LICENSE_URL = "https://github.com/xiaolizi0v0/CosS/blob/main/docs/license.md";
 
-const APP_VERSION = "v0.12.0";
+const APP_VERSION = "v0.12.1";
 const appSessionId = `appsession-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const appStore = window.COSS_STORE.createAppStore(structuredClone(defaultState), {
@@ -2843,7 +2843,7 @@ function ensureAgentSessionShape(win, project = getProject()) {
     taskId: taskContext.taskId,
     subtaskId: taskContext.subtaskId,
     sessionName: win.agentSession?.sessionName || `CosS-${project?.name || "Project"}-${role.name}-${provider}`,
-    promptTemplateVersion: "v0.12.0",
+    promptTemplateVersion: "v0.12.1",
     createdAt,
     lastStartedAt: win.agentSession?.lastStartedAt || "",
     resumeCount: Number.isFinite(Number(win.agentSession?.resumeCount)) ? Number(win.agentSession.resumeCount) : 0,

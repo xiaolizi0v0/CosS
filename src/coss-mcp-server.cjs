@@ -16,7 +16,7 @@ const packageVersion = (() => {
   try {
     return require("../package.json").version;
   } catch {
-    return "0.12.0";
+    return "0.12.1";
   }
 })();
 
