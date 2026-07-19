@@ -18,8 +18,6 @@
     fontSize: 12,
     lineHeight: 1.25,
     cursorBlink: true,
-    cursorStyle: "bar",
-    cursorWidth: 1,
     scrollback: 2000,
     convertEol: true,
     allowTransparency: true,
@@ -110,8 +108,6 @@
       const cfg = this._config;
       this.term = new global.Terminal({
         cursorBlink: cfg.cursorBlink,
-        cursorStyle: cfg.cursorStyle,
-        cursorWidth: cfg.cursorWidth,
         convertEol: cfg.convertEol,
         fontFamily: cfg.fontFamily,
         fontSize: cfg.fontSize,
