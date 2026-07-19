@@ -1,7 +1,7 @@
 <p align="center">
   <img src="./src/Logo.png" alt="CosS Logo" style="width: 80px; vertical-align: middle;">
 </p>
-<h1 align="center">CosS Desktop v0.12.0</h1>
+<h1 align="center">CosS Desktop v0.12.1</h1>
 <p align="center">
   <img src="https://img.shields.io/github/languages/code-size/xiaolizi0v0/CosS" alt="code size"/>
   <img src="https://img.shields.io/badge/Electron-31.7.7-brightgreen" alt="Electron"/>
@@ -61,8 +61,8 @@ Release Assets 使用 electron-builder 生成安装包，包含：
 - `checksums.txt` — SHA-256 校验和
 
 ```powershell
-git tag v0.12.0
-git push origin v0.12.0
+git tag v0.12.1
+git push origin v0.12.1
 ```
 
 ## 系统架构
