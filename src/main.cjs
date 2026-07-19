@@ -10,6 +10,7 @@ const { createStorageService } = require("./main/services/storage-service.cjs");
 const { createLlmService } = require("./main/services/llm-service.cjs");
 const { createAgentRuntime } = require("./main/services/agent-runtime.cjs");
 const { createTerminalService } = require("./main/services/terminal-service.cjs");
+const { createTerminalSystem } = require("./main/terminal");
 const { createProjectFileService } = require("./main/services/project-file-service.cjs");
 const { createMcpConfigService } = require("./main/services/mcp-config-service.cjs");
 const { createIpcRegistrar } = require("./main/ipc/register-ipc.cjs");
@@ -200,6 +201,7 @@ const {
   readMcpAuditEvents
 } = mcpConfigService;
 const agentOutputEventKeys = new Map();
+// Legacy terminal service (for backward compatibility during migration)
 const terminalService = createTerminalService({
   agentOutputEventKeys,
   createId: randomUUID,
@@ -221,6 +223,30 @@ const terminalService = createTerminalService({
   appendLogEvent,
   scheduleTerminalProcessTreeSnapshots,
   killProcessTree
+});
+
+// New VS Code-style terminal system
+const terminalSystem = createTerminalSystem({
+  nodePty,
+  serializeError,
+  appendLogEvent,
+  sanitizeLogText,
+  assessTerminalCommandRisk,
+  shouldBlockTerminalCommand,
+  getAgentPermissionPolicy,
+  resolveTerminalLaunch,
+  getEffectiveAgentProvider,
+  getAgentProviderLabel,
+  writeProjectMcpConfig,
+  killProcessTree,
+  scheduleTerminalProcessTreeSnapshots,
+  emitAgentOutputEvents: (webContents, id, data, launch) => {
+    // Wire to existing agent output event emission logic
+    if (launch?.activeMode && launch.activeMode !== "shell") {
+      emitAgentOutputEvents(webContents, id, data, launch);
+    }
+  },
+  agentOutputEventKeys
 });
 const {
   sessions: terminalSessions,
@@ -5207,7 +5233,9 @@ app.whenReady().then(() => {
     createTerminalSession,
     terminalSessions,
     processTerminalPermissionGuard,
-    disposeTerminalSession
+    disposeTerminalSession,
+    // New terminal system IPC handler
+    registerTerminalIpcHandlers: (ipc) => terminalSystem.registerIpc(ipc)
   });
   createMainWindow();
 
@@ -5220,10 +5248,12 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   disposeAllTerminalSessions();
+  try { terminalSystem.terminalService.disposeAll(); } catch (_) {}
 });
 
 app.on("window-all-closed", () => {
   disposeAllTerminalSessions();
+  try { terminalSystem.terminalService.disposeAll(); } catch (_) {}
   if (process.platform !== "darwin") {
     app.quit();
   }

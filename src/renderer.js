@@ -795,12 +795,25 @@ const WINDOW_Z_BASE = 20;
 const WINDOW_Z_MAX = 9990;
 const DEFAULT_DESKTOP_ID = "desktop-main";
 const MAXIMIZED_WINDOW_STYLE = "left:16px; top:66px; width:calc(100% - 32px); height:calc(100% - 150px);";
+// Terminal instance service (VS Code-style 三层架构)
+// 替换旧 terminalViews/terminalBackendIds/... Maps
+let terminalService = null;
+function getTerminalService() {
+  if (!terminalService && window.COSS_TERMINAL_INSTANCE) {
+    terminalService = window.COSS_TERMINAL_INSTANCE.createService();
+  }
+  return terminalService;
+}
+
+// Legacy terminal state maps (向后兼容，逐步废弃)
 const terminalViews = new Map();
 const terminalBackendIds = new Set();
 const terminalBackendReadyIds = new Set();
 const terminalBackendActiveModes = new Map();
 const terminalBackendReadyAt = new Map();
 const terminalRecentOutput = new Map();
+// 存放 render() 重建 DOM 前拆卸下来的 xterm.js 元素，避免被 innerHTML 销毁
+const detachedTerminalElements = new Map();
 const deliveryStuckTimers = new Map();
 const hydratedBrowserViews = new Set();
 let pendingCommandApproval = null;
@@ -4992,6 +5005,18 @@ function getPreferredAgentWindowForRole(project, roleId, taskId = "") {
 }
 
 function isAgentTerminalInjectable(win) {
+  // 优先使用新 TerminalInstanceService
+  const svc = getTerminalService();
+  if (svc) {
+    const inst = svc.get(win?.id);
+    if (!inst || !inst.isReady) return false;
+    const activeMode = inst.activeMode;
+    if (["error", "installing", "static", "shell"].includes(activeMode)) {
+      return false;
+    }
+    return true;
+  }
+  // Legacy fallback
   if (!win || !terminalBackendReadyIds.has(win.id)) {
     return false;
   }
@@ -5003,6 +5028,13 @@ function isAgentTerminalInjectable(win) {
 }
 
 function getTerminalRecentOutput(windowId) {
+  // 优先使用新 TerminalInstanceService
+  const svc = getTerminalService();
+  if (svc) {
+    const inst = svc.get(windowId);
+    return inst?.strippedRecentOutput || "";
+  }
+  // Legacy fallback
   return stripTerminalControlChars(terminalRecentOutput.get(windowId) || "");
 }
 
@@ -5619,100 +5651,125 @@ function retryAgentDelivery(deliveryId) {
   return true;
 }
 
-function recordTerminalOutputReference(windowId, data) {
+let recordTerminalOutputBatchTimer = null;
+let recordTerminalOutputBatch = [];
+
+function flushTerminalOutputReferences() {
+  recordTerminalOutputBatchTimer = null;
+  const batch = recordTerminalOutputBatch;
+  recordTerminalOutputBatch = [];
+  if (batch.length === 0) return;
+
   const project = getProject();
-  const win = project?.windows?.find((item) => item.id === windowId);
-  if (!project || !win?.lastInjectedMessageId || !win?.lastAgentDeliveryId) {
-    return;
-  }
-  const excerpt = stripTerminalControlChars(data).slice(0, 600);
-  if (!excerpt || excerpt.length < 2) {
-    return;
-  }
-  rendererServices.outputTracker.record(windowId, excerpt);
-  const delivery = project.agentDeliveries?.find((item) => item.id === win.lastAgentDeliveryId);
-  if (!delivery || !["sent", "submitted", "responded", "waiting"].includes(delivery.status)) {
-    return;
-  }
+  if (!project) return;
 
-  project.terminalOutputRefs ||= [];
+  let stateChanged = false;
   const now = new Date().toISOString();
-  let ref = project.terminalOutputRefs.find((item) => item.deliveryId === delivery.id && item.windowId === windowId);
-  if (ref) {
-    ref.excerpt = `${ref.excerpt}\n${excerpt}`.trim().slice(-1200);
-    ref.updatedAt = now;
-  } else {
-    ref = ensureTerminalOutputRefShape({
-      id: uid("termref"),
-      messageId: delivery.messageId,
-      deliveryId: delivery.id,
-      windowId,
-      roleId: win.roleId,
-      taskId: delivery.taskId || "",
-      excerpt,
-      createdAt: now,
-      updatedAt: now
-    });
-    project.terminalOutputRefs.push(ref);
-  }
-  project.terminalOutputRefs = project.terminalOutputRefs.slice(-300);
 
-  const previousDeliveryStatus = delivery.status;
-  const backendReadyAt = terminalBackendReadyAt.get(windowId) || "";
-  const backendReadyAtMs = backendReadyAt ? new Date(backendReadyAt).getTime() : 0;
-  const deliverySentAtMs = new Date(delivery.sentAt || delivery.submittedAt || delivery.createdAt || 0).getTime();
-  const isStartupOutputForExistingDelivery = Boolean(
-    backendReadyAtMs
-    && Number.isFinite(deliverySentAtMs)
-    && deliverySentAtMs > 0
-    && deliverySentAtMs < backendReadyAtMs
-    && Date.now() - backendReadyAtMs < 4000
-  );
-  if (isAgentApprovalPromptOutput(excerpt)) {
-    delivery.status = "waiting";
-    delivery.waitingAt = now;
-    delivery.stuckDetectedAt = "";
-    if (deliveryStuckTimers.has(delivery.id)) {
-      clearTimeout(deliveryStuckTimers.get(delivery.id));
-      deliveryStuckTimers.delete(delivery.id);
-    }
-    delivery.lastFeedback = t("delivery.feedback.waitingConfirm", "Agent 正在等待人工确认。");
-  } else if (!isStartupOutputForExistingDelivery && !isDeliverySystemFeedback(excerpt) && !["responded", "waiting"].includes(delivery.status)) {
-    delivery.status = "responded";
-    delivery.respondedAt = now;
-    delivery.stuckDetectedAt = "";
-    if (deliveryStuckTimers.has(delivery.id)) {
-      clearTimeout(deliveryStuckTimers.get(delivery.id));
-      deliveryStuckTimers.delete(delivery.id);
-    }
-    delivery.lastFeedback = t("delivery.feedback.terminalOutput", "Agent 已产生终端输出。");
-  } else if (isDeliveryInstructionEcho(excerpt)) {
-    delivery.lastFeedback = "CodeBuddy delivery instruction entered; waiting for Agent output.";
-  } else if (isPasteOnlyTerminalFeedback(excerpt)) {
-    delivery.lastFeedback = t("delivery.feedback.pastedNoOutput", "终端已接收粘贴文本，尚未检测到 Agent 输出。");
-  }
-  delivery.updatedAt = now;
+  for (const { windowId, excerpt } of batch) {
+    const win = project.windows?.find((item) => item.id === windowId);
+    if (!win?.lastInjectedMessageId || !win?.lastAgentDeliveryId) continue;
 
-  recordAppLog("agent.delivery.output-referenced", {
-    projectId: project.id,
-    deliveryId: delivery.id,
-    messageId: delivery.messageId,
-    windowId,
-    excerptLength: excerpt.length,
-    deliveryStatus: delivery.status
-  });
-  if (delivery.status !== previousDeliveryStatus) {
-    recordAppLog("agent.delivery.status.changed", {
+    rendererServices.outputTracker.record(windowId, excerpt);
+    const delivery = project.agentDeliveries?.find((item) => item.id === win.lastAgentDeliveryId);
+    if (!delivery || !["sent", "submitted", "responded", "waiting"].includes(delivery.status)) continue;
+
+    project.terminalOutputRefs ||= [];
+    let ref = project.terminalOutputRefs.find((item) => item.deliveryId === delivery.id && item.windowId === windowId);
+    if (ref) {
+      ref.excerpt = `${ref.excerpt}\n${excerpt}`.trim().slice(-1200);
+      ref.updatedAt = now;
+    } else {
+      ref = ensureTerminalOutputRefShape({
+        id: uid("termref"),
+        messageId: delivery.messageId,
+        deliveryId: delivery.id,
+        windowId,
+        roleId: win.roleId,
+        taskId: delivery.taskId || "",
+        excerpt,
+        createdAt: now,
+        updatedAt: now
+      });
+      project.terminalOutputRefs.push(ref);
+    }
+    project.terminalOutputRefs = project.terminalOutputRefs.slice(-300);
+
+    const previousDeliveryStatus = delivery.status;
+    const backendReadyAt = terminalBackendReadyAt.get(windowId) || "";
+    const backendReadyAtMs = backendReadyAt ? new Date(backendReadyAt).getTime() : 0;
+    const deliverySentAtMs = new Date(delivery.sentAt || delivery.submittedAt || delivery.createdAt || 0).getTime();
+    const isStartupOutputForExistingDelivery = Boolean(
+      backendReadyAtMs
+      && Number.isFinite(deliverySentAtMs)
+      && deliverySentAtMs > 0
+      && deliverySentAtMs < backendReadyAtMs
+      && Date.now() - backendReadyAtMs < 4000
+    );
+
+    if (isAgentApprovalPromptOutput(excerpt)) {
+      delivery.status = "waiting";
+      delivery.waitingAt = now;
+      delivery.stuckDetectedAt = "";
+      if (deliveryStuckTimers.has(delivery.id)) {
+        clearTimeout(deliveryStuckTimers.get(delivery.id));
+        deliveryStuckTimers.delete(delivery.id);
+      }
+      delivery.lastFeedback = t("delivery.feedback.waitingConfirm", "Agent 正在等待人工确认。");
+    } else if (!isStartupOutputForExistingDelivery && !isDeliverySystemFeedback(excerpt) && !["responded", "waiting"].includes(delivery.status)) {
+      delivery.status = "responded";
+      delivery.respondedAt = now;
+      delivery.stuckDetectedAt = "";
+      if (deliveryStuckTimers.has(delivery.id)) {
+        clearTimeout(deliveryStuckTimers.get(delivery.id));
+        deliveryStuckTimers.delete(delivery.id);
+      }
+      delivery.lastFeedback = t("delivery.feedback.terminalOutput", "Agent 已产生终端输出。");
+    } else if (isDeliveryInstructionEcho(excerpt)) {
+      delivery.lastFeedback = "CodeBuddy delivery instruction entered; waiting for Agent output.";
+    } else if (isPasteOnlyTerminalFeedback(excerpt)) {
+      delivery.lastFeedback = t("delivery.feedback.pastedNoOutput", "终端已接收粘贴文本，尚未检测到 Agent 输出。");
+    }
+    delivery.updatedAt = now;
+
+    recordAppLog("agent.delivery.output-referenced", {
       projectId: project.id,
       deliveryId: delivery.id,
       messageId: delivery.messageId,
       windowId,
-      previousStatus: previousDeliveryStatus,
-      status: delivery.status
+      excerptLength: excerpt.length,
+      deliveryStatus: delivery.status
     });
+    if (delivery.status !== previousDeliveryStatus) {
+      stateChanged = true;
+      recordAppLog("agent.delivery.status.changed", {
+        projectId: project.id,
+        deliveryId: delivery.id,
+        messageId: delivery.messageId,
+        windowId,
+        previousStatus: previousDeliveryStatus,
+        status: delivery.status
+      });
+    }
   }
-  saveState();
-  refreshMessageTimelineList();
+
+  if (stateChanged) {
+    saveState();
+    refreshMessageTimelineList();
+  }
+}
+
+function recordTerminalOutputReference(windowId, data) {
+  const excerpt = stripTerminalControlChars(data).slice(0, 600);
+  if (!excerpt || excerpt.length < 2) {
+    return;
+  }
+
+  recordTerminalOutputBatch.push({ windowId, excerpt });
+
+  if (recordTerminalOutputBatchTimer === null) {
+    recordTerminalOutputBatchTimer = requestAnimationFrame(flushTerminalOutputReferences);
+  }
 }
 
 function getProjectTimelineEvents(project) {
@@ -7858,6 +7915,63 @@ async function executeCustomMenuCommand(command) {
   }
 }
 
+// Terminal Core — 使用终端核心模块管理 xterm.js 实例
+// 参见 src/renderer/terminal/terminal-core.js
+
+// 在 render() 重建 DOM 之前，将 xterm 元素临时移到 document.body 暂存，
+// 避免被 appRoot.innerHTML 销毁，同时保持 scrollTop 不被重置。
+function parkTerminalElements() {
+  // Delegate to new TerminalInstanceService (VS Code-style)
+  const svc = getTerminalService();
+  if (svc) { svc.parkAll(); return; }
+
+  // Legacy fallback
+  const tcore = window.COSS_TERMINAL_CORE;
+  if (!tcore) return;
+  for (const [windowId, view] of terminalViews) {
+    if (view && view.term) {
+      tcore.diagTerminal(view.term, 'render.park.start', `windowId=${windowId}`);
+      view.resizeObserver?.disconnect();
+      view.resizeObserver = null;
+      tcore.parkTerminalElement(view.term, windowId);
+    }
+  }
+}
+
+// 在 render() 重建 DOM 之后，将暂存的 xterm 元素装回新挂载点
+function unparkTerminalElements() {
+  // Delegate to new TerminalInstanceService (VS Code-style)
+  const svc = getTerminalService();
+  if (svc) { svc.unparkAll(); return; }
+
+  // Legacy fallback
+  const tcore = window.COSS_TERMINAL_CORE;
+  if (!tcore) return;
+  for (const [windowId, view] of terminalViews) {
+    if (!view || !view.term) continue;
+    const mount = document.querySelector(`[data-terminal-id="${windowId}"]`);
+    if (!mount) continue;
+    const ok = tcore.unparkTerminalElement(view.term, mount, windowId);
+    if (!ok) {
+      tcore.diagTerminal(view.term, 'unpark.failed.recreate', `windowId=${windowId}`);
+      console.warn('Failed to unpark terminal, recreating', windowId);
+      cleanupTerminalView(windowId, false);
+    } else {
+      view.mount = mount;
+      view.resizeObserver?.disconnect();
+      view.resizeObserver = new ResizeObserver(() => {
+        try {
+          view.fitAddon?.fit();
+          window.cossAPI?.resizeTerminal(windowId, view.term.cols, view.term.rows);
+        } catch (e) {
+          console.warn('Failed to refit terminal after unpark', e);
+        }
+      });
+      view.resizeObserver.observe(mount);
+    }
+  }
+}
+
 function render() {
   syncI18nLanguage();
   const shouldForceFullRender = forceFullRender;
@@ -7888,11 +8002,13 @@ function render() {
   hydratedBrowserViews.clear();
 
   // innerHTML 会销毁所有 DOM（包括 Phaser canvas），必须先销毁引擎实例
+  // 同时也必须先拆卸终端元素，避免 xterm.js DOM 被销毁导致滚动位置丢失
   if (worldEngineInstance) {
     worldEngineInstance.destroy();
     if (window.CossWorldEngineInstance === worldEngineInstance) window.CossWorldEngineInstance = null;
     worldEngineInstance = null;
   }
+  parkTerminalElements();
 
   appRoot.innerHTML = `
     <div class="app-frame">
@@ -7906,6 +8022,7 @@ function render() {
     </div>
   `;
 
+  unparkTerminalElements();
   attachWindowFocusHandlers();
   attachWindowDragHandlers();
   attachSidebarResizeHandlers();
@@ -9916,15 +10033,34 @@ async function confirmFileOperationFromModal() {
 }
 
 function cleanupTerminalView(windowId, disposeBackend = false) {
+  // Delegate to new TerminalInstanceService (VS Code-style)
+  const svc = getTerminalService();
+  if (svc) {
+    svc.dispose(windowId, disposeBackend);
+    // Also clean up legacy state
+    terminalBackendIds.delete(windowId);
+    terminalBackendReadyIds.delete(windowId);
+    terminalBackendActiveModes.delete(windowId);
+    terminalBackendReadyAt.delete(windowId);
+    terminalRecentOutput.delete(windowId);
+    return;
+  }
+
+  // Legacy fallback
   const view = terminalViews.get(windowId);
   if (view) {
-    view.resizeObserver?.disconnect();
-    view.unsubscribeData?.();
-    view.unsubscribeExit?.();
-    view.inputDisposable?.dispose?.();
-    view.resizeDisposable?.dispose?.();
-    view.fitAddon?.dispose?.();
-    view.term?.dispose?.();
+    const tcore = window.COSS_TERMINAL_CORE;
+    if (tcore) {
+      tcore.destroyTerminalView(view);
+    } else {
+      view.resizeObserver?.disconnect();
+      view.inputDisposable?.dispose?.();
+      view.resizeDisposable?.dispose?.();
+      view.unsubscribeData?.();
+      view.unsubscribeExit?.();
+      view.fitAddon?.dispose?.();
+      view.term?.dispose?.();
+    }
     terminalViews.delete(windowId);
   }
 
@@ -9939,6 +10075,14 @@ function cleanupTerminalView(windowId, disposeBackend = false) {
 }
 
 function disposeTerminalsOutsideActiveWorkspace(activeIds) {
+  // Delegate to new TerminalInstanceService (VS Code-style)
+  const svc = getTerminalService();
+  if (svc) {
+    svc.disposeOutsideActiveSet(activeIds);
+    return;
+  }
+
+  // Legacy fallback
   for (const windowId of Array.from(terminalViews.keys())) {
     if (!activeIds.has(windowId)) {
       cleanupTerminalView(windowId, false);
@@ -9946,13 +10090,38 @@ function disposeTerminalsOutsideActiveWorkspace(activeIds) {
   }
 }
 
+// 将 TerminalInstance 状态同步到旧的 legacy Maps 中
+function syncLegacyStateFromInstance(windowId, inst) {
+  if (!inst) return;
+  if (inst._backendId) terminalBackendIds.add(windowId);
+  if (inst.isReady) {
+    terminalBackendReadyIds.add(windowId);
+    terminalBackendReadyAt.set(windowId, inst._backendReadyAt || Date.now());
+  }
+  if (inst.activeMode) terminalBackendActiveModes.set(windowId, inst.activeMode);
+  if (inst._recentOutput) terminalRecentOutput.set(windowId, inst._recentOutput);
+}
+
+// IME 候选框定位修正：kimi CLI、PI 等 TUI 会隐藏硬件光标（\x1b[?25l），
+// 用反显空格自绘输入光标，真实光标停留在绘制帧末尾（右下角）。xterm.js 默认
+// 把 IME 组合框和 textarea 锚定在真实光标处，导致中文输入法候选框跑到右下角。
+// 这里给 CompositionHelper 打补丁：硬件光标被隐藏且可见区域存在反显单元格时，
+// 将 IME 组合元素改锚定到该反显单元格（即用户实际看到的自绘光标）。
+// (installImeCompositionAnchorFix 已迁移到 terminal-core.js)
+
 function sendBufferedTerminalInput(win, data) {
   if (data) {
+    window.cossAPI?.logEvent?.('terminal.input.sendIPC', { winId: win.id, dataLen: data.length, chars: data.slice(0,20) }, 'info');
     window.cossAPI.sendTerminalInput(win.id, data);
   }
 }
 
 function handleTerminalInput(win, inputState, term, data) {
+  window.cossAPI?.logEvent?.('terminal.input.handle', { winId: win?.id, dataLen: data.length, chars: data.slice(0,20) }, 'info');
+  const tcore = window.COSS_TERMINAL_CORE;
+  if (tcore && data) {
+    tcore.diagTerminal(term, 'userInput', `windowId=${win.id} dataLen=${data.length}`);
+  }
   let passthrough = "";
 
   for (const char of data) {
@@ -10027,59 +10196,148 @@ function hydrateTerminalWindows() {
 
   disposeTerminalsOutsideActiveWorkspace(activeTerminalIds);
 
-  if (!window.Terminal || !window.FitAddon?.FitAddon || !window.cossAPI) {
-    return;
-  }
+  // ===== 使用新 TerminalInstanceService (VS Code-style) =====
+  const svc = getTerminalService();
+  const useNewArch = Boolean(svc && window.COSS_TERMINAL_INSTANCE?.TerminalInstance && window.cossAPI);
 
   terminalWindows.forEach((win) => {
     const mount = document.querySelector(`[data-terminal-id="${win.id}"]`);
-    if (!mount) {
+    if (!mount) return;
+
+    const role = getRole(win.roleId);
+
+    if (useNewArch) {
+      // ---- 新架构：使用 TerminalInstance ----
+      const isNew = !svc.has(win.id);
+      window.cossAPI?.logEvent?.('terminal.hydrate', { winId: win.id, isNew }, 'info');
+
+      // 创建输入状态（每个窗口独享，用于命令风险评估）
+      if (!win._termInputState) win._termInputState = { commandBuffer: "" };
+      const inputState = win._termInputState;
+
+      // 清除 loading 占位符，准备挂载 xterm
+      mount.innerHTML = "";
+
+      const inst = svc.create(win.id, mount, {
+        focused: focusedWindowId === win.id,
+        terminalMode: win.terminalMode || "shell",
+        config: {},
+        // 自定义输入处理器：复用旧的 handleTerminalInput（包含命令风险评估）
+        inputHandler: (data) => {
+          handleTerminalInput(win, inputState, inst._xterm.term, data);
+          if (inst._xterm.term?.textarea) {
+            inst._xterm.term.textarea.value = "";
+          }
+        },
+        // 输出回调：同步到旧状态并记录输出引用
+        onOutput: (data) => {
+          terminalRecentOutput.set(win.id, `${terminalRecentOutput.get(win.id) || ""}${data}`.slice(-5000));
+          recordTerminalOutputReference(win.id, data);
+        }
+      });
+
+      // 聚焦
+      if (focusedWindowId === win.id) inst.focus();
+
+      // 同步旧状态
+      syncLegacyStateFromInstance(win.id, inst);
+
+      // 仅对新实例启动后端
+      if (isNew) {
+        const backendWasKnown = terminalBackendIds.has(win.id);
+        terminalBackendIds.add(win.id);
+
+        const role = getRole(win.roleId);
+        if (normalizeTerminalMode(win.terminalMode) === "agent") {
+          win.agentSession = ensureAgentSessionShape(win, project);
+        }
+        const taskContext = getTaskContextForWindow(win, project);
+        const cols = inst._xterm?.dimensions?.cols || 80;
+        const rows = inst._xterm?.dimensions?.rows || 24;
+
+        inst.connectBackend({
+          cwd: project?.path,
+          projectId: project?.id || "",
+          projectName: project?.name || "",
+          roleId: role.id,
+          roleName: role.name,
+          roleDescription: role.description,
+          useClaude: role.claude,
+          terminalMode: win.terminalMode || "shell",
+          agentProvider: win.agentProvider || state.settings.agentProvider,
+          agentSession: win.agentSession || null,
+          taskContext,
+          rolePromptTemplate: state.settings.agentPromptTemplate,
+          agentFallbackToShell: state.settings.agentFallbackToShell !== false,
+          agentPermissionMode: state.settings.agentPermissionMode,
+          agentMcpAutoConfigEnabled: state.settings.agentMcpAutoConfigEnabled === true,
+          codeBuddyApiKey: state.settings.codeBuddyApiKey || "",
+          cols, rows
+        }).then((result) => {
+          if (!result?.ok) {
+            console.warn("TerminalInstance backend connection failed", result);
+            terminalBackendIds.delete(win.id);
+            terminalBackendReadyIds.delete(win.id);
+            terminalBackendActiveModes.delete(win.id);
+            terminalBackendReadyAt.delete(win.id);
+            return;
+          }
+
+          const activeMode = String(result.activeMode || result.mode || "").toLowerCase();
+          terminalBackendActiveModes.set(win.id, activeMode);
+
+          if (!["error", "installing", "static", "shell"].includes(activeMode)) {
+            terminalBackendReadyIds.add(win.id);
+            terminalBackendReadyAt.set(win.id, Date.now());
+            if (normalizeTerminalMode(win.terminalMode) === "agent") {
+              resumeAutoWorkflowMessagesForWindow(win, result.reattached ? "terminal-reattached" : "terminal-ready");
+            }
+          } else {
+            terminalBackendReadyIds.delete(win.id);
+            terminalBackendReadyAt.delete(win.id);
+          }
+
+          if (result.reattached && result.transcript && !backendWasKnown) {
+            inst._xterm?.term?.reset?.();
+            inst._xterm?.writeSync?.(result.transcript);
+            inst._xterm?.scrollToBottom?.();
+            terminalRecentOutput.set(win.id, String(result.transcript || "").slice(-5000));
+          }
+
+          if (win.agentSession && result.agentSession) {
+            win.agentSession = {
+              ...win.agentSession,
+              ...result.agentSession,
+              lastStartedAt: result.reattached ? win.agentSession.lastStartedAt : new Date().toISOString(),
+              resumeCount: Number(win.agentSession.resumeCount || 0) + (result.reattached ? 0 : 1),
+              lastActiveMode: result.activeMode || ""
+            };
+          }
+        }).catch((error) => {
+          console.warn("Terminal backend creation failed", error);
+          terminalBackendIds.delete(win.id);
+          terminalBackendReadyIds.delete(win.id);
+          terminalBackendActiveModes.delete(win.id);
+          terminalBackendReadyAt.delete(win.id);
+        });
+      }
+
+      return; // 新架构处理完毕，跳过旧代码
+    }
+
+    // ===== 旧架构 fallback =====
+    const tcore = window.COSS_TERMINAL_CORE;
+    if (!tcore || !window.Terminal || !window.FitAddon?.FitAddon || !window.cossAPI) {
       return;
     }
 
     const existingView = terminalViews.get(win.id);
-    if (existingView?.mount === mount) {
-      requestAnimationFrame(() => {
-        try {
-          existingView.fitAddon?.fit();
-          window.cossAPI.resizeTerminal(win.id, existingView.term.cols, existingView.term.rows);
-          if (focusedWindowId === win.id) {
-            existingView.term.focus();
-          }
-        } catch (error) {
-          console.warn("Failed to refit existing terminal", error);
-        }
-      });
-      return;
-    }
 
+    // ===== 现有终端：确认挂载点正确即可 =====
     if (existingView) {
-      let reattached = false;
-      try {
-        existingView.resizeObserver?.disconnect();
-        mount.innerHTML = "";
-        if (existingView.term.element) {
-          mount.appendChild(existingView.term.element);
-        } else {
-          existingView.term.open(mount);
-        }
-        existingView.mount = mount;
-        existingView.resizeObserver = new ResizeObserver(() => {
-          try {
-            existingView.fitAddon?.fit();
-            window.cossAPI.resizeTerminal(win.id, existingView.term.cols, existingView.term.rows);
-          } catch (error) {
-            console.warn("Failed to refit reattached terminal", error);
-          }
-        });
-        existingView.resizeObserver.observe(mount);
-        reattached = true;
-      } catch (error) {
-        console.warn("Failed to reattach terminal view", error);
-        cleanupTerminalView(win.id, false);
-      }
-
-      if (reattached) {
+      const alreadyInPlace = existingView.term?.element?.parentNode === mount;
+      if (alreadyInPlace) {
+        tcore.diagTerminal(existingView.term, 'hydrate.alreadyInPlace', `windowId=${win.id}`);
         requestAnimationFrame(() => {
           try {
             existingView.fitAddon?.fit();
@@ -10087,87 +10345,98 @@ function hydrateTerminalWindows() {
             if (focusedWindowId === win.id) {
               existingView.term.focus();
             }
-          } catch (error) {
-            console.warn("Failed to refit reattached terminal", error);
+          } catch (e) {
+            console.warn('Failed to refit terminal', e);
+          }
+        });
+        return;
+      }
+
+      // 元素不在正确挂载点：尝试 unpark（从 document.body 迁回）
+      tcore.diagTerminal(existingView.term, 'hydrate.needsUnpark', `windowId=${win.id}`);
+      const ok = tcore.unparkTerminalElement(existingView.term, mount, win.id);
+      if (!ok) {
+        tcore.diagTerminal(existingView.term, 'hydrate.unparkFailed.recreate', `windowId=${win.id}`);
+        console.warn('Terminal unpark failed, recreating', win.id);
+        cleanupTerminalView(win.id, false);
+      } else {
+        existingView.mount = mount;
+        requestAnimationFrame(() => {
+          try {
+            existingView.fitAddon?.fit();
+            window.cossAPI.resizeTerminal(win.id, existingView.term.cols, existingView.term.rows);
+            if (focusedWindowId === win.id) {
+              existingView.term.focus();
+            }
+          } catch (e) {
+            console.warn('Failed to fit terminal after unpark', e);
           }
         });
         return;
       }
     }
 
-    mount.innerHTML = "";
+    // ===== 创建新终端（旧架构）=====
+    tcore.diagTerminal(null, 'hydrate.createNew', `windowId=${win.id}`);
+    mount.innerHTML = '';
 
-    const role = getRole(win.roleId);
-    const term = new window.Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily: "Consolas, 'Cascadia Mono', 'Microsoft YaHei UI', monospace",
-      fontSize: 12,
-      lineHeight: 1.25,
-      scrollback: 2000,
-      theme: {
-        background: "#11131a",
-        foreground: "#d8deea",
-        cursor: "#d8deea",
-        selectionBackground: "#35507a",
-        black: "#11131a",
-        red: "#ff6b7a",
-        green: "#5fe39b",
-        yellow: "#ffd166",
-        blue: "#75a7ff",
-        magenta: "#c792ea",
-        cyan: "#5ed6d6",
-        white: "#edf2ff"
-      }
+    const { term, fitAddon } = tcore.createTerminalInstance(mount, {
+      focused: focusedWindowId === win.id,
+      windowId: win.id
     });
-    const fitAddon = new window.FitAddon.FitAddon();
-    const inputState = { commandBuffer: "" };
-    term.loadAddon(fitAddon);
-    term.open(mount);
+    tcore.installCopyKeyHandler(term);
+
+    const inputState = { commandBuffer: '' };
 
     const fit = () => {
       try {
+        const oldCols = term.cols, oldRows = term.rows;
         fitAddon.fit();
+        if (term.cols !== oldCols || term.rows !== oldRows) {
+          tcore.diagTerminal(term, 'fit.resize',
+            `windowId=${win.id} ${oldCols}x${oldRows}->${term.cols}x${term.rows}`);
+        }
         window.cossAPI.resizeTerminal(win.id, term.cols, term.rows);
-      } catch (error) {
-        console.warn("Failed to fit terminal", error);
+      } catch (e) {
+        console.warn('Failed to fit terminal', e);
       }
     };
 
     const inputDisposable = term.onData((data) => {
       handleTerminalInput(win, inputState, term, data);
-      // Workaround for xterm.js IME composition bug on Windows: the textarea is
-      // not cleared after composition ends (only on blur/Ctrl+C/Enter), so stale
-      // composed text lingers and gets re-emitted on subsequent keystrokes,
-      // causing the first composed character (e.g. "中") to repeat indefinitely.
-      // Clearing it here resets composition positions for the next input.
       if (term.textarea) {
-        term.textarea.value = "";
+        term.textarea.value = '';
       }
     });
+
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       window.cossAPI.resizeTerminal(win.id, cols, rows);
     });
-    const unsubscribeData = window.cossAPI.onTerminalData(({ id, data }) => {
-      if (id === win.id) {
-        terminalRecentOutput.set(id, `${terminalRecentOutput.get(id) || ""}${data}`.slice(-5000));
-        term.write(data);
-        recordTerminalOutputReference(win.id, data);
-      }
-    });
-    const unsubscribeExit = window.cossAPI.onTerminalExit(({ id, exitCode }) => {
-      if (id === win.id) {
-        term.writeln("");
-        term.writeln(`\x1b[33m进程已退出，代码 ${exitCode ?? "unknown"}。关闭并重新创建终端可启动新会话。\x1b[0m`);
-        terminalBackendIds.delete(win.id);
-        terminalBackendReadyIds.delete(win.id);
-        terminalBackendActiveModes.delete(win.id);
-        terminalBackendReadyAt.delete(win.id);
-      }
-    });
-    const resizeObserver = new ResizeObserver(() => fit());
 
+    // ===== 数据接收与视口跟随 =====
+    const unsubscribeData = window.cossAPI.onTerminalData(({ id, data }) => {
+      if (id !== win.id) return;
+      tcore.diagTerminal(term, 'onTerminalData.beforeWrite', `dataLen=${data.length}`);
+      terminalRecentOutput.set(id, `${terminalRecentOutput.get(id) || ''}${data}`.slice(-5000));
+      term.write(data);
+      recordTerminalOutputReference(win.id, data);
+      tcore.ensureViewportFollow({ term });
+    });
+
+    const unsubscribeExit = window.cossAPI.onTerminalExit(({ id, exitCode }) => {
+      if (id !== win.id) return;
+      tcore.diagTerminal(term, 'onTerminalExit', `exitCode=${exitCode}`);
+      term.writeln('');
+      term.writeln(`\x1b[33m进程已退出，代码 ${exitCode ?? 'unknown'}。关闭并重新创建终端可启动新会话。\x1b[0m`);
+      terminalBackendIds.delete(win.id);
+      terminalBackendReadyIds.delete(win.id);
+      terminalBackendActiveModes.delete(win.id);
+      terminalBackendReadyAt.delete(win.id);
+    });
+
+    const resizeObserver = new ResizeObserver(() => fit());
     resizeObserver.observe(mount);
+
     terminalViews.set(win.id, {
       term,
       fitAddon,
@@ -10187,9 +10456,10 @@ function hydrateTerminalWindows() {
       }
     });
 
+    // ===== 启动后端进程 =====
     const backendWasKnown = terminalBackendIds.has(win.id);
     terminalBackendIds.add(win.id);
-    if (normalizeTerminalMode(win.terminalMode) === "agent") {
+    if (normalizeTerminalMode(win.terminalMode) === 'agent') {
       win.agentSession = ensureAgentSessionShape(win, project);
     }
     const taskContext = getTaskContextForWindow(win, project);
@@ -10197,13 +10467,13 @@ function hydrateTerminalWindows() {
       .createTerminal({
         id: win.id,
         cwd: project?.path,
-        projectId: project?.id || "",
-        projectName: project?.name || "",
+        projectId: project?.id || '',
+        projectName: project?.name || '',
         roleId: role.id,
         roleName: role.name,
         roleDescription: role.description,
         useClaude: role.claude,
-        terminalMode: win.terminalMode || "shell",
+        terminalMode: win.terminalMode || 'shell',
         agentProvider: win.agentProvider || state.settings.agentProvider,
         agentSession: win.agentSession || null,
         taskContext,
@@ -10211,27 +10481,32 @@ function hydrateTerminalWindows() {
         agentFallbackToShell: state.settings.agentFallbackToShell !== false,
         agentPermissionMode: state.settings.agentPermissionMode,
         agentMcpAutoConfigEnabled: state.settings.agentMcpAutoConfigEnabled === true,
-        codeBuddyApiKey: state.settings.codeBuddyApiKey || "",
+        codeBuddyApiKey: state.settings.codeBuddyApiKey || '',
         cols: term.cols,
         rows: term.rows
       })
       .then((result) => {
-        const activeMode = String(result?.activeMode || result?.mode || "").toLowerCase();
+        const activeMode = String(result?.activeMode || result?.mode || '').toLowerCase();
+        tcore.diagTerminal(term, 'backend.create.succeeded',
+          `windowId=${win.id} mode=${activeMode} reattached=${result?.reattached}`);
         terminalBackendActiveModes.set(win.id, activeMode);
-        if (!["error", "installing", "static", "shell"].includes(activeMode)) {
+        if (!['error','installing','static','shell'].includes(activeMode)) {
           terminalBackendReadyIds.add(win.id);
           terminalBackendReadyAt.set(win.id, Date.now());
-          if (normalizeTerminalMode(win.terminalMode) === "agent") {
-            resumeAutoWorkflowMessagesForWindow(win, result?.reattached ? "terminal-reattached" : "terminal-ready");
+          if (normalizeTerminalMode(win.terminalMode) === 'agent') {
+            resumeAutoWorkflowMessagesForWindow(win, result?.reattached ? 'terminal-reattached' : 'terminal-ready');
           }
         } else {
           terminalBackendReadyIds.delete(win.id);
           terminalBackendReadyAt.delete(win.id);
         }
-        if (result?.reattached && result.transcript) {
+        if (result?.reattached && result.transcript && !backendWasKnown) {
+          tcore.diagTerminal(term, 'backend.transcriptRestore',
+            `len=${(result.transcript||'').length}`);
           term.reset();
           term.write(result.transcript);
-          terminalRecentOutput.set(win.id, String(result.transcript || "").slice(-5000));
+          term.scrollToBottom();
+          terminalRecentOutput.set(win.id, String(result.transcript || '').slice(-5000));
         }
         if (win.agentSession && result?.agentSession) {
           win.agentSession = {
@@ -10239,12 +10514,14 @@ function hydrateTerminalWindows() {
             ...result.agentSession,
             lastStartedAt: result.reattached ? win.agentSession.lastStartedAt : new Date().toISOString(),
             resumeCount: Number(win.agentSession.resumeCount || 0) + (result.reattached ? 0 : 1),
-            lastActiveMode: result.activeMode || ""
+            lastActiveMode: result.activeMode || ''
           };
           saveState();
         }
       })
       .catch((error) => {
+        tcore.diagTerminal(term, 'backend.create.failed',
+          `windowId=${win.id} ${error.message}`);
         if (!backendWasKnown) {
           terminalBackendIds.delete(win.id);
         }

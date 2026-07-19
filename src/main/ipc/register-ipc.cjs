@@ -244,38 +244,50 @@ function registerApplicationIpc(ipcMain, dependencies = {}) {
     }
   });
   ipcMain.handle("agent:login-test", testAgentRemoteLogin);
-  ipcMain.handle(IPC_CHANNELS.TERMINAL_CREATE, createTerminalSession);
-  ipcMain.handle("terminal:input", (event, id, data, options = {}) => {
-    const session = terminalSessions.get(id);
-    if (session && typeof data === "string") {
-      try {
-        const guardResult = processTerminalPermissionGuard(event.sender, id, session, data, options);
-        if (!guardResult.ok) {
-          return false;
+  // Terminal IPC is now handled by the new terminal system
+  // See src/main/terminal/terminal-ipc.js
+  if (typeof registerTerminalIpcHandlers === "function") {
+    registerTerminalIpcHandlers(ipcMain);
+  } else {
+    // Legacy fallback (will be removed in future versions)
+    ipcMain.handle(IPC_CHANNELS.TERMINAL_CREATE, createTerminalSession);
+    ipcMain.handle("terminal:input", (event, id, data, options = {}) => {
+      console.log(`[TERM-DBG-MAIN-LEGACY] terminal:input id=${id} len=${typeof data==='string'?data.length:'-'}`);
+      const session = terminalSessions.get(id);
+      if (session && typeof data === "string") {
+        try {
+          const guardResult = processTerminalPermissionGuard(event.sender, id, session, data, options);
+          if (!guardResult.ok) {
+            console.log(`[TERM-DBG-MAIN-LEGACY] terminal:input GUARD BLOCKED`);
+            return false;
+          }
+          session.write(data);
+          console.log(`[TERM-DBG-MAIN-LEGACY] terminal:input OK`);
+          return true;
+        } catch (error) {
+          console.warn(`Failed to write to terminal session ${id}`, error);
+          appendLogEvent("terminal.input.failed", { id, error: serializeError(error) }, "error");
         }
-        session.write(data);
-        return true;
-      } catch (error) {
-        console.warn(`Failed to write to terminal session ${id}`, error);
-        appendLogEvent("terminal.input.failed", { id, error: serializeError(error) }, "error");
+      } else {
+        console.log(`[TERM-DBG-MAIN-LEGACY] terminal:input NO SESSION or not string`);
       }
-    }
-    return false;
-  });
-  ipcMain.handle("terminal:resize", (_event, id, cols, rows) => {
-    const session = terminalSessions.get(id);
-    if (session) {
-      try {
-        const resized = session.resize(cols, rows);
-        return resized !== false;
-      } catch (error) {
-        console.warn(`Failed to resize terminal session ${id}`, error);
-        appendLogEvent("terminal.resize.failed", { id, cols, rows, error: serializeError(error) }, "error");
+      return false;
+    });
+    ipcMain.handle("terminal:resize", (_event, id, cols, rows) => {
+      const session = terminalSessions.get(id);
+      if (session) {
+        try {
+          const resized = session.resize(cols, rows);
+          return resized !== false;
+        } catch (error) {
+          console.warn(`Failed to resize terminal session ${id}`, error);
+          appendLogEvent("terminal.resize.failed", { id, cols, rows, error: serializeError(error) }, "error");
+        }
       }
-    }
-    return false;
-  });
-  ipcMain.handle(IPC_CHANNELS.TERMINAL_DISPOSE, (_event, id) => disposeTerminalSession(id));
+      return false;
+    });
+    ipcMain.handle(IPC_CHANNELS.TERMINAL_DISPOSE, (_event, id) => disposeTerminalSession(id));
+  }
 
 }
 
