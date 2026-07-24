@@ -362,6 +362,7 @@ const programActionService = window.COSS_PROGRAM_ACTION_SERVICE.createProgramAct
   refreshFileList,
   openFileInWindow,
   selectFileListPath,
+  toggleFileListDir,
   pickFileForWindow,
   saveFileFromWindow,
   saveFileAsFromWindow,
@@ -2320,6 +2321,7 @@ function ensureProjectShape(project) {
       win.fileError ||= "";
       win.fileList ||= [];
       win.fileListLoaded = Boolean(win.fileListLoaded);
+      win.fileCollapsedDirs = win.fileCollapsedDirs && typeof win.fileCollapsedDirs === "object" ? win.fileCollapsedDirs : {};
     }
   });
   return project;
@@ -2741,6 +2743,7 @@ function createWindowState(type, roleId, x = 260, y = 108, options = {}) {
     win.fileError = "";
     win.fileList = [];
     win.fileListLoaded = false;
+    win.fileCollapsedDirs = {};
   }
   if (type === "terminal" && terminalMode === "agent") {
     win.agentSession = ensureAgentSessionShape(win, getProject());
@@ -9817,6 +9820,27 @@ async function saveFileFromWindow(windowId) {
   saveState();
   recordAppLog("file.saved.renderer", { projectId: project.id, windowId, path: result.path, size: result.size });
   await refreshFileList(windowId);
+}
+
+function toggleFileListDir(windowId, dirPath) {
+  const win = getWindowState(windowId);
+  if (!win || !dirPath) {
+    return;
+  }
+  win.fileCollapsedDirs = win.fileCollapsedDirs && typeof win.fileCollapsedDirs === "object" ? win.fileCollapsedDirs : {};
+  const key = String(dirPath).replace(/\\/g, "/");
+  if (win.fileCollapsedDirs[key]) {
+    delete win.fileCollapsedDirs[key];
+  } else {
+    win.fileCollapsedDirs[key] = true;
+  }
+  win.filePath = dirPath;
+  const input = document.querySelector(`[data-file-path="${CSS.escape(windowId)}"]`);
+  if (input) {
+    input.value = win.filePath;
+  }
+  saveState();
+  render();
 }
 
 function selectFileListPath(windowId, filePath) {

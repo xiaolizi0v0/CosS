@@ -10,6 +10,7 @@
     refreshFileList,
     openFileInWindow,
     selectFileListPath,
+    toggleFileListDir,
     pickFileForWindow,
     saveFileFromWindow,
     saveFileAsFromWindow,
@@ -33,6 +34,7 @@
       if (action === "file-open") return openFileInWindow?.(windowId) ?? true;
       if (action === "file-open-list-item") return openFileInWindow?.(windowId, target.dataset.filePathValue) ?? true;
       if (action === "file-select-list-path") return selectFileListPath?.(windowId, target.dataset.filePathValue) ?? true;
+      if (action === "file-toggle-dir") return toggleFileListDir?.(windowId, target.dataset.filePathValue) ?? true;
       if (action === "file-pick") return pickFileForWindow?.(windowId) ?? true;
       if (action === "file-save") return saveFileFromWindow?.(windowId) ?? true;
       if (action === "file-save-as") return saveFileAsFromWindow?.(windowId) ?? true;

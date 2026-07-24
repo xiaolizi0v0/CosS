@@ -4029,7 +4029,9 @@ body.sidebar-resizing {
 .file-editor-layout {
   display: grid;
   grid-template-columns: 170px minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .file-editor-pane {
@@ -4067,6 +4069,8 @@ body.sidebar-resizing {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   border-right: 1px solid #e4ebf4;
   background: #f7f9fc;
 }
@@ -4117,6 +4121,28 @@ body.sidebar-resizing {
 .file-list-item.folder {
   color: #344a67;
   font-weight: 700;
+}
+
+.file-list-item .file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-list-item .file-tree-caret {
+  flex: 0 0 auto;
+  width: 12px;
+  color: #748196;
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+}
+
+.file-list-item .file-tree-caret.file-tree-leaf {
+  visibility: hidden;
 }
 
 .secondary-button.danger {

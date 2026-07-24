@@ -160,7 +160,7 @@ const {
   handleTestModelConnectivity
 } = llmService;
 const maxEditableFileBytes = 1024 * 1024 * 2;
-const fileListLimit = 240;
+const fileListLimit = 800;
 const projectFileService = createProjectFileService({
   fileListLimit,
   maxEditableFileBytes,

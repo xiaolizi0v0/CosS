@@ -48,7 +48,7 @@ function createProjectFileService({
       const root = getProjectRoot(projectPath);
       const files = [];
       function visit(directory, depth = 0) {
-        if (files.length >= fileListLimit || depth > 3) return;
+        if (files.length >= fileListLimit || depth > 6) return;
         const entries = fs.readdirSync(directory, { withFileTypes: true })
           .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
         entries.forEach((entry) => {
